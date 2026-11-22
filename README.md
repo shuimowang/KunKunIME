@@ -22,7 +22,7 @@
 
 ## 从源码构建
 
-使用 Windows x64、PowerShell 7、Rust stable（MSVC 工具链）和 Visual Studio C++ 桌面开发工具（含 CMake、x86 与 x64 工具）。在仓库根目录执行：
+使用 Windows x64、PowerShell 7、Python 3.11 或更新版本、Rust stable（MSVC 工具链）和 Visual Studio C++ 桌面开发工具（含 CMake、x86 与 x64 工具）。Python 用于随包收集第三方许可。在仓库根目录执行：
 
 ```powershell
 pwsh -File scripts/build-windows.ps1
