@@ -508,6 +508,31 @@ struct NumberField {
 }
 
 impl NumberField {
+    /// `value` ↔ `text` 同步。单向优先：`value` 变过就以它为准重排文本（外部写入、
+    /// ± 按钮），否则才把用户打的字回写成 `value`。两边同时生效会互相追尾。
+    fn sync_value_and_text(&self) {
+        if self.value.version() != self.shared.seen_value.get() {
+            let s = self.spec.format(self.value.get());
+            if self.text.with(|t| *t != s) {
+                self.text.set(s);
+            }
+            self.shared.mark_synced(self.value, self.text);
+            return;
+        }
+
+        if self.text.version() != self.shared.seen_text.get() {
+            // 编辑途中**只回写不重排**：此刻把 `value` 格式化回文本框，正在打的
+            // "1." 会被顶成 "1"，小数点永远打不进去。规整留到 Enter / 失焦。
+            if let Some(v) = self.text.with(|t| self.spec.parse(t)) {
+                let c = self.spec.clamp(v);
+                if c != self.value.get() {
+                    self.value.set(c);
+                }
+            }
+            self.shared.mark_synced(self.value, self.text);
+        }
+    }
+
     fn new(value: Signal<f64>, text: Signal<String>, spec: NumSpec, shared: Rc<Shared>) -> Self {
         let mut inner = TextInput::new(text, String::new());
         {
@@ -701,32 +726,14 @@ impl Widget for NumberField {
                 }
             }
         }
-        self.inner.on_event(ctx, ev)
+        let handled = self.inner.on_event(ctx, ev);
+        // 系统关闭可能早于下一次布局。当前按键产生的有效数值须在事件结束前供上层读取。
+        self.sync_value_and_text();
+        handled
     }
 
-    /// `value` ↔ `text` 同步。单向优先：`value` 变过就以它为准重排文本（外部写入、
-    /// ± 按钮），否则才把用户打的字回写成 `value`。两边同时生效会互相追尾。
     fn on_update(&mut self, _ctx: &mut EventCtx) {
-        if self.value.version() != self.shared.seen_value.get() {
-            let s = self.spec.format(self.value.get());
-            if self.text.with(|t| *t != s) {
-                self.text.set(s);
-            }
-            self.shared.mark_synced(self.value, self.text);
-            return;
-        }
-
-        if self.text.version() != self.shared.seen_text.get() {
-            // 编辑途中**只回写不重排**：此刻把 `value` 格式化回文本框，正在打的
-            // "1." 会被顶成 "1"，小数点永远打不进去。规整留到 Enter / 失焦。
-            if let Some(v) = self.text.with(|t| self.spec.parse(t)) {
-                let c = self.spec.clamp(v);
-                if c != self.value.get() {
-                    self.value.set(c);
-                }
-            }
-            self.shared.mark_synced(self.value, self.text);
-        }
+        self.sync_value_and_text();
     }
 
     // ---- 以下纯转发 ----

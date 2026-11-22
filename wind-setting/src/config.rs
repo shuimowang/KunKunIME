@@ -83,7 +83,7 @@ impl Config {
 }
 
 /// 配置变更项 — 用于 config.setItems 增量写入。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ConfigItem {
     pub key: String,
     pub value: Value,

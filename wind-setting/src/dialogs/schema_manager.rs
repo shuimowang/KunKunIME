@@ -1189,7 +1189,7 @@ pub struct DictRow {
 ///
 /// `cfg` 是**改写后的整份方案配置**而非增量：core 的 `saveConfig` 拿它与方案文件 diff
 /// 后全量重写 override，喂增量会把没带上的字段当成「已删除」。
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize)]
 struct PendingSchemaEdit {
     cfg: Option<Value>,
     /// `cfg` 是在哪份 `schema.getConfig` 快照上改出来的。外部改动到来时据它分出
@@ -1281,6 +1281,7 @@ pub struct SchemaManagerState {
     /// 导入按钮可点：见 [`import_allowed`]（片段有错即整包拒绝）。
     pub import_can_confirm: Signal<bool>,
     pub settings_visible: Signal<bool>,
+    settings_need_staging: Rc<std::cell::Cell<bool>>,
     /// 设置对话框当前方案条目（驱动结构化头部渲染）。
     pub settings_entry: Rc<RefCell<Option<SchemaEntry>>>,
     /// 设置对话框当前方案 ID（保存时用）。
@@ -1645,6 +1646,7 @@ impl SchemaManagerState {
             import_patch_desc: signal(String::new()),
             import_can_confirm: signal(true),
             settings_visible: signal(false),
+            settings_need_staging: Rc::new(std::cell::Cell::new(false)),
             settings_entry: Rc::new(RefCell::new(None)),
             settings_schema_id: Rc::new(RefCell::new(String::new())),
             open_dict_at: Rc::new(RefCell::new(None)),
@@ -2694,7 +2696,7 @@ impl SchemaManagerState {
             // 配置、core 侧还不认这个方案）。
             Ok(_) => self.notify(
                 ToastKind::Error,
-                "切换失败：方案未能加载，若刚启用请先「应用设置」",
+                "切换失败：未能加载该方案，请检查方案的启用状态。",
             ),
             Err(e) => self.notify(ToastKind::Error, format!("切换失败: {e}")),
         }
@@ -3294,6 +3296,7 @@ impl SchemaManagerState {
         // 会让人以为「这个方案也有那些项」，而它可能整个 TAB 都是空的。
         self.settings_tab.set(0);
 
+        self.settings_need_staging.set(true);
         self.settings_visible.set(true);
     }
 
@@ -3373,6 +3376,7 @@ impl SchemaManagerState {
     }
 
     pub fn stage_settings_edits(&self) {
+        self.settings_need_staging.set(false);
         let id = self.settings_schema_id.borrow().clone();
         if id.is_empty() {
             return;
@@ -3634,6 +3638,18 @@ impl SchemaManagerState {
         }
     }
 
+    /// Stage the modal once when it is dismissed, including close before its next UI frame.
+    pub(crate) fn stage_dismissed_settings(&self) {
+        if self.settings_need_staging.get() && !self.settings_visible.get() {
+            self.stage_settings_edits();
+        }
+    }
+
+    pub(crate) fn pending_save_value(&self) -> Option<Value> {
+        let edits = self.pending_edits.borrow();
+        (!edits.is_empty()).then(|| json!(&*edits))
+    }
+
     /// 是否有待提交的方案 override 改动（供主保存的 `is_dirty` 汇总）。
     pub fn has_pending_edits(&self) -> bool {
         !self.pending_edits.borrow().is_empty()
@@ -3664,6 +3680,12 @@ impl SchemaManagerState {
     pub fn clear_pending_edits(&self) {
         self.pending_edits.borrow_mut().clear();
         self.sync_page_layout();
+    }
+
+    pub(crate) fn discard_settings_draft(&self) {
+        self.settings_need_staging.set(false);
+        self.settings_visible.set(false);
+        self.clear_pending_edits();
     }
 
     /// 请求删除指定 ID 方案（弹出确认对话框）。
@@ -6477,7 +6499,7 @@ fn build_schema_settings_dialog(state: &SchemaManagerState) -> Element {
         move || vis.version(),
         move || {
             if !vis.get() {
-                st_stage.stage_settings_edits();
+                st_stage.stage_dismissed_settings();
             }
         },
     );

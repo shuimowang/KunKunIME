@@ -201,6 +201,41 @@ fn main_shortcut_handler(
     }
 }
 
+fn settings_window_content(app: &Rc<RefCell<state::AppState>>) -> Element {
+    let conn = app.borrow().conn;
+    // 保持设置树的响应式更新运行，等读取完成再开放表单和键盘焦点。
+    let form = shell::build(app).visible_when(move || conn.get() != state::ConnState::Loading);
+    let loading = Element::col()
+        .fill()
+        .bg_role(Role::Bg)
+        .child(shell::build_titlebar("设置"))
+        .child(Element::divider())
+        .child(
+            Element::stack().fill().weight(1.0).child(
+                Element::label("正在读取设置…")
+                    .fg_role(Role::TextMuted)
+                    .align(Align::Center),
+            ),
+        )
+        .visible_when(move || conn.get() == state::ConnState::Loading);
+    Element::stack().fill().child(form).child(loading)
+}
+
+fn autosave_settings(app: &Rc<RefCell<state::AppState>>) {
+    if let Ok(mut st) = app.try_borrow_mut() {
+        st.autosave_tick();
+    }
+}
+
+/// 标题栏、系统关闭和快捷键共用此路径。写入失败时留在设置页重试。
+fn finish_settings_close(st: &mut state::AppState) -> bool {
+    if !st.flush_autosave() {
+        return false;
+    }
+    st.mark_main_window_closed();
+    true
+}
+
 pub(crate) fn open_main_window(ctx: &mut EventCtx, app: &Rc<RefCell<state::AppState>>) {
     // 建窗前必然已注入（见 main 里 `set_theme_handle`）。真取不到就只能放弃重建：
     // 没有句柄，这个窗口的换肤（明暗、主题色）就与其余窗口脱钩。
@@ -210,6 +245,7 @@ pub(crate) fn open_main_window(ctx: &mut EventCtx, app: &Rc<RefCell<state::AppSt
     }
     let st = app.clone();
     let guard = app.clone();
+    let autosave = app.clone();
     let tick = app.clone();
     // 重建即视为主窗回来了：这一步要赶在 content 求值之前，否则窗口已经在了、
     // 标志还写着"已关闭"，下一次二次实例会再重建一个。
@@ -226,23 +262,20 @@ pub(crate) fn open_main_window(ctx: &mut EventCtx, app: &Rc<RefCell<state::AppSt
             })
             // 同 `main` 里的 `App::on_shortcut`：那份只归首个主窗，重建的要自己挂。
             .on_shortcut(main_shortcut_handler(app.clone()))
-            // 与 `App::on_close_request` 同一套守卫：有未保存改动就拦下弹确认框。
-            // 子窗的拦截器必须自己挂——平台在 WM_CLOSE 里同步问的是「**这个**窗口能不能关」，
-            // 主窗那份不代管子窗。
-            .on_close_request(move |_ctx| {
-                let Ok(s) = guard.try_borrow() else {
-                    return true;
-                };
-                // 清单只算一次，它自己就是守卫的判据：空 = 没有未保存改动。
-                let unsaved = s.unsaved_items();
-                if unsaved.is_empty() {
-                    s.mark_main_window_closed();
-                    return true;
-                }
-                s.prime_exit_confirm(&unsaved);
-                false
+            .on_interval(state::AUTOSAVE_INTERVAL, move |_| {
+                autosave_settings(&autosave)
             })
-            .content(move || shell::build(&st)),
+            .on_close_request(move |ctx| {
+                let Ok(mut st) = guard.try_borrow_mut() else {
+                    return false;
+                };
+                if st.update_phase.get() == update::UpdatePhase::Installing {
+                    ctx.toast("正在安装更新，请等待完成后再关闭");
+                    return false;
+                }
+                finish_settings_close(&mut st)
+            })
+            .content(move || settings_window_content(&st)),
     );
 }
 
@@ -681,17 +714,10 @@ pub fn run() {
         crate::widgets::init_look(app_state.borrow().look);
         dict_window::build_content(app_state.clone())
     } else {
-        shell::build(&app_state)
+        settings_window_content(&app_state)
     };
 
-    // 关窗守卫：有未保存改动时挡下这一次关闭，弹确认框问一句。
-    //
-    // `on_close_request` 的返回值被平台在 WM_CLOSE 里**同步等待**，容不下"等用户回答"
-    // 这种异步决定，故这里只能"先返回 false 挡住 + 另起一条路把答案送回来"——那条路就是
-    // 应用内的确认对话框，它的两个退出按钮走 `ctx.force_close()`（绕过本守卫）——
-    // 判据本身（有没有改动）不会因为用户选了"直接退出"就消失，走普通关闭会被自己再拦一次。
-    //
-    // 自绘标题栏的 × 与 Alt+F4 都会到这里（windui 0.12 起两者同走关闭决策链）。
+    // 自绘 ×、系统关闭、Ctrl+W 和无前置弹层时的 Escape 共用关闭请求。
     if compat_as_main {
         let compat_for_activate = app_state.borrow().compat_mgr.clone();
         app = app.on_window_activated(move |_ctx, active| {
@@ -706,6 +732,10 @@ pub fn run() {
     // （见 `App::on_interval` 的文档），代价只是每 2 秒一次平台定时器唤醒。
     // 首窗不是设置主窗时不挂，保证任何时刻只有一份（见 `app_hosts_settings_shell`）。
     if app_hosts_settings_shell(dict_as_main, compat_as_main) {
+        let autosave = app_state.clone();
+        app = app.on_interval(state::AUTOSAVE_INTERVAL, move |_| {
+            autosave_settings(&autosave)
+        });
         let tick_state = app_state.clone();
         app = app.on_interval(pages::memory::TICK, move |_ctx| {
             pages::memory::on_tick(&tick_state)
@@ -725,9 +755,8 @@ pub fn run() {
     });
     let close_state = app_state.clone();
     app = app.on_close_request(move |ctx| {
-        let Ok(st) = close_state.try_borrow() else {
-            // 借用不到说明正处在某个改状态的回调里，此时拦下反而更糟（用户会以为窗口卡死）。
-            return true;
+        let Ok(mut st) = close_state.try_borrow_mut() else {
+            return false;
         };
         // 正在装 .deb：进程一退，apt/dpkg 继承的输出管道就断了，写入即 SIGPIPE，
         // 包会停在半配置状态。等装完再关。
@@ -748,16 +777,7 @@ pub fn run() {
         if compat_as_main {
             return true;
         }
-        // 清单只算一次，它自己就是守卫的判据（同子窗那份）。
-        let unsaved = st.unsaved_items();
-        if unsaved.is_empty() {
-            // 放行的这一刻才记下主窗已关：二次实例据此分辨该 activate 已有主窗还是
-            // 重建一个。必须在**放行分支**里 —— 下面那条是拦下，主窗还在。
-            st.mark_main_window_closed();
-            return true;
-        }
-        st.prime_exit_confirm(&unsaved);
-        false
+        finish_settings_close(&mut st)
     });
 
     // 内存诊断：运行期每 2s 打一个净堆采样点，用于分辨「切页涨的内存」到底在 Rust 堆
@@ -898,6 +918,78 @@ mod tests {
         assert!(
             res.open_windows[0].shortcut.is_some(),
             "重建的主窗没挂 on_shortcut"
+        );
+    }
+
+    #[test]
+    fn autosave_closing_settings_flushes_the_focused_number_before_the_next_frame_or_timer() {
+        use windui::core::Tree;
+        use windui::event::{Key, KeyEvent};
+        use windui::geometry::Size;
+        use windui::text::NullTextEngine;
+
+        let _lock = rpc::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("WIND_RPC_MOCK", "1") };
+        struct Mock;
+        impl Drop for Mock {
+            fn drop(&mut self) {
+                unsafe { std::env::remove_var("WIND_RPC_MOCK") };
+            }
+        }
+        let _mock = Mock;
+        let app = Rc::new(RefCell::new(state::AppState::empty()));
+        let key = "schema.pinyin.sentence_count";
+        let mut tree = Tree::new();
+        {
+            let mut st = app.borrow_mut();
+            st.apply_loaded(state::LoadedState::fetch());
+            *st.theme_handle.borrow_mut() = Some(ThemeHandle::detached(Theme::default()));
+            let field = manifest::field(&st, key).build(&mut tree);
+            tree.root = Some(field);
+            tree.layout_root(Size::new(700, 80), &mut NullTextEngine);
+            st.seed_autosave_baseline();
+        }
+
+        let focus = tree
+            .focusable_order()
+            .into_iter()
+            .find(|&id| tree.get(id).unwrap().widget.accepts_text())
+            .expect("the bound setting must contain an editable number field");
+        tree.set_focused(Some(focus), None);
+        rpc::take_mock_calls();
+        for (key, ctrl) in [(Key::Other(0x41), true), (Key::Char('7'), false)] {
+            tree.dispatch_key(
+                KeyEvent {
+                    key,
+                    ctrl,
+                    pressed: true,
+                    shift: false,
+                    alt: false,
+                    meta: false,
+                },
+                Some(focus),
+            );
+        }
+        let mut window = windui::testing::run_with_ctx(|ctx| open_main_window(ctx, &app))
+            .open_windows
+            .pop()
+            .unwrap();
+        let mut close = window.close_handler.take().unwrap();
+        let mut allowed = false;
+        windui::testing::run_with_ctx(|ctx| allowed = close(ctx));
+        assert!(allowed);
+        assert!(app.borrow().main_window_closed.get());
+        let calls = rpc::take_mock_calls();
+        assert!(
+            calls
+                .iter()
+                .any(|(method, params)| method == "config.setItems"
+                    && params["items"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|i| i["key"] == key && i["value"] == 7)),
+            "the very last number typed must be on disk before allowing the close; calls: {calls:?}"
         );
     }
 

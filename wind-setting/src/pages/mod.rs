@@ -831,6 +831,8 @@ fn appearance_page(app: &Rc<RefCell<AppState>>, nav: &SubNav) -> Element {
         let carry = st.fields.page_carry.borrow_mut().take();
         if let Some(draft) = carry {
             st.fields.reload_page_batch(&draft);
+        } else {
+            st.seed_new_appearance_writers();
         }
         if locked {
             let header = crate::widgets::PAGE_HEADER_ENABLED

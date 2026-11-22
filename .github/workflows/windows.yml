@@ -44,3 +44,17 @@ jobs:
           path: dist/困困输入法/
           if-no-files-found: error
           retention-days: 14
+
+  settings:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Select Rust
+        run: rustup default 1.100.0
+      - name: Test automatic saving and window close
+        run: cargo test --locked --manifest-path wind-setting/Cargo.toml --lib autosave -- --test-threads=1

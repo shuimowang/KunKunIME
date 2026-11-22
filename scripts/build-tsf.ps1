@@ -2,7 +2,7 @@
 param(
     [string] $OutDir = (Join-Path $PSScriptRoot '..\artifacts\windows'),
     [string] $BuildRoot = (Join-Path $PSScriptRoot '..\artifacts\.build'),
-    [version] $Version = '0.1.0',
+    [version] $Version = ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\WindInput\docs\VERSION')).Trim()),
     [string] $CMake
 )
 $ErrorActionPreference = 'Stop'

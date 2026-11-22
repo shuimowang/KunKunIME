@@ -11,8 +11,11 @@ pub mod apply;
 pub mod model;
 pub mod view;
 
-/// 打开向导：按当前基线预填，停在欢迎页。设置页有未保存修改时先停在 Dirty 段。
+/// 在向导建立预填基线前，先提交设置页刚完成的编辑。
 pub fn open_wizard(app: &Rc<RefCell<AppState>>) {
+    if !app.borrow_mut().flush_autosave() {
+        return;
+    }
     let st = app.borrow();
     let layouts = crate::dialogs::schema_manager::fetch_shuangpin_layouts();
     // 布局是方案级的：每个双拼方案（按 scheme 认，不按 id）各读一次。读不到的不进表，
@@ -36,28 +39,9 @@ pub fn open_wizard(app: &Rc<RefCell<AppState>>) {
         layouts,
         outcome: None,
     });
-    st.wizard_phase.set(if st.is_dirty() {
-        WizardPhase::Dirty
-    } else {
-        WizardPhase::Welcome
-    });
+    st.wizard_phase.set(WizardPhase::Welcome);
     st.wizard_rev.set(st.wizard_rev.get().wrapping_add(1));
     st.wizard_visible.set(true);
-}
-
-/// Dirty 段「放弃修改」：与设置页「重新加载」同一条路（含方案 override 待提交项），
-/// 再按干净的基线重开。
-pub fn discard_and_continue(app: &Rc<RefCell<AppState>>) {
-    app.borrow_mut().reload();
-    open_wizard(app);
-}
-
-/// Dirty 段「保存并继续」：保存失败就停在原地（设置页会 toast 报错）。
-pub fn save_and_continue(app: &Rc<RefCell<AppState>>) {
-    let ok = app.borrow_mut().save();
-    if ok {
-        open_wizard(app);
-    }
 }
 
 /// 启动数据就绪、或重连成功后调用。向导已开着时不动它（重开会把草稿打回预填）。
@@ -318,68 +302,35 @@ mod tests {
     }
 
     #[test]
-    fn open_when_dirty_starts_at_dirty_phase() {
+    fn autosave_flushes_an_edit_before_prefilling_wizard() {
         with_mock(|| {
             let app = mock_app();
-            // 判脏写法同 state.rs 的关窗守卫测试：挂一个写出不同值的 writer。
-            app.borrow().fields.writers.borrow_mut().push(Box::new(
-                |cfg: &mut crate::config::Config| {
-                    cfg.set_path("input.filter_mode", serde_json::json!("gb18030"));
-                },
-            ));
+            let live = windui::signal::signal(
+                app.borrow()
+                    .base_config
+                    .get_str("input.filter_mode")
+                    .unwrap()
+                    .to_owned(),
+            );
+            app.borrow()
+                .fields
+                .writers
+                .borrow_mut()
+                .push(Box::new(move |cfg| {
+                    cfg.set_path("input.filter_mode", serde_json::json!(live.get()));
+                }));
+            app.borrow_mut().seed_autosave_baseline();
+            crate::rpc::take_mock_calls();
+            live.set("gb18030".to_string());
             open_wizard(&app);
-            assert_eq!(app.borrow().wizard_phase.get(), WizardPhase::Dirty);
-        });
-    }
-
-    /// 让设置页判脏、且「重新加载」能把它洗干净：writer 写信号值，loader 按配置回灌信号。
-    /// （只挂 writer 的写法 reload 洗不掉——writer 每次照旧写出不同值。）
-    fn make_dirty(app: &Rc<RefCell<AppState>>) {
-        let v = windui::signal::signal("gb18030".to_string());
-        let st = app.borrow();
-        st.fields
-            .writers
-            .borrow_mut()
-            .push(Box::new(move |cfg: &mut crate::config::Config| {
-                cfg.set_path("input.filter_mode", serde_json::json!(v.get()));
-            }));
-        st.fields.loaders.borrow_mut().insert(
-            "test.filter_mode".into(),
-            Box::new(move |cfg: &crate::config::Config| {
-                let cur = cfg
-                    .get_path("input.filter_mode")
-                    .and_then(|x| x.as_str().map(str::to_string))
-                    .unwrap_or_default();
-                v.set(cur);
-            }),
-        );
-        drop(st);
-        assert!(app.borrow().is_dirty(), "前提：设置页判脏");
-    }
-
-    #[test]
-    fn discard_from_dirty_goes_to_welcome() {
-        with_mock(|| {
-            let app = mock_app();
-            make_dirty(&app);
-            open_wizard(&app);
-            assert_eq!(app.borrow().wizard_phase.get(), WizardPhase::Dirty);
-            discard_and_continue(&app);
-            assert!(!app.borrow().is_dirty());
-            assert_eq!(app.borrow().wizard_phase.get(), WizardPhase::Welcome);
-        });
-    }
-
-    #[test]
-    fn save_from_dirty_goes_to_welcome() {
-        with_mock(|| {
-            let app = mock_app();
-            make_dirty(&app);
-            open_wizard(&app);
-            assert_eq!(app.borrow().wizard_phase.get(), WizardPhase::Dirty);
-            save_and_continue(&app);
-            assert!(!app.borrow().is_dirty());
-            assert_eq!(app.borrow().wizard_phase.get(), WizardPhase::Welcome);
+            let st = app.borrow();
+            assert_eq!(st.wizard_phase.get(), WizardPhase::Welcome);
+            assert_eq!(st.base_config.get_str("input.filter_mode"), Some("gb18030"));
+            assert!(
+                crate::rpc::take_mock_calls()
+                    .iter()
+                    .any(|(method, _)| method == "config.setItems")
+            );
         });
     }
 

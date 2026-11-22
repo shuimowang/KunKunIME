@@ -15,10 +15,7 @@ use std::rc::Rc;
 use windui::prelude::*;
 
 use super::model::{self, Draft, FUZZY_N, FUZZY_PAIRS, Kind, QUICK_KEYS, TEMP_KEYS, Trigger};
-use super::{
-    close, complete, discard_and_continue, finish, layout_label, save_and_continue, step3_blockers,
-    summary_of,
-};
+use super::{close, complete, finish, layout_label, step3_blockers, summary_of};
 use crate::pages::dict::reactive::reactive_effect;
 use crate::state::{AppState, WizardPhase, WizardSession};
 use crate::widgets::{
@@ -31,7 +28,7 @@ const DIALOG_W: i32 = 600;
 ///
 /// 取值：最高的常见形态都不滚动放得下，并留 24px 余量。测试文字引擎下正文视口 467；
 /// 第 1 步（拼音 + 双拼主方案 + 8 个方案）内容 411 最高，第 2 步（双拼 + 模糊音开，13 对
-/// 分项 4 列网格）364。再高的话主窗默认高 640 就显得局促，欢迎页、Dirty 页也只剩大片留白。
+/// 分项 4 列网格）364。再高的话主窗默认高 640 就显得局促，欢迎页会留下较多空白。
 /// 数值以测试里的 `LineAwareTextEngine` 量得为准（见 `tests::tallest_steps_fit_without_scrolling`），
 /// 靶机 DPI 下再目验。
 const DIALOG_H: i32 = 560;
@@ -526,7 +523,6 @@ fn frame(app: &Rc<RefCell<AppState>>, phase: Signal<WizardPhase>, c: Controls) -
         .fill()
         .weight(1.0)
         .child(page(welcome_body(app), WizardPhase::Welcome))
-        .child(page(dirty_body(), WizardPhase::Dirty))
         .child(page(step1_body(app, c), WizardPhase::Step(1)))
         .child(page(step2_body(c), WizardPhase::Step(2)))
         .child(page(step3_body(c), WizardPhase::Step(3)))
@@ -594,7 +590,7 @@ fn title_row(phase: Signal<WizardPhase>) -> Element {
     let step = phase.map(|p| match p {
         WizardPhase::Step(n) => format!("{n} / 4"),
         WizardPhase::Confirm => "确认".to_string(),
-        WizardPhase::Welcome | WizardPhase::Dirty | WizardPhase::Result => String::new(),
+        WizardPhase::Welcome | WizardPhase::Result => String::new(),
     });
     Element::row()
         .width_match()
@@ -734,13 +730,6 @@ fn welcome_body(_app: &Rc<RefCell<AppState>>) -> Element {
     #[cfg(windows)]
     let welcome = welcome.child(_app.borrow().dict_mgr.registration.button().width(120));
     welcome
-}
-
-fn dirty_body() -> Element {
-    body().child(page_head(
-        "设置页有未保存的修改",
-        "向导写入后会重新读取配置，未保存的修改会和它互相覆盖。请先保存或放弃这些修改，再继续。",
-    ))
 }
 
 /// 第 1 步的一张类别选项卡片：整卡可点，选中时强调色描边 + 淡底；该类别没有可选的
@@ -1135,9 +1124,6 @@ fn footer(app: &Rc<RefCell<AppState>>, phase: Signal<WizardPhase>, c: Controls) 
         }
     };
 
-    let save_app = app.clone();
-    let discard_app = app.clone();
-    let cancel_app = app.clone();
     let done_app = app.clone();
     let ok_app = app.clone();
     let close_app = app.clone();
@@ -1153,27 +1139,6 @@ fn footer(app: &Rc<RefCell<AppState>>, phase: Signal<WizardPhase>, c: Controls) 
                 .visible_when(move || phase.get() != WizardPhase::Result),
         )
         .child(Element::leaf().weight(1.0))
-        // Dirty
-        .child(
-            Element::button("取消")
-                .small()
-                .outline_soft()
-                .on_click(move |_| close(&cancel_app))
-                .visible_when(is(WizardPhase::Dirty)),
-        )
-        .child(
-            Element::button("放弃修改")
-                .small()
-                .outline_soft()
-                .on_click(move |_| discard_and_continue(&discard_app))
-                .visible_when(is(WizardPhase::Dirty)),
-        )
-        .child(
-            Element::button("保存并继续")
-                .small()
-                .on_click(move |_| save_and_continue(&save_app))
-                .visible_when(is(WizardPhase::Dirty)),
-        )
         // 欢迎页
         .child(
             Element::button("开始")
@@ -1587,9 +1552,8 @@ mod tests {
         assert!(divider_violations(&tree, root).is_empty());
     }
 
-    const ALL_PHASES: [WizardPhase; 8] = [
+    const ALL_PHASES: [WizardPhase; 7] = [
         WizardPhase::Welcome,
-        WizardPhase::Dirty,
         WizardPhase::Step(1),
         WizardPhase::Step(2),
         WizardPhase::Step(3),
@@ -1701,13 +1665,14 @@ mod tests {
             );
             layout(&mut tree);
             assert_eq!(tree.get(panel).unwrap().measured.h, DIALOG_H);
-            let (h, content_h) = page_scroll(&tree, panel, 5);
+            let (h, content_h) = page_scroll(&tree, panel, WizardPhase::Step(4));
             assert!(content_h > h, "长摘要应可滚动：{content_h} <= {h}");
         });
     }
 
-    /// 第 `i` 个阶段页的滚动容器 (视口高, 内容高)。次序同 [`frame`] 里 stack 的子项。
-    fn page_scroll(tree: &Tree, panel: NodeId, i: usize) -> (i32, i32) {
+    /// 当前阶段的滚动容器（视口高、内容高）。
+    fn page_scroll(tree: &Tree, panel: NodeId, phase: WizardPhase) -> (i32, i32) {
+        let i = ALL_PHASES.iter().position(|p| *p == phase).unwrap();
         let pages = tree.get(panel).unwrap().children[2];
         let sc = tree.get(pages).unwrap().children[i];
         let n = tree.get(sc).unwrap();
@@ -1741,18 +1706,18 @@ mod tests {
             open_wizard(&app);
             let (mut tree, panel, phase, c) = build_frame(&app);
             c.schemes.set(fake_schemes(8));
-            for (p, i, kind, fuzzy, temp) in [
-                (WizardPhase::Welcome, 0, 0, false, false),
-                (WizardPhase::Step(1), 2, 2, false, false),
-                (WizardPhase::Step(2), 3, 2, true, false),
-                (WizardPhase::Step(3), 4, 0, false, true),
+            for (p, kind, fuzzy, temp) in [
+                (WizardPhase::Welcome, 0, false, false),
+                (WizardPhase::Step(1), 2, false, false),
+                (WizardPhase::Step(2), 2, true, false),
+                (WizardPhase::Step(3), 0, false, true),
             ] {
                 phase.set(p);
                 set_shape(&c, kind);
                 c.fuzzy.set(fuzzy);
                 c.temp.set(temp);
                 layout(&mut tree);
-                let (h, content_h) = page_scroll(&tree, panel, i);
+                let (h, content_h) = page_scroll(&tree, panel, p);
                 eprintln!("{p:?}: viewport={h} content={content_h}");
                 assert!(
                     content_h + FIT_MARGIN <= h,

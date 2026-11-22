@@ -6,7 +6,7 @@
 
 1. 从 [GitHub Releases](https://github.com/shuimowang/KunKunIME/releases) 下载 Windows x64 压缩包，将**整个文件夹**解压到长期使用的位置。
 2. 双击 **KunKunIME.exe**，点击 **注册输入法** 并确认 Windows 管理员授权。
-3. 按 **Win + 空格** 选择 **困困输入法**。此后可以关闭设置窗口，继续打字。
+3. 按 **Win + 空格** 选择 **困困输入法**。平时调整设置会自动保存，可以直接关闭窗口继续打字。
 
 | 我想输入什么 | 怎么用 |
 |---|---|

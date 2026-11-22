@@ -232,6 +232,7 @@ thread_local! {
     /// 自上次广播以来是否写过信号——供平台层判断要不要让**其他**窗口也重绘。
     /// 见 [`take_cross_window_dirty`]。
     static CROSS_DIRTY: Cell<bool> = const { Cell::new(false) };
+    static WRITE_REVISION: Cell<u64> = const { Cell::new(0) };
 }
 
 /// 写信号后触发重绘的钩子。
@@ -239,6 +240,7 @@ thread_local! {
 ///   （结构签名层会在显隐/布局变化时升级整窗），不强制整窗。
 /// - 事件期外（后台 pump / 定时器 / 直接调用）：经 anim 通道请求重绘（整窗兜底）。
 fn notify_changed() {
+    WRITE_REVISION.with(|r| r.set(r.get().wrapping_add(1)));
     // 无论在不在事件期都记一笔：信号是跨窗口共享状态的唯一原语（`Signal` 是 `Copy`
     // 句柄，传进子窗即可共享），而上面两条路都只能让**当前**窗口重绘——事件期那条
     // 走当前事件节点的局部脏区，事件期外那条走 anim 通道由本窗口的帧消费。
@@ -249,6 +251,11 @@ fn notify_changed() {
     } else {
         crate::anim::request_repaint();
     }
+}
+
+/// Revision of signal writes on this UI thread. Allows a periodic observer to skip idle ticks.
+pub fn write_revision() -> u64 {
+    WRITE_REVISION.with(Cell::get)
 }
 
 /// 标记「跨窗口可见状态已变」，让平台在分发收尾时刷新其余窗口。

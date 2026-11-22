@@ -154,7 +154,7 @@ pub(crate) fn status_text(p: &Installed, master_on: bool, enabled: bool) -> Stri
         return "未启用".to_string();
     }
     let Some(s) = &p.status else {
-        return "未运行（应用设置后启动）".to_string();
+        return "已启用，尚未运行".to_string();
     };
     let err = s
         .error
@@ -923,7 +923,7 @@ mod tests {
         });
         assert_eq!(status_text(&p, true, true), "反复崩溃，已停用：exit code 3");
         p.status = None;
-        assert!(status_text(&p, true, true).contains("应用设置后"));
+        assert_eq!(status_text(&p, true, true), "已启用，尚未运行");
         p.error = Some("坏了".into());
         assert_eq!(status_text(&p, true, true), "扩展程序无效：坏了");
     }

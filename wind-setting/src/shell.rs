@@ -240,7 +240,8 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
     // 底栏右键 = 侧栏那份导入菜单 + 「界面细节…」。后者**只挂底栏**：它是调设置窗自己外观的
     // 入口，与侧栏的导航 / 导入语义无关（用户 2026-10-14 明确要求左侧导航不加）。
     let app_look = app.clone();
-    let footer = build_footer(app, dark, conn).on_context_menu(move || {
+    let discard_on_error = signal(false);
+    let footer = build_footer(app, dark, conn, discard_on_error).on_context_menu(move || {
         let mut items = Vec::new();
         if import_shown {
             items = crate::pages::config_import::import_menu_items(
@@ -283,7 +284,7 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
         .child(backup_dialog)
         .child(config_import_dialog)
         .child(stats_confirm_dialog)
-        .child(build_exit_confirm_dialog(app))
+        .child(build_failed_save_exit(app, discard_on_error))
         .child(build_reload_dialog(app, reload_confirm))
         .child(build_reset_dialog(app, reset_confirm))
         .child(build_theme_delete_dialog(app))
@@ -370,6 +371,7 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
     root = root.child(look_watcher(app));
     // 全局 toast 反馈汇：保存/重载/恢复/协议路由等瞬时结果统一在此弹出（底栏只剩状态点）。
     let root = root.child(crate::pages::dict::reactive::toast_sink(feedback));
+    app.borrow_mut().seed_autosave_baseline();
     crate::memstat::mark("[build 出口]");
     root
 }
@@ -849,11 +851,12 @@ fn look_menu_item(app: &Rc<RefCell<AppState>>) -> MenuItem {
     )
 }
 
-/// 底部操作栏（搜狗式）：左=状态点（悬停出说明）+ 明暗切换 + 主题色；右=恢复本页/重新加载/应用设置/保存并退出。
+/// 底栏提供外观切换、自动保存状态和页面操作。
 fn build_footer(
     app: &Rc<RefCell<AppState>>,
     dark: Signal<bool>,
     conn: Signal<ConnState>,
+    discard_on_error: Signal<bool>,
 ) -> Element {
     // 状态点：绿=服务就绪，琥珀=其余（加载中/离线预览/服务未运行）；外圈 22% alpha 光环。
     // 说明文字只在悬停时出现——常驻的「已连接」被不少用户读成"连上了云端服务器"，
@@ -979,55 +982,44 @@ fn build_footer(
         .on_click(move |_| stats_mgr.reload())
         .visible_when(move || stats_tab == Some(tab_sig.get()));
 
-    // 恢复本页：本页改默认值；有未保存改动先弹确认。
-    let app_reset = app.clone();
+    let reset_confirm = app.borrow().reset_confirm;
     let reset_btn = Element::button("恢复本页")
         .small()
         .outline_soft()
-        .on_click(move |_| {
-            if let Ok(s) = app_reset.try_borrow() {
-                if s.is_dirty() {
-                    s.reset_confirm.set(true);
-                } else {
-                    s.reset_current_page();
-                }
-            }
-        });
+        .enabled_when(move || matches!(conn.get(), ConnState::Ready | ConnState::Mock))
+        .on_click(move |_| reset_confirm.set(true));
 
-    // 重新加载：从服务端重读，丢弃改动——二次确认。
     let app_reload = app.clone();
     let reload_btn = Element::button("重新加载")
         .small()
         .outline_soft()
         .on_click(move |_| {
-            if let Ok(s) = app_reload.try_borrow() {
-                s.reload_confirm.set(true);
+            if let Ok(mut s) = app_reload.try_borrow_mut() {
+                if s.is_dirty() {
+                    s.reload_confirm.set(true);
+                } else {
+                    s.reload();
+                }
             }
         });
 
-    // 应用设置：保存当前改动（不退出）。
-    let app_apply = app.clone();
-    let apply_btn = Element::button("应用设置")
+    let error = app.borrow().autosave_error;
+    let autosave_note = Element::label("更改自动保存")
+        .font_size(12.0)
+        .fg_role(Role::TextMuted)
+        .visible_when(move || conn.get() == ConnState::Ready && error.with(Option::is_none));
+    let retry_state = app.clone();
+    let retry_btn = Element::button("重试保存")
         .small()
         .outline_soft()
+        .danger()
+        .visible_when(move || error.with(Option::is_some))
+        .tooltip("上次修改未保存，点击重试")
         .on_click(move |_| {
-            if let Ok(mut s) = app_apply.try_borrow_mut() {
-                s.save();
+            if let Ok(mut st) = retry_state.try_borrow_mut() {
+                st.flush_autosave();
             }
         });
-
-    // 保存并退出：保存成功（无报错）才退出。
-    let app_save_exit = app.clone();
-    let save_exit_btn = Element::button("保存并退出").small().on_click(move |ctx| {
-        if let Ok(mut s) = app_save_exit.try_borrow_mut()
-            && s.save()
-        {
-            // 走 close_window 而非裸 request_close：保存若有被服务端跳过的项，配置仍判脏，
-            // 关窗守卫会再弹一次确认——而用户刚刚已经明确表达过"保存并退出"，跳过项的
-            // 提示 save 自己弹的 toast 里有。
-            s.close_window(ctx);
-        }
-    });
 
     // 明暗 / 主题色各有一个 `feature:` id（`dark_mode` / `accent`），被定制版或用户藏掉的
     // 不放。角标是主题色下拉的附属，随它走。
@@ -1071,133 +1063,42 @@ fn build_footer(
         bar = bar.child(accent_pick).child(accent_badge);
     }
     bar.child(Element::leaf().weight(1.0))
+        .child(autosave_note)
+        .child(retry_btn)
         .child(refresh_btn)
         .child(reset_btn)
-        // 「恢复本页」会丢掉本页改动，与保存类按钮并排同权容易误点；隔一条竖线分开。
-        .child(
-            Element::leaf()
-                .size(1, 18)
-                .margin_xy(6, 0)
-                .bg_role(Role::Divider),
-        )
         .child(reload_btn)
-        .child(apply_btn)
-        .child(save_exit_btn)
+        .child(
+            Element::button("关闭")
+                .small()
+                .on_click(|ctx| ctx.request_close())
+                .visible_when(move || error.with(Option::is_none)),
+        )
+        .child(
+            Element::button("放弃并退出…")
+                .small()
+                .outline_soft()
+                .on_click(move |_| discard_on_error.set(true))
+                .visible_when(move || error.with(Option::is_some)),
+        )
 }
 
-/// 关窗前的「有未保存的更改」确认框。三个出口：保存并退出 / 直接退出 / 取消。
-///
-/// 三按钮而非「确定/取消」：两按钮版本逼用户在"丢弃"和"留下"之间二选一，而绝大多数人
-/// 此刻想要的是第三件事——存了再走。这也是各家编辑器关窗确认的通行形状。
-///
-/// 「直接退出」与「保存并退出」都走 `force_close`（绕过守卫）：守卫的判据是"有没有未保存
-/// 改动"，而丢弃改动并不会消掉它们——走普通 `request_close` 会被自己的守卫再拦一次、
-/// 永远关不掉。
-fn build_exit_confirm_dialog(app: &Rc<RefCell<AppState>>) -> Element {
-    let (visible, note, tip) = {
-        let s = app.borrow();
-        (s.exit_confirm, s.unsaved_note, s.unsaved_tip)
-    };
-    let app_save = app.clone();
-    let app_quit = app.clone();
-    // 复制走 `unsaved_items()` 重算而不是读 `tip` 信号：那份是给人看的（截断过、
-    // 末尾还带一句提示），而贴给维护者的必须是**全量原始键名**。
-    let app_copy = app.clone();
-    let copy_keys = move |ctx: &mut EventCtx| {
-        let Ok(s) = app_copy.try_borrow() else {
-            return;
-        };
-        let items = s.unsaved_items();
-        if items.is_empty() {
-            return;
-        }
-        let n = items.len();
-        ctx.clipboard_set(&items.join("\n"));
-        // 只弹 toast，**不动**那行「共 N 项未保存」：它说的是对话框此刻的事实（还有几项
-        // 没保存），复制这个动作不该把它改掉——改了反而丢掉用户正需要看的那个数。
-        ctx.toast_ok(format!("已复制 {n} 项未保存的配置键"));
-    };
-    let frame = Element::col()
-        .width(380)
-        .bg_role(Role::Surface)
-        .border_role(Role::Border, 1)
-        .corner(12.0)
-        .shadow(Shadow::new(0.0, 16.0, 40.0, Color::rgba(0, 0, 0, 130)))
-        .child(
-            Element::label("有未保存的更改")
-                .font_size(14.0)
-                .font_weight(600)
-                .fg_role(Role::Text)
-                .width_match()
-                .max_lines(1)
-                .padding_xy(18, 14),
-        )
-        .child(Element::divider())
-        .child(
-            Element::col()
-                .width_match()
-                .padding_xy(18, 16)
-                .spacing(8)
-                .child(
-                    Element::label("关闭设置窗口前是否保存这些更改？未保存的更改将会丢失。")
-                        .font_size(13.0)
-                        .fg_role(Role::TextMuted)
-                        .width_match()
-                        .max_lines(3),
-                )
-                // 「共 N 项未保存 ⓘ」：正文不列具体项——普通用户不关心哪几个配置键在
-                // 动，一串 `input.auto_pair.english_pairs` 只会喧宾夺主。清单收进角标，
-                // 悬停能看、点击能复制，排查「什么都没动就说有未保存」时一步到位。
-                .child(
-                    Element::row()
-                        .cross(Align::Center)
-                        .spacing(6)
-                        .child(
-                            Element::label_signal(note)
-                                .font_size(12.0)
-                                .fg_role(Role::TextMuted),
-                        )
-                        .child(crate::widgets::info_badge(tip, copy_keys)),
-                ),
-        )
-        .child(Element::divider())
-        .child(
-            Element::row()
-                .width_match()
-                .cross(Align::Center)
-                .padding_xy(16, 12)
-                .spacing(8)
-                .child(Element::leaf().weight(1.0))
-                .child(
-                    Element::button("取消")
-                        .small()
-                        .outline_soft()
-                        .on_click(move |_| visible.set(false)),
-                )
-                .child(
-                    Element::button("直接退出")
-                        .small()
-                        .outline_soft()
-                        .danger()
-                        .on_click(move |ctx| {
-                            visible.set(false);
-                            // 走 close_window 而非裸 force_close：退出置位收在那里，
-                            // 漏掉这一条，二次实例会误判主窗还在（见 mark_main_window_closed）。
-                            app_quit.borrow().close_window(ctx);
-                        }),
-                )
-                .child(Element::button("保存并退出").small().on_click(move |ctx| {
-                    // 保存失败（如 core 未运行）就留在原地：此时退出等于丢数据，
-                    // 而失败原因已由 save 自己弹的 toast 说明。
-                    if let Ok(mut s) = app_save.try_borrow_mut()
-                        && s.save()
-                    {
-                        visible.set(false);
-                        s.close_window(ctx);
-                    }
-                })),
-        );
-    Element::dialog(visible, frame)
+fn build_failed_save_exit(app: &Rc<RefCell<AppState>>, visible: Signal<bool>) -> Element {
+    let app = app.clone();
+    confirm_dialog_body(
+        visible,
+        "放弃未保存的修改？",
+        Element::label("上次保存失败。退出将丢弃仍未写入的修改。").max_lines(3),
+        "放弃并退出",
+        true,
+        move |ctx| {
+            visible.set(false);
+            if let Ok(mut st) = app.try_borrow_mut() {
+                st.discard_unsaved_settings();
+                st.close_window(ctx);
+            }
+        },
+    )
 }
 
 /// 「重新加载」二次确认对话框。
@@ -1364,13 +1265,13 @@ fn build_assoc_confirm_dialogs(app: &Rc<RefCell<AppState>>) -> (Element, Element
     (overwrite_dlg, remove_dlg)
 }
 
-/// 「恢复本页」确认对话框（仅在有未保存改动时弹出）。
+/// 还原后立即保存，覆盖已有设置前先确认。
 fn build_reset_dialog(app: &Rc<RefCell<AppState>>, visible: Signal<bool>) -> Element {
     let app_c = app.clone();
     confirm_dialog(
         visible,
         "恢复本页为默认值",
-        "本页存在未保存的修改，恢复默认会丢弃这些修改。确定恢复为系统默认值？",
+        "将覆盖本页可恢复的设置并自动保存。确定恢复默认值？",
         "恢复默认",
         move |_| {
             if let Ok(s) = app_c.try_borrow() {
@@ -1849,7 +1750,7 @@ mod tests {
             .borrow_mut()
             .push(crate::state::SideCommitter {
                 label: "测试落点",
-                is_dirty: Box::new(|| false),
+                pending: Box::new(|| None),
                 commit: Box::new(|| Ok(())),
             });
         st.fields

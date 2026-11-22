@@ -2,7 +2,7 @@
 //!
 //! 状态绑定改用 wind-ui-rust 的 `Signal`（取代旧 `Rc<Cell>`）。清单引擎
 //! [`crate::manifest::field`] 为每个 key 建一个 Signal 并把"写回器/取值器"
-//! 登记进 [`FieldRegistry`]；[`AppState::save`] 跑所有写回器把 Signal 值写回
+//! 登记进 [`FieldRegistry`]；[`AppState::flush_autosave`] 跑所有写回器把 Signal 值写回
 //! Config，再与 base 做 diff，增量 `config.setItems`。
 
 use std::cell::{Cell, RefCell};
@@ -16,7 +16,7 @@ use windui::core::EventCtx;
 use windui::prelude::*;
 
 use crate::capabilities::Capabilities;
-use crate::config::{Config, diff_config};
+use crate::config::{Config, ConfigItem, diff_config};
 use crate::dialogs::schema_manager::SchemaManagerState;
 use crate::key_conflict::{Conflict, ConflictLevel, KeyGroup};
 use crate::manifest::Manifest;
@@ -124,6 +124,7 @@ fn drain_clamped<T>(v: &RefCell<Vec<T>>, r: (usize, usize)) {
 /// 字段注册表 — 清单引擎登记的保存写回器、联动取值器与回填加载器。
 #[derive(Default)]
 pub struct FieldRegistry {
+    generation: Cell<u64>,
     /// 保存时把各 Signal 值写回 Config。
     pub writers: RefCell<Vec<FieldWriter>>,
     /// key → 当前值取值器（供 enabled_when 联动）。
@@ -253,6 +254,7 @@ impl FieldRegistry {
     /// 这条前提以前由「主窗等于进程」免费保证着（`shell::build` 一辈子只跑一次），
     /// 主窗改成可重建之后就得显式维护了。
     pub fn reset(&self) {
+        self.generation.set(self.generation.get().wrapping_add(1));
         self.writers.borrow_mut().clear();
         self.getters.borrow_mut().clear();
         self.bool_signals.borrow_mut().clear();
@@ -521,26 +523,28 @@ pub struct SideCommitter {
     pub label: &'static str,
     /// 是否有待提交改动。汇总进 [`AppState::is_dirty`]，让「有未保存改动」的判断
     /// 覆盖这类数据——否则用户改完方案配置，「恢复本页」不会提醒他即将丢弃什么。
-    pub is_dirty: Box<dyn Fn() -> bool>,
+    pub pending: Box<dyn Fn() -> Option<Value>>,
     /// 提交。`Err` 使整次保存判失败，文案直接进 toast。
     pub commit: Box<dyn Fn() -> Result<(), String>>,
 }
 
 impl FieldRegistry {
     /// 是否有待提交的非 config 改动。
+    #[cfg(test)]
     pub fn side_dirty(&self) -> bool {
-        self.side.borrow().iter().any(|s| (s.is_dirty)())
+        self.side.borrow().iter().any(|s| (s.pending)().is_some())
     }
 
     /// 有待提交改动的非 config 落点的名字，供「未保存项」清单展示。
     ///
     /// 与 [`Self::side_dirty`] 判的是同一件事（前者即本方法非空），拆成两个是因为
     /// `save` 只需要那个 bool，而每次保存都去拼一遍字符串没有意义。
+    #[cfg(test)]
     pub fn side_dirty_labels(&self) -> Vec<String> {
         self.side
             .borrow()
             .iter()
-            .filter(|s| (s.is_dirty)())
+            .filter(|s| (s.pending)().is_some())
             .map(|s| s.label.to_string())
             .collect()
     }
@@ -550,8 +554,9 @@ impl FieldRegistry {
     /// 中止而非continue：后续提交多半依赖同一批数据，硬着头皮往下写只会让失败面变大，
     /// 且 toast 只能显示一条错误——用户看到的会是最后一个错，而不是最先出问题的那个。
     ///
-    /// 与 [`Self::side_dirty`] 一起抽成方法（而非内联在 `AppState::save`）是为了可测：
+    /// 与 [`Self::side_dirty`] 一起抽成方法（而非内联在 `AppState::flush_autosave`）是为了可测：
     /// `AppState` 的构造走 RPC 与文件系统，测试里造不出来。
+    #[cfg(test)]
     pub fn commit_side(&self) -> Result<(), String> {
         for s in self.side.borrow().iter() {
             (s.commit)()?;
@@ -560,26 +565,31 @@ impl FieldRegistry {
     }
 }
 
-/// 悬停清单最多逐条列出几项。
-///
-/// 超过就截断：tooltip 的行数不设上限（见 windui `Element::tooltip` 的说明），几十项
-/// 会铺满一屏，而那时该做的是点一下把全量复制走、贴给维护者，不是在浮层里读。
-/// 取 8 而不是三五条——误报现场通常就那么几个键，一眼能看完的概率越高越好。
-const TIP_MAX_ITEMS: usize = 8;
+/// A settled edit is committed on the second settings timer tick.
+pub const AUTOSAVE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(180);
 
-/// 「未保存项」悬停文案：一行一项，超量截断，末尾提示可点。
-///
-/// 抽成纯函数是为了**可测**：它的两条边界（恰好 `TIP_MAX_ITEMS` 项不截断、多一项就
-/// 截断）都是差一错易发处，而对话框本身在测试里建不出来。
-fn unsaved_tip_text(items: &[String]) -> String {
-    let mut lines: Vec<String> = items.iter().take(TIP_MAX_ITEMS).cloned().collect();
-    if items.len() > TIP_MAX_ITEMS {
-        lines.push(format!("…… 等 {} 项", items.len()));
+#[derive(Default, PartialEq)]
+struct PendingSave {
+    items: Vec<ConfigItem>,
+    side: Vec<(usize, Value)>,
+}
+
+impl PendingSave {
+    fn is_empty(&self) -> bool {
+        self.items.is_empty() && self.side.is_empty()
     }
-    // 角标没有按钮外观，不写这一句没人知道它能点（光标手型只在指到时才看得见，
-    // 而那时提示已经弹出来了）。
-    lines.push("（点击复制全部）".to_string());
-    lines.join("\n")
+}
+
+#[derive(Default)]
+struct Autosave {
+    /// The values the controls can actually represent after loading, including legacy values
+    /// which a control displays using a fallback. Opening settings must never write those back.
+    displayed: RefCell<Option<Config>>,
+    field_generation: Option<u64>,
+    initial_side: Vec<(usize, Value)>,
+    revision: Option<u64>,
+    settling: Option<PendingSave>,
+    failed: Option<PendingSave>,
 }
 
 /// 底栏状态点表示的四种运行态。
@@ -599,10 +609,9 @@ pub enum ConnState {
     Down,
 }
 
-/// 设置向导所处的段：未保存修改的拦截页 → 欢迎页 → 4 步 → 二次确认 → 失败结果。
+/// 设置向导依次显示欢迎页、配置步骤、确认和结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WizardPhase {
-    Dirty,
     /// 欢迎页：说明向导做什么、指向官网文档与主题站。不计入步数。
     Welcome,
     /// 1..=4
@@ -820,15 +829,8 @@ pub struct AppState {
     pub reload_confirm: Signal<bool>,
     /// 「恢复本页」（有未保存改动时）确认对话框可见标志。
     pub reset_confirm: Signal<bool>,
-    /// 关窗前「有未保存的更改」确认对话框可见标志。
-    pub exit_confirm: Signal<bool>,
-    /// 关窗确认框正文那行「共 N 项未保存」。
-    ///
-    /// 由 [`AppState::prime_exit_confirm`] 在弹框那一刻填好。对话框在 `shell::build`
-    /// 时就建好了，而清单要到关窗才知道，故只能走 Signal。
-    pub unsaved_note: Signal<String>,
-    /// 关窗确认框角标的悬停文案（逐行列出未保存项，超量截断）。
-    pub unsaved_tip: Signal<String>,
+    autosave: Autosave,
+    pub autosave_error: Signal<Option<String>>,
     /// 启动时是否成功连接到输入法服务（core）。未连接则设置只读、保存会失败。
     pub connected: bool,
     /// [`Self::apply_loaded`] 是否已跑过一轮。区别于 `connected`：mock / 离线预览下
@@ -1062,11 +1064,10 @@ pub(crate) fn register_system_registrations(fields: &Rc<FieldRegistry>) {
 
     fields.side.borrow_mut().push(SideCommitter {
         label: "Valve 游戏兼容模式",
-        is_dirty: Box::new(move || {
-            let Some(now) = dirty_read() else {
-                return false;
-            };
+        pending: Box::new(move || {
+            let now = dirty_read()?;
             system_needs_apply(dirty_base().as_ref(), &now)
+                .then(|| serde_json::json!([now.enabled, now.name]))
         }),
         commit: Box::new(move || {
             let Some(now) = commit_read() else {
@@ -1097,7 +1098,7 @@ pub(crate) fn register_schema_registrations(
         let commit_mgr = schema_mgr.clone();
         fields.side.borrow_mut().push(SideCommitter {
             label: "方案配置与词库开关",
-            is_dirty: Box::new(move || dirty_mgr.has_pending_edits()),
+            pending: Box::new(move || dirty_mgr.pending_save_value()),
             commit: Box::new(move || commit_mgr.commit_pending_edits()),
         });
     }
@@ -1294,9 +1295,8 @@ impl AppState {
             memory: crate::pages::memory::MemoryDiag::new(),
             compat_mgr: crate::pages::compat::CompatState::new(),
             reload_confirm: signal(false),
-            exit_confirm: signal(false),
-            unsaved_note: signal(String::new()),
-            unsaved_tip: signal(String::new()),
+            autosave: Autosave::default(),
+            autosave_error: signal(None),
             reset_confirm: signal(false),
             connected: false,
             data_loaded: false,
@@ -1957,7 +1957,12 @@ impl AppState {
                 self.theme_gallery.invalidate();
                 if let Some(id) = ev.data.get("id").and_then(|v| v.as_str()) {
                     tracing::debug!("core 活跃方案变更 → {}", id);
-                    self.schema_mgr.set_active_from_core(id);
+                    if !self.schema_mgr.is_active(id) {
+                        self.schema_mgr.set_active_from_core(id);
+                        if let Some(view) = self.autosave.displayed.get_mut().as_mut() {
+                            view.set_path("schema.active", Value::String(id.to_owned()));
+                        }
+                    }
                 }
                 // 刻意不提示：切方案多半是用户自己按的快捷键或点的托盘，他知道刚发生了
                 // 什么；而这是高频操作，逐次弹提示只会让人学会忽略 toast。
@@ -1981,8 +1986,8 @@ impl AppState {
                 if crate::theme_gallery::affects_previews(key) {
                     self.theme_gallery.invalidate();
                 }
-                let hit = self.apply_external_config_change(key, value.clone());
                 if differs {
+                    let hit = self.apply_external_config_change(key, value.clone());
                     self.notify_external_change(ctx, key, hit);
                 }
             }
@@ -2072,6 +2077,17 @@ impl AppState {
         drop(loaders);
         // 方案管理自持的内存态没有 loader，单独跟上（否则下次保存整份写回旧值）。
         self.schema_mgr.sync_external_change(key, &cfg);
+        if self.autosave.displayed.get_mut().is_some() {
+            let normalized = self.draft_config();
+            if let Some(value) = normalized.get_path(key) {
+                self.autosave
+                    .displayed
+                    .get_mut()
+                    .as_mut()
+                    .unwrap()
+                    .set_path(key, value.clone());
+            }
+        }
         tracing::debug!("外部配置变更 {} → 回填 {} 个控件", key, hit);
         hit
     }
@@ -2669,7 +2685,7 @@ impl AppState {
                 if !was_selected {
                     self.notify_ok("已删除主题");
                 } else if self.select_default_theme() {
-                    self.notify_ok("已删除主题，已改选默认主题，应用后生效");
+                    self.notify_ok("已删除主题，已改选默认主题");
                 } else {
                     // 默认主题也不在列表里：别让索引原地不动、悄悄落到相邻主题上——
                     // 选中项留在被删的 id（画廊上方随之出「未安装」提示），由用户另选。
@@ -3005,79 +3021,156 @@ impl AppState {
             self.conn.set(ConnState::Down);
             self.conn_failed.set(true);
         }
+        self.rebase_loaded_settings();
         tracing::info!("apply_loaded 完成, connected={}", data.connected);
     }
 
-    /// 未保存项清单：非 config 落点的名字 + config.toml 的差异**键名**。
-    ///
-    /// 判脏与展示共用这一处：[`Self::is_dirty`]、[`Self::has_unsaved_changes`] 都是它
-    /// 的"非空"判定，关窗确认框列出的也是它。三者各算各的，迟早分家成「说有未保存却
-    /// 一条列不出」或反过来——而这个提示本就是用户报障的高发区。
-    ///
-    /// 只给**键名**不给值：值里可能有用户的短语/热键等私人内容（见日志隐私约定），
-    /// 且排查要回答的是"哪个键在动"，值帮不上忙。
-    ///
-    /// 键名原样给出、**不翻译成界面名称**。查不到对应控件的键恰恰是最可疑的那一类
-    /// （writer 写了一个界面上没有的键），翻译会把这条线索吃掉。
-    ///
-    /// 不带 `data_loaded` 门 —— 那是关窗守卫专有的，见 [`Self::has_unsaved_changes`]。
-    fn unsaved_items_unguarded(&self) -> Vec<String> {
-        // config.toml 之外的落点排在前面：它们是整块的（方案配置、词库开关），
-        // 比单个配置键更能说明"我改过什么"。
-        let mut out = self.fields.side_dirty_labels();
-        let mut probe = self.current_config.clone();
-        for w in self.fields.writers.borrow().iter() {
-            w(&mut probe);
+    /// Hydration and shell reconstruction set widget values programmatically. Snapshot their
+    /// rendered values rather than treating those writes as user edits.
+    pub fn seed_autosave_baseline(&mut self) {
+        if self.data_loaded && self.autosave.field_generation != Some(self.fields.generation.get())
+        {
+            self.rebase_loaded_settings();
         }
-        let items = diff_config(&self.base_config, &probe, &self.capabilities.map_keys());
-        out.extend(items.into_iter().map(|i| i.key));
-        if !out.is_empty() {
-            // ★ warn 而非 debug：用户报「什么都没动就提示有未保存的更改」时，**默认**
-            // 日志里就得有这一行。要他专门开 debug 级再复现一遍，排查链条太长——这个
-            // 问题已经反复过很多次了。
-            //
-            // `untouched_settings_produce_no_diff` 只覆盖 mock 数据（出厂默认配置），
-            // 而误报一律出在**升级上来的存量 config.toml**上：老顺序、历史遗留值、
-            // core 已删的键。那个交集离线测试够不着，现场自述是唯一入口
-            // （2026-08-27 现场就是这样）。
-            tracing::warn!("未保存项({}): {:?}", out.len(), out);
-        }
-        out
     }
 
-    /// 未保存项清单（关窗确认框展示用），数据未就位时为空。
-    ///
-    /// 与 [`Self::has_unsaved_changes`] 同一个门：两者在关窗路径上一前一后，判据不同
-    /// 就会出现「拦下了，却说没有未保存项」。
-    pub fn unsaved_items(&self) -> Vec<String> {
-        // 数据没到位时一律视为无改动：此刻 `base_config` 还是空的，而 `AppState::empty`
-        // 就带着四个内建 writer（方案 available、全局热键收集等），它们照样会写出
-        // `keys` / `schema` 两个键——拿这个 diff 去拦关窗纯属误报，用户根本还没机会改
-        // 任何东西。core 未响应时开了设置页又想关掉，正是最不该被拦的时候。
+    fn rebase_loaded_settings(&mut self) {
+        self.autosave = Autosave {
+            displayed: RefCell::new(Some(self.draft_config())),
+            field_generation: Some(self.fields.generation.get()),
+            initial_side: self.side_values(),
+            revision: Some(windui::signal::write_revision()),
+            ..Autosave::default()
+        };
+        self.clear_autosave_error();
+    }
+
+    /// A switcher can create appearance controls after the shell's initial snapshot.
+    /// Seed just these new writers; other pages may already contain user edits.
+    pub(crate) fn seed_new_appearance_writers(&self) {
+        let mut baseline = self.autosave.displayed.borrow_mut();
+        let batch = self.fields.page_batch.borrow();
+        if let (Some(cfg), Some(batch)) = (baseline.as_mut(), batch.as_ref()) {
+            let writers = self.fields.writers.borrow();
+            for write in &writers[batch.writers.0..batch.writers.1] {
+                write(cfg);
+            }
+        }
+    }
+
+    fn side_values(&self) -> Vec<(usize, Value)> {
+        self.fields
+            .side
+            .borrow()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| (s.pending)().map(|value| (i, value)))
+            .collect()
+    }
+
+    fn pending_save(&self) -> PendingSave {
+        let view = self.autosave.displayed.borrow();
+        let base = view.as_ref().unwrap_or(&self.base_config);
+        let items = diff_config(base, &self.draft_config(), &self.capabilities.map_keys());
+        let side = self
+            .side_values()
+            .into_iter()
+            .filter(|item| !self.autosave.initial_side.contains(item))
+            .collect();
+        PendingSave { items, side }
+    }
+
+    fn edits_to_save(&mut self) -> PendingSave {
+        if !self.autosave.initial_side.is_empty() {
+            let current = self.side_values();
+            self.autosave
+                .initial_side
+                .retain(|item| current.contains(item));
+        }
+        self.pending_save()
+    }
+
+    fn clear_autosave_error(&self) {
+        if self.autosave_error.get().is_some() {
+            self.autosave_error.set(None);
+        }
+    }
+
+    pub fn autosave_tick(&mut self) {
+        if !self.data_loaded
+            || self.main_window_closed.get()
+            || self.schema_mgr.settings_visible.get()
+        {
+            return;
+        }
+        self.schema_mgr.stage_dismissed_settings();
+        let rev = windui::signal::write_revision();
+        if self.autosave.revision == Some(rev) && self.autosave.settling.is_none() {
+            return;
+        }
+        self.autosave.revision = Some(rev);
+        let changes = self.edits_to_save();
+        if changes.is_empty() {
+            self.autosave.settling = None;
+            self.autosave.failed = None;
+            self.clear_autosave_error();
+        } else if self.autosave.failed.as_ref() == Some(&changes) {
+            self.autosave.settling = None;
+        } else if self.autosave.settling.as_ref() == Some(&changes) {
+            self.write_autosave(changes);
+        } else {
+            self.autosave.settling = Some(changes);
+        }
+    }
+
+    /// Closing or starting the wizard flushes the last event even before a timer has fired.
+    pub fn flush_autosave(&mut self) -> bool {
         if !self.data_loaded {
-            return Vec::new();
+            return true;
         }
-        self.unsaved_items_unguarded()
+        if self.schema_mgr.settings_visible.get() {
+            self.schema_mgr.stage_settings_edits();
+        } else {
+            self.schema_mgr.stage_dismissed_settings();
+        }
+        let pending = self.edits_to_save();
+        self.write_autosave(pending)
     }
 
-    /// 填好关窗确认框的「未保存项」文案并置位可见。
-    ///
-    /// 与守卫合一（守卫把算好的清单传进来），清单只算一次：分开写的话，守卫先
-    /// `has_unsaved_changes()`、对话框再 `unsaved_items()`，同一份 diff 要跑两遍
-    /// 全部 writer，而这条路上还夹着 `SideCommitter` 那类有代价的判据。
-    pub fn prime_exit_confirm(&self, items: &[String]) {
-        self.unsaved_note
-            .set(format!("共 {} 项未保存", items.len()));
-        self.unsaved_tip.set(unsaved_tip_text(items));
-        self.exit_confirm.set(true);
+    fn write_autosave(&mut self, pending: PendingSave) -> bool {
+        self.autosave.settling = None;
+        match self.persist_changes(&pending) {
+            Ok(()) => {
+                self.autosave.failed = None;
+                self.clear_autosave_error();
+                true
+            }
+            Err(message) => {
+                self.autosave.failed = Some(self.pending_save());
+                self.autosave_error.set(Some(message.clone()));
+                self.notify_err(message);
+                false
+            }
+        }
     }
 
-    /// 是否存在未保存改动：跑写回器到 current 的副本上，与 base 比对有无差异。
-    ///
-    /// config.toml 之外的落点也算——否则改完方案配置点「恢复本页」，确认框不会
-    /// 提醒用户即将丢弃它们。
     pub fn is_dirty(&self) -> bool {
-        !self.unsaved_items_unguarded().is_empty()
+        !self.pending_save().is_empty()
+    }
+
+    #[cfg(test)]
+    pub fn unsaved_items(&self) -> Vec<String> {
+        if !self.data_loaded {
+            return vec![];
+        }
+        let changes = self.pending_save();
+        let handlers = self.fields.side.borrow();
+        changes
+            .side
+            .into_iter()
+            .map(|(i, _)| handlers[i].label.to_string())
+            .chain(changes.items.into_iter().map(|it| it.key))
+            .collect()
     }
 
     /// 草稿配置：`current_config` 的副本跑一遍全部写回器，即界面上此刻（含未保存改动）的配置。
@@ -3187,93 +3280,78 @@ impl AppState {
             if n == 0 {
                 "本页无可恢复的默认项".to_string()
             } else {
-                format!("已恢复本页 {n} 项为默认值（未保存）")
+                format!("已恢复本页 {n} 项为默认值")
             },
         )));
     }
 
     /// 从服务端重新加载配置：丢弃未保存改动，重新读取并灌回所有 Signal。
     pub fn reload(&mut self) {
-        let fresh = rpc::call_core("config.get", &serde_json::json!({}))
-            .unwrap_or(Value::Object(serde_json::Map::new()));
+        let fresh = match rpc::call_core("config.get", &serde_json::json!({})) {
+            Ok(v) => v,
+            Err(e) => {
+                self.notify_err(format!("重新加载失败：{e}"));
+                return;
+            }
+        };
         let mut cfg = Config::from_value(fresh);
         // 与 `apply_loaded` 同一道归一：重新加载后基线同样要与 writer 同构，
         // 否则「重新加载」反而把设置页留在永久判脏的状态。
         crate::manifest::canonicalize_punct_baseline(&mut cfg);
-        // 服务端这份配置里的取值未必都在当前选项列表里（主题在别处被删、配置被别的工具
-        // 改过），补项同样要早于 loaders。
-        self.ensure_unlisted_option_values(&cfg);
-        {
-            let loaders = self.fields.loaders.borrow();
-            for l in loaders.values() {
-                l(&cfg);
-            }
-        }
-        // 方案启用排序也需要从配置恢复，否则未保存的列表变更不会撤销。
-        self.schema_mgr.apply_config(&cfg);
-        // 待提交的方案 override 同理——「重新加载」是明确的「丢弃未保存改动」，
-        // 留着它们的话，下次点保存会把用户以为已丢弃的改动写下去。
-        self.schema_mgr.clear_pending_edits();
+        self.restore_controls(&cfg);
         self.base_config = cfg.clone();
         self.current_config = cfg;
+        self.rebase_loaded_settings();
         self.feedback
             .set(Some((ToastKind::Info, "已从服务端重新加载".to_string())));
     }
 
-    /// 跑所有写回器把 Signal 值写回 current_config，再 diff 保存。
-    /// 返回是否「可视为成功」（无错误）：无变更与保存成功均为 true，仅 RPC 报错为 false。
-    /// 供「保存&退出」据此决定是否真的退出。
-    /// 应用内主动关窗：**绕过**未保存守卫直接关。
-    ///
-    /// 守卫（`on_close_request`）要拦的是"点 ✕ / Alt+F4"这类可能出于无意的关闭；
-    /// 应用内按钮（保存并退出、立即安装、连接失败后退出、确认框里的两个出口）都是明确
-    /// 的意思表示，再问一遍只会挡路。
-    ///
-    /// 「立即安装」那处更是**不能**拦：安装器要等本进程退出才能替换文件，而守卫此时弹一个
-    /// 确认框，就成了"安装器等窗口关、窗口等用户回答"——用户看到的是装到一半卡住。
-    ///
-    /// windui 0.12 的 `force_close` 正是为此而设，故本仓不再自备"已确认"标志位。
-    ///
-    /// 顺带记下「主窗已关闭」（见 [`Self::mark_main_window_closed`]）：本方法是应用内
-    /// 所有主动关窗的统一入口，置位收在这里就不必让每个调用点各记一次。
+    /// After an explicit discard, restore what was last saved without contacting the service.
+    pub fn discard_unsaved_settings(&mut self) {
+        let shown = self
+            .autosave
+            .displayed
+            .get_mut()
+            .clone()
+            .unwrap_or_else(|| self.base_config.clone());
+        self.restore_controls(&shown);
+        self.current_config = self.base_config.clone();
+        self.rebase_loaded_settings();
+    }
+
+    fn restore_controls(&self, cfg: &Config) {
+        // 服务端这份配置里的取值未必都在当前选项列表里（主题在别处被删、配置被别的工具
+        // 改过），补项同样要早于 loaders。
+        self.ensure_unlisted_option_values(cfg);
+        {
+            let loaders = self.fields.loaders.borrow();
+            for l in loaders.values() {
+                l(cfg);
+            }
+        }
+        // 方案启用排序也需要从配置恢复，否则未保存的列表变更不会撤销。
+        self.schema_mgr.apply_config(cfg);
+        // 待提交的方案 override 同理——「重新加载」是明确的「丢弃未保存改动」，
+        // 留着它们的话，下次点保存会把用户以为已丢弃的改动写下去。
+        self.schema_mgr.discard_settings_draft();
+    }
+
+    /// Close the settings window after its caller has flushed the pending changes.
     pub fn close_window(&self, ctx: &mut EventCtx) {
         self.mark_main_window_closed();
         ctx.force_close();
     }
 
-    /// 记下主窗已关闭。词库窗**不受影响**，照常存活。
-    ///
-    /// ⚠️ 主窗关闭**不止一条路**，漏掉哪条，那条路之后二次实例就会误判成「主窗还在」，
-    /// 于是只去 activate 一个已经不存在的窗口 —— 用户看到的是点了设置没反应。
-    /// 已知两类，各自的置位点：
-    /// 1. 应用内的主动关窗（底栏与确认框的「保存并退出」、「直接退出」、连接失败后的
-    ///    「退出」、升级的「立即安装」）—— 全部经 [`Self::close_window`]，置位收在那里；
-    /// 2. 系统 ✕ / Alt+F4 —— 走 `App::on_close_request`，在**放行的那一刻**由 `main` 调
-    ///    本方法。不能在拦下时就置位：那次关闭被取消了，主窗还在。
-    ///
-    /// 第 1 类刻意绕过 `on_close_request`（见该处说明），所以把置位挂在守卫里覆盖不到它们。
-    ///
-    /// 顺带停掉诊断信息对话框的自动刷新：词库 / 兼容窗当首窗时，诊断定时器挂在那个窗口上，
-    /// 主窗关了它还在跑（见 `pages::memory`）。
+    /// Mark the settings window closed without disturbing other open windows.
     pub fn mark_main_window_closed(&self) {
         self.main_window_closed.set(true);
         self.memory.visible.set(false);
         self.memory.auto.set(false);
     }
 
-    /// 是否有未保存的改动（关窗确认用）。
-    ///
-    /// 两个来源与 [`Self::save`] 一一对应：config.toml 之外的落点（方案 override、词库
-    /// 开关），以及 config.toml 的增量 diff。
-    ///
-    /// diff 跑在**副本**上：`save` 是把 writers 直接写进 `self.current_config` 的——那是
-    /// 提交路径的一部分。只为问一句"要不要保存"就改掉当前配置，会让紧接着的"直接退出"
-    /// 变成已经改了一半；`live_conflicts` 出于同样的理由也用副本。
-    ///
-    /// 具体是哪些项由 [`Self::unsaved_items`] 给出（关窗确认框列的就是它）。本方法
-    /// 即它的"非空"判定，两者不会分家。
+    /// True only if loaded settings have edits which have not yet been persisted.
     pub fn has_unsaved_changes(&self) -> bool {
-        !self.unsaved_items().is_empty()
+        self.data_loaded && self.is_dirty()
     }
 
     /// 「发现新版本」对话框里那一行体积说明。
@@ -3295,106 +3373,67 @@ impl AppState {
         diff_config(&self.base_config, &probe, &self.capabilities.map_keys())
     }
 
+    #[cfg(test)]
     pub fn save(&mut self) -> bool {
-        let reg = self.fields.clone();
-        // ── 先提交 config.toml 之外的落点（方案 override、词库开关）──
-        // 放在最前：它失败时 config.toml 还没动，用户重试不会重复写一遍配置。
-        // 反过来先写 config 再失败，两个存储就分叉了。
-        let side_changed = reg.side_dirty();
-        if let Err(e) = reg.commit_side() {
-            self.feedback.set(Some((ToastKind::Error, e)));
-            return false;
+        self.flush_autosave()
+    }
+
+    fn persist_changes(&mut self, changes: &PendingSave) -> Result<(), String> {
+        if changes.is_empty() {
+            return Ok(());
         }
-        // 方案设置对话框保存落的是 `schema_overrides/<id>.toml`，走的正是上面这个
-        // SideCommitter——覆盖汇总只在这一刻才可能变，重拉一次让全局页角标跟上。
-        if side_changed {
+        let reg = self.fields.clone();
+        {
+            let side = reg.side.borrow();
+            for (i, _) in &changes.side {
+                (side[*i].commit)().map_err(|err| format!("{}保存失败：{err}", side[*i].label))?;
+                self.autosave.initial_side.retain(|(index, _)| index != i);
+            }
+        }
+        if !changes.side.is_empty() {
             self.refresh_override_summary();
         }
-
-        {
-            let writers = reg.writers.borrow();
-            for w in writers.iter() {
-                w(&mut self.current_config);
-            }
+        if changes.items.is_empty() {
+            return Ok(());
         }
-        // 触发键冲突不再在此追加进保存 toast——改由输入页常驻警告条实时呈现（见 conflict_watcher）。
-        let items = diff_config(
-            &self.base_config,
-            &self.current_config,
-            &self.capabilities.map_keys(),
-        );
-        // 诊断：「没有变更」的最终判据就在这里。配合上面两条日志可定位到具体环节：
-        // 内存表变了、writer 也写了，diff 却为空 ⇒ base_config 已经含有新值
-        // （基线在保存前被刷新过），那是另一类 bug。
-        tracing::debug!(
-            "save: diff {} 项 {:?} (side_changed={side_changed})",
-            items.len(),
-            items.iter().map(|it| it.key.as_str()).collect::<Vec<_>>()
-        );
-        if items.is_empty() {
-            // side 有改动时不能说「没有变更」——方案配置刚刚才落盘。
-            self.feedback.set(Some(if side_changed {
-                (ToastKind::Success, "已保存方案配置".to_string())
-            } else {
-                (ToastKind::Info, "没有变更".to_string())
-            }));
-            return true;
-        }
-        let items_json: Vec<Value> = items
-            .iter()
-            .map(|it| serde_json::json!({ "key": it.key, "value": it.value }))
+        let result = rpc::call_core(
+            "config.setItems",
+            &serde_json::json!({"items": changes.items}),
+        )
+        .map_err(|e| format!("保存失败：{e}"))?;
+        let skipped: Vec<&str> = result["skipped"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry["key"].as_str())
             .collect();
-        let params = serde_json::json!({ "items": items_json });
-        match rpc::call_core("config.setItems", &params) {
-            Ok(resp) => {
-                // 服务端会静默跳过无效项（未登记键/类型/枚举错），不能一律当成功——
-                // 否则用户以为已保存、实际配置丢失且无从察觉。
-                let skipped: Vec<String> = resp
-                    .get("skipped")
-                    .and_then(|v| v.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|it| it.get("key").and_then(|k| k.as_str()))
-                            .map(str::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                if skipped.is_empty() {
-                    self.base_config = self.current_config.clone();
-                    if touches_theme(&items) {
-                        self.refresh_theme_follow();
-                    }
-                    // 启用/停用方案落在 config.toml 的 `schema.available`，不走 side 落点，
-                    // 上面 `side_changed` 那一枪不会打；而覆盖汇总只列已启用方案，
-                    // 不重拉的话新启用方案的覆盖角标要等重开设置才出现。
-                    if touches_schema_available(&items) {
-                        self.refresh_override_summary();
-                    }
-                    self.feedback.set(Some((
-                        ToastKind::Success,
-                        format!("已保存 {} 项变更", items_json.len()),
-                    )));
-                    true
-                } else {
-                    // 不更新 base_config：被拒项保持「未保存」状态，重试仍会带上。
-                    self.feedback.set(Some((
-                        ToastKind::Error,
-                        format!(
-                            "已保存 {} 项，{} 项被服务端拒绝: {}",
-                            items_json.len() - skipped.len(),
-                            skipped.len(),
-                            skipped.join(", ")
-                        ),
-                    )));
-                    false
-                }
-            }
-            Err(e) => {
-                self.feedback
-                    .set(Some((ToastKind::Error, format!("保存失败: {e}"))));
-                false
-            }
+        let applied = self.acknowledge_items(&changes.items, &skipped);
+        if touches_theme(&applied) {
+            self.refresh_theme_follow();
         }
+        if touches_schema_available(&applied) {
+            self.refresh_override_summary();
+        }
+        if !skipped.is_empty() {
+            return Err(format!("部分设置未保存：{}", skipped.join("、")));
+        }
+        Ok(())
+    }
+    /// Advance only keys acknowledged by the service. A partial reply leaves just rejected edits pending.
+    fn acknowledge_items(&mut self, items: &[ConfigItem], skipped: &[&str]) -> Vec<ConfigItem> {
+        let mut applied = Vec::new();
+        for item in items {
+            if skipped.contains(&item.key.as_str()) {
+                continue;
+            }
+            self.base_config.set_path(&item.key, item.value.clone());
+            self.current_config.set_path(&item.key, item.value.clone());
+            if let Some(baseline) = self.autosave.displayed.get_mut().as_mut() {
+                baseline.set_path(&item.key, item.value.clone());
+            }
+            applied.push(item.clone());
+        }
+        applied
     }
 }
 
@@ -3810,19 +3849,15 @@ fn load_theme_follow() -> Option<crate::theme_follow::ThemeFollow> {
 /// RPC 失败或回包不是对象（管道未连接/老 core）同样视为「拿不到」，退回空表——
 /// 角标退化成静态说明，不是报错也不是显示假数据。
 fn load_override_summary() -> HashMap<String, Vec<String>> {
-    let Ok(v) = rpc::call_core("schema.overrideSummary", &serde_json::json!({})) else {
-        return HashMap::new();
-    };
-    parse_override_summary(&v)
+    parse_override_summary(rpc::call_core(
+        "schema.overrideSummary",
+        &serde_json::json!({}),
+    ))
 }
 
-/// [`load_override_summary`] 的纯解析部分：抽出来是为了不靠 RPC/mock 就能测「回包不是
-/// 对象」（`null`、老 core 给了别的形状）与「值不是字符串数组」这两条退化路径——
-/// 拉不到（`Err`）时 [`load_override_summary`] 也是喂一个等价形状（`Value::Null`）
-/// 进来，两条路共用同一份「非对象 ⇒ 空表」逻辑，不会出现「拉不到」与「拉到空」两种
-/// 退化各写一遍、迟早漂移的情况。
-fn parse_override_summary(v: &Value) -> HashMap<String, Vec<String>> {
-    let Some(obj) = v.as_object() else {
+/// A missing service or a reply from an older service without this object yields no overrides.
+fn parse_override_summary(reply: Result<Value, String>) -> HashMap<String, Vec<String>> {
+    let Ok(Value::Object(obj)) = reply else {
         return HashMap::new();
     };
     obj.iter()
@@ -4629,7 +4664,7 @@ mod tests {
         (
             SideCommitter {
                 label: "测试落点",
-                is_dirty: Box::new(move || dirty),
+                pending: Box::new(move || dirty.then_some(Value::Bool(true))),
                 commit: Box::new(move || {
                     c.set(c.get() + 1);
                     result.clone()
@@ -4673,6 +4708,143 @@ mod tests {
         reg.side.borrow_mut().push(b);
         assert!(reg.commit_side().is_ok());
         assert_eq!((na.get(), nb.get()), (1, 1));
+    }
+
+    #[test]
+    fn autosave_uses_the_loaded_controls_and_flushes_the_last_edit() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("WIND_RPC_MOCK", "1") };
+        let mut st = AppState::empty();
+        st.data_loaded = true;
+        // An unknown value in an old profile falls back in its select control.
+        st.current_config = Config::from_value(serde_json::json!({
+            "input": {"legacy": "unknown", "filter_mode": "smart"}
+        }));
+        st.base_config = st.current_config.clone();
+        let selected = signal("smart".to_owned());
+        st.fields.writers.borrow_mut().push(Box::new(move |cfg| {
+            cfg.set_path("input.legacy", Value::from("fallback"));
+            cfg.set_path("input.filter_mode", Value::from(selected.get()));
+        }));
+        st.seed_autosave_baseline();
+        crate::rpc::take_mock_calls();
+        assert!(st.flush_autosave());
+        assert!(crate::rpc::take_mock_calls().is_empty());
+
+        selected.set("gb18030".into());
+        st.autosave_tick();
+        assert!(crate::rpc::take_mock_calls().is_empty());
+        st.seed_autosave_baseline();
+        st.autosave_tick();
+        let writes = crate::rpc::take_mock_calls();
+        assert_eq!(
+            writes,
+            vec![(
+                "config.setItems".to_string(),
+                serde_json::json!({
+                    "items":[{"key":"input.filter_mode","value":"gb18030"}]
+                })
+            )]
+        );
+        assert_eq!(st.base_config.get_str("input.legacy"), Some("unknown"));
+
+        selected.set("smart".into());
+        st.apply_external_config_change("debug.perf_sampling", Value::Bool(true));
+        assert!(st.flush_autosave());
+        let writes = crate::rpc::take_mock_calls();
+        assert_eq!(
+            writes,
+            vec![(
+                "config.setItems".to_string(),
+                serde_json::json!({
+                    "items":[{"key":"input.filter_mode","value":"smart"}]
+                })
+            )]
+        );
+        assert!(!st.has_unsaved_changes());
+        unsafe { std::env::remove_var("WIND_RPC_MOCK") };
+    }
+
+    #[test]
+    fn autosave_partial_ack_leaves_only_rejected_fields_for_retry() {
+        let mut st = AppState::empty();
+        st.data_loaded = true;
+        st.current_config = Config::from_value(serde_json::json!({
+            "keys":{"a":false,"b":false}
+        }));
+        st.base_config = st.current_config.clone();
+        st.seed_autosave_baseline();
+        st.current_config.set_path("keys.a", Value::Bool(true));
+        st.current_config.set_path("keys.b", Value::Bool(true));
+        let pending = st.pending_save();
+        let acknowledged = st.acknowledge_items(&pending.items, &["keys.b"]);
+        assert_eq!(acknowledged.len(), 1);
+        assert_eq!(acknowledged[0].key, "keys.a");
+        assert_eq!(st.base_config.get_bool("keys.b"), Some(false));
+        let remaining = st.pending_save();
+        assert_eq!(remaining.items.len(), 1);
+        assert_eq!(remaining.items[0].key, "keys.b");
+    }
+
+    #[test]
+    fn autosave_explicit_discard_drops_pending_controls_and_the_error() {
+        let mut st = AppState::empty();
+        st.data_loaded = true;
+        let value = signal(false);
+        st.fields.writers.borrow_mut().push(Box::new(move |cfg| {
+            cfg.set_path("x", Value::Bool(value.get()));
+        }));
+        st.fields.loaders.borrow_mut().insert(
+            "x".into(),
+            Box::new(move |cfg| {
+                value.set(cfg.get_bool("x").unwrap_or(false));
+            }),
+        );
+        st.seed_autosave_baseline();
+        value.set(true);
+        st.autosave_error.set(Some("服务离线".into()));
+        st.discard_unsaved_settings();
+        assert!(!value.get());
+        assert!(!st.has_unsaved_changes());
+        assert!(st.autosave_error.get().is_none());
+    }
+
+    #[test]
+    fn autosave_failed_side_write_is_not_repeated_until_edit_or_explicit_retry() {
+        let mut st = AppState::empty();
+        st.data_loaded = true;
+        let setting = signal(0);
+        let calls = Rc::new(Cell::new(0));
+        let count = calls.clone();
+        st.fields.side.borrow_mut().push(SideCommitter {
+            label: "测试开关",
+            pending: Box::new(move || (setting.get() != 0).then(|| Value::from(setting.get()))),
+            commit: Box::new(move || {
+                count.set(count.get() + 1);
+                Err("不可写".into())
+            }),
+        });
+        st.seed_autosave_baseline();
+        setting.set(1);
+        st.autosave_tick();
+        st.autosave_tick();
+        assert_eq!(calls.get(), 1);
+        assert!(st.autosave_error.get().is_some());
+        let unrelated = signal(0);
+        for n in 1..5 {
+            unrelated.set(n);
+            st.autosave_tick();
+        }
+        assert_eq!(calls.get(), 1);
+        assert!(!st.flush_autosave());
+        assert_eq!(calls.get(), 2);
+        setting.set(2);
+        st.autosave_tick();
+        st.autosave_tick();
+        assert_eq!(calls.get(), 3);
+        setting.set(0);
+        st.autosave_tick();
+        assert!(st.autosave_error.get().is_none());
     }
 
     /// `save()` 提交了 side 落点（方案设置对话框保存那一类）之后要重拉一次
@@ -4851,9 +5023,9 @@ mod tests {
     /// 时也是喂一个等价形状（`Value::Null`）进来，这条断言同时覆盖了那条退化路径。
     #[test]
     fn parse_override_summary_treats_non_object_reply_as_empty() {
-        assert!(parse_override_summary(&Value::Null).is_empty());
-        assert!(parse_override_summary(&serde_json::json!([1, 2, 3])).is_empty());
-        assert!(parse_override_summary(&serde_json::json!("not an object")).is_empty());
+        assert!(parse_override_summary(Ok(Value::Null)).is_empty());
+        assert!(parse_override_summary(Ok(serde_json::json!([1, 2, 3]))).is_empty());
+        assert!(parse_override_summary(Ok(serde_json::json!("not an object"))).is_empty());
     }
 
     /// 正常形状：值不是字符串数组的键退回空列表（而不是整表报废），数组里混进非字符串
@@ -4864,7 +5036,7 @@ mod tests {
             "ui.candidate.layout": ["wubi86", "pinyin", 1],
             "input.some.key": "not-an-array",
         });
-        let got = parse_override_summary(&v);
+        let got = parse_override_summary(Ok(v));
         assert_eq!(
             got.get("ui.candidate.layout"),
             Some(&vec!["wubi86".to_string(), "pinyin".to_string()]),
@@ -4877,15 +5049,9 @@ mod tests {
         );
     }
 
-    /// 拉不到（管道未连/老 core）时退回空表——不 mock、真去连一个不存在的管道，
-    /// 直接验证 [`load_override_summary`] 的 `Err` 分支，同 `non_mock_disconnect_sets_conn_failed`
-    /// 的连接失败路径。
     #[test]
     fn load_override_summary_returns_empty_map_when_core_unreachable() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        unsafe { std::env::remove_var("WIND_RPC_MOCK") };
-        let got = load_override_summary();
-        assert!(got.is_empty(), "core 连不上时应退回空表：{got:?}");
+        assert!(parse_override_summary(Err("服务未连接".into())).is_empty());
     }
 
     /// 只列**脏的**落点。干净的一并列出来的话，用户会以为自己改了从没碰过的东西。
@@ -4894,59 +5060,17 @@ mod tests {
         let reg = FieldRegistry::default();
         reg.side.borrow_mut().push(SideCommitter {
             label: "没动过的",
-            is_dirty: Box::new(|| false),
+            pending: Box::new(|| None),
             commit: Box::new(|| Ok(())),
         });
         reg.side.borrow_mut().push(SideCommitter {
             label: "改过的",
-            is_dirty: Box::new(|| true),
+            pending: Box::new(|| Some(Value::Bool(true))),
             commit: Box::new(|| Ok(())),
         });
         assert_eq!(reg.side_dirty_labels(), vec!["改过的".to_string()]);
     }
 
-    /// 悬停清单的两条边界：恰好 `TIP_MAX_ITEMS` 项不截断，多一项就截断。
-    ///
-    /// 差一错在这里不会报错，只会让用户看到「…… 等 8 项」而上面正好列了 8 条，
-    /// 或者反过来把最后一项悄悄吃掉。
-    #[test]
-    fn unsaved_tip_text_truncates_past_the_cap() {
-        let items = |n: usize| -> Vec<String> { (0..n).map(|i| format!("k{i}")).collect() };
-
-        let full = unsaved_tip_text(&items(TIP_MAX_ITEMS));
-        assert!(
-            !full.contains("等"),
-            "恰好 {TIP_MAX_ITEMS} 项不该截断：{full}"
-        );
-        assert_eq!(
-            full.lines().count(),
-            TIP_MAX_ITEMS + 1,
-            "每项一行 + 末尾那句「点击复制全部」"
-        );
-
-        let cut = unsaved_tip_text(&items(TIP_MAX_ITEMS + 1));
-        assert!(
-            cut.contains(&format!("等 {} 项", TIP_MAX_ITEMS + 1)),
-            "「等 N 项」报的是**总数**，不是没列出来的那几条：{cut}"
-        );
-        assert_eq!(
-            cut.lines().count(),
-            TIP_MAX_ITEMS + 2,
-            "前 N 行 + 省略行 + 提示行"
-        );
-    }
-
-    /// 一项都没有时不该拼出个只剩提示语的空壳——那种提示弹出来纯属噪音。
-    #[test]
-    fn unsaved_tip_text_of_nothing_is_just_the_hint() {
-        // 调用方（`prime_exit_confirm`）只在清单非空时才走到这里，故这里只钉住
-        // 「不会崩、也不会凭空造出条目」这一条。
-        let t = unsaved_tip_text(&[]);
-        assert!(!t.contains("等"), "空清单不该出现省略行：{t}");
-    }
-
-    /// 「有未保存改动」必须覆盖非 config 落点——否则用户改完方案配置点「恢复本页」，
-    /// 确认框不弹，改动被静默丢弃。
     #[test]
     fn side_dirty_is_any_not_all() {
         let reg = FieldRegistry::default();
@@ -4962,7 +5086,7 @@ mod tests {
 
     /// ⛔ 回归：「Valve 游戏兼容模式」拧了却什么都没发生。
     ///
-    /// 旧实现把基线惰性播种在 `is_dirty` 里，而 `AppState::save` 的顺序是
+    /// 旧实现把基线惰性播种在 `is_dirty` 里，而 `AppState::flush_autosave` 的顺序是
     /// `side_dirty()` 先、`commit_side()` 后——保存动作自己把**用户刚改的新值**当成了
     /// 基线，commit 随即判「没变」跳过落地。加上 `is_dirty` 在真实 UI 路径上只有关窗
     /// 确认与「恢复本页」两个调用点（正常的「拧开关 → 点应用」全程不经过），于是

@@ -1947,7 +1947,9 @@ fn build_local_select(state: &AppState, key: &str, item: &MItem) -> Element {
         .borrow_mut()
         .push(crate::state::SideCommitter {
             label: "日志级别",
-            is_dirty: Box::new(move || sig.get() != dirty_base.get()),
+            pending: Box::new(move || {
+                (sig.get() != dirty_base.get()).then(|| Value::from(sig.get()))
+            }),
             commit: Box::new(move || {
                 let now = sig.get();
                 if now == commit_base.get() {
@@ -9413,6 +9415,10 @@ mod scheme_card_vis_tests {
     fn merged_gate_buttons_do_not_keep_the_card_alive() {
         let st = crate::state::AppState::empty();
         st.user_hide_store.set_enabled(true).unwrap();
+        // The layout selection is a standalone Shuangpin row, independent of merged gate buttons.
+        st.user_hide_store
+            .add(&format!("feature:{SHUANGPIN_LAYOUT_FEATURE}"))
+            .unwrap();
         for (sec, fuzzy) in [("候选行为", false), ("双拼", false), ("上屏行为", false)] {
             for k in all_keys(&st, "schema", sec) {
                 let it = st.manifest.get(&k).unwrap();
