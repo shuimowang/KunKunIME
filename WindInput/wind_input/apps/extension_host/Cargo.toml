@@ -1,0 +1,25 @@
+[package]
+name = "wind_extension_host"
+build = false
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "wind_input_ext"
+path = "src/main.rs"
+
+[dependencies]
+wind-hook = { path = "../../crates/wind-hook" }
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

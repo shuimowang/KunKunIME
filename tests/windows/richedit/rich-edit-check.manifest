@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="KunKunIME.RichEditVerification" version="1.0.0.0"/>
+  <file name="kunkun_tsf.dll">
+    <comClass clsid="{D6101A78-E6DB-5FF2-AA53-D4018795C838}" threadingModel="Apartment"/>
+  </file>
+</assembly>

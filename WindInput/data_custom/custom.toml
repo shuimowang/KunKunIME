@@ -1,0 +1,18 @@
+[custom]
+id = "kunkun-pinyin"
+name = "困困拼音"
+version = "0.1.0"
+base_version = "0.1.0"
+
+[schemas]
+hide = ["wubi86", "wubi86_pinyin"]
+
+[settings]
+hide = [
+    "feature:non_pinyin_english_schemas",
+    "key:schema.codetable.*",
+    "key:schema.mix.*",
+    "key:schema.primary_codetable",
+    "key:input.temp_pinyin.*",
+    "key:local.comment_code_temp_pinyin",
+]

@@ -1,0 +1,152 @@
+# Rime dictionary
+# encoding: utf-8
+# 王者荣耀国服英雄资料与正式服活动名单，核对日期 2026-11-22。
+# 腾讯国服英雄资料表 https://pvp.qq.com/web201605/js/herolist.json
+# 11 月 17 日正式服活动公告 https://pvp.qq.com/web201706/newsdetail.shtml?tid=812644
+# 元流之子的五种职业共用一个名字。词表另收孙悟空命格“心魔六耳”。
+# 多字名权重为 200，单字名为 100，与基础词库中的同音词一起按词频排序。
+---
+name: 王者荣耀人名
+version: "2026.11.22"
+sort: by_weight
+...
+
+阿古朵	a gu duo	200
+阿轲	a ke	200
+艾琳	ai lin	200
+安奈特	an nai te	200
+安琪拉	an qi la	200
+敖隐	ao yin	200
+百里守约	bai li shou yue	200
+百里玄策	bai li xuan ce	200
+白起	bai qi	200
+扁鹊	bian que	200
+不知火舞	bu zhi huo wu	200
+蔡文姬	cai wen ji	200
+苍	cang	100
+曹操	cao cao	200
+嫦娥	chang e	200
+程咬金	cheng yao jin	200
+蚩奼	chi cha	200
+妲己	da ji	200
+达摩	da mo	200
+大乔	da qiao	200
+大司命	da si ming	200
+大禹	da yu	200
+刀锋宝贝	dao feng bao bei	200
+狄仁杰	di ren jie	200
+典韦	dian wei	200
+貂蝉	diao chan	200
+东皇太一	dong huang tai yi	200
+盾山	dun shan	200
+朵莉亚	duo li ya	200
+暃	fei	100
+绯泪	fei lei	200
+弗洛伦	fu luo lun	200
+干将莫邪	gan jiang mo ye	200
+高渐离	gao jian li	200
+戈娅	ge ya	200
+宫本武藏	gong ben wu zang	200
+公孙离	gong sun li	200
+关羽	guan yu	200
+鬼谷子	gui gu zi	200
+海诺	hai nuo	200
+海月	hai yue	200
+韩信	han xin	200
+后羿	hou yi	200
+花木兰	hua mu lan	200
+黄忠	huang zhong	200
+姬小满	ji xiao man	200
+伽罗	jia luo	200
+姜子牙	jiang zi ya	200
+金蝉	jin chan	200
+镜	jing	100
+橘右京	ju you jing	200
+卡芬妮	ka fen ni	200
+铠	kai	100
+空空儿	kong kong er	200
+狂铁	kuang tie	200
+莱西奥	lai xi ao	200
+澜	lan	100
+兰陵王	lan ling wang	200
+老夫子	lao fu zi	200
+李白	li bai	200
+莉莉安	li li an	200
+李信	li xin	200
+李元芳	li yuan fang	200
+廉颇	lian po	200
+刘邦	liu bang	200
+刘备	liu bei	200
+刘禅	liu shan	200
+鲁班大师	lu ban da shi	200
+鲁班七号	lu ban qi hao	200
+露娜	lu na	200
+卢雅那	lu ya na	200
+洛里昂	luo li ang	200
+吕布	lv bu	200
+马超	ma chao	200
+马可波罗	ma ke bo luo	200
+梦奇	meng qi	200
+蒙恬	meng tian	200
+蒙犽	meng ya	200
+米莱狄	mi lai di	200
+芈月	mi yue	200
+明世隐	ming shi yin	200
+墨子	mo zi	200
+娜可露露	na ke lu lu	200
+哪吒	ne zha	200
+牛魔	niu mo	200
+女娲	nv wa	200
+盘古	pan gu	200
+裴擒虎	pei qin hu	200
+皮皮	pi pi	200
+桑启	sang qi	200
+上官婉儿	shang guan wan er	200
+少司缘	shao si yuan	200
+沈梦溪	shen meng xi	200
+司空震	si kong zhen	200
+司马懿	si ma yi	200
+苏烈	su lie	200
+孙膑	sun bin	200
+孙策	sun ce	200
+孙权	sun quan	200
+孙尚香	sun shang xiang	200
+孙悟空	sun wu kong	200
+索文	suo wen	200
+太乙真人	tai yi zhen ren	200
+王维	wang wei	200
+王昭君	wang zhao jun	200
+武则天	wu ze tian	200
+西施	xi shi	200
+夏侯惇	xia hou dun	200
+夏洛特	xia luo te	200
+项羽	xiang yu	200
+小乔	xiao qiao	200
+心魔六耳	xin mo liu er	200
+星葵	xing kui	200
+雅典娜	ya dian na	200
+亚连	ya lian	200
+亚瑟	ya se	200
+杨戬	yang jian	200
+杨玉环	yang yu huan	200
+曜	yao	100
+瑶	yao	100
+弈星	yi xing	200
+影	ying	100
+嬴政	ying zheng	200
+虞姬	yu ji	200
+元歌	yuan ge	200
+元流之子	yuan liu zhi zi	200
+云缨	yun ying	200
+云中君	yun zhong jun	200
+张飞	zhang fei	200
+张良	zhang liang	200
+赵怀真	zhao huai zhen	200
+赵云	zhao yun	200
+甄姬	zhen ji	200
+钟馗	zhong kui	200
+钟无艳	zhong wu yan	200
+周瑜	zhou yu	200
+猪八戒	zhu ba jie	200
+诸葛亮	zhu ge liang	200
+庄周	zhuang zhou	200

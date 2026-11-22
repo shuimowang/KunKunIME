@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=困困输入法设置
+Name[en]=KunKunIME Settings
+GenericName=输入法设置
+GenericName[en]=Input Method Settings
+Comment=配置困困输入法的方案、按键、外观与词库
+Comment[en]=Configure schemas, keys, appearance and dictionaries of KunKunIME
+Exec=/usr/lib/kunkunime/KunKunIME %u
+Icon=kunkunime
+Terminal=false
+Categories=Settings;Utility;
+Keywords=input;ime;fcitx;pinyin;输入法;拼音;
+MimeType=x-scheme-handler/kunkunime;
+StartupNotify=true
+StartupWMClass=KunKunIME

@@ -1,0 +1,39 @@
+// KunKunIME TSF Version Resource (auto-generated from CMake)
+// DO NOT EDIT - modify version.rc.in template instead
+
+#include <winver.h>
+
+#pragma code_page(65001)
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION    @APP_VERSION_MAJOR@,@APP_VERSION_MINOR@,@APP_VERSION_PATCH@,@APP_VERSION_BUILD@
+PRODUCTVERSION @APP_VERSION_MAJOR@,@APP_VERSION_MINOR@,@APP_VERSION_PATCH@,@APP_VERSION_BUILD@
+FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
+#ifdef _DEBUG
+FILEFLAGS      VS_FF_DEBUG
+#else
+FILEFLAGS      0
+#endif
+FILEOS         VOS_NT_WINDOWS32
+FILETYPE       VFT_DLL
+FILESUBTYPE    VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName",      "困困输入法"
+            VALUE "FileDescription",  "困困输入法 Windows 文本服务"
+            VALUE "FileVersion",      "@APP_VERSION_STR@"
+            VALUE "InternalName",     "@TSF_TARGET_NAME@"
+            VALUE "LegalCopyright",   "WindInput contributors and KunKunIME contributors"
+            VALUE "OriginalFilename", "@TSF_TARGET_NAME@.dll"
+            VALUE "ProductName",      "困困输入法"
+            VALUE "ProductVersion",   "@APP_VERSION_STR@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0804, 1200
+    END
+END

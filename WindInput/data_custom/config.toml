@@ -1,0 +1,23 @@
+[schema]
+active = "pinyin"
+available = ["pinyin", "shuangpin", "english"]
+
+[schema.pinyin]
+sentence_count = 3
+sentence_max_count = 6
+
+[schema.pinyin.completion]
+min_syllables = 2
+
+[schema.pinyin.grammar]
+enabled = true
+
+[input.association]
+kind = "smart"
+mode = "continuous"
+select_keys_commit = false
+select_keys_as_punctuation = true
+
+[keys.key_actions]
+semicolon = "none"
+"ctrl+shift+semicolon" = "rare_char"

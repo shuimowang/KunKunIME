@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=困困输入法导入
+Name[en]=KunKunIME Import
+Exec=/usr/lib/kunkunime/KunKunIME %f
+Icon=kunkunime
+Terminal=false
+NoDisplay=true
+MimeType=application/x-kunkunime-package;application/x-kunkunime-theme;
+StartupWMClass=KunKunIME

@@ -1,0 +1,46 @@
+name: Windows build
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Select stable Rust
+        run: |
+          rustup toolchain install 1.100.0 --profile minimal
+          rustup default 1.100.0
+          rustc -V
+      - name: Build the Windows application and both TSF components
+        run: ./scripts/build-windows.ps1
+      - name: Load the 64-bit and 32-bit COM components without registering
+        run: ./scripts/test-tsf.ps1 -Package (Join-Path $PWD 'dist/困困输入法')
+
+
+      - name: Test Pinyin, direct English typing and completions
+        run: |
+          $env:CARGO_TARGET_DIR = Join-Path $PWD 'target'
+          cargo test --locked --manifest-path WindInput/wind_input/Cargo.toml --profile dev-variant -p wind-coordinator --test kunkun_bilingual
+      - name: Archive the verified Windows bundle
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: KunKunIME-Windows-x64
+          path: dist/困困输入法/
+          if-no-files-found: error
+          retention-days: 14

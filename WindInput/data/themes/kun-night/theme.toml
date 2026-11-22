@@ -1,0 +1,31 @@
+base = "_base"
+
+[meta]
+name = "暮紫"
+author = "困困输入法"
+version = "1.0"
+order = 0
+
+[behavior]
+always_show_pager = false
+show_page_number = false
+
+[colors]
+primary = "#6956AA"
+accent_text = { light = "#554388", dark = "#D4C6FF" }
+accent_soft = { light = "#6956AA19", dark = "#B09DE732" }
+accent_menu = { light = "#513D8A", dark = "#D4C6FF" }
+bg = { light = "#FCFAFF", dark = "#231F32" }
+text = { light = "#292438", dark = "#F4F0FC" }
+text_dim = { light = "#665E76", dark = "#BBB1C8" }
+border = { light = "#D7CFDF", dark = "#49405B" }
+selection = "${accent_soft}"
+selection_text = "${accent_text}"
+menu_bg = "${bg}"
+menu_text = "${text}"
+menu_hover_bg = "${accent_soft}"
+menu_hover_text = "${accent_menu}"
+toolbar_background = "${bg}"
+toolbar_border = "${border}"
+toolbar_mode_chinese_bg = "${accent_soft}"
+toolbar_mode_text = "${accent_text}"

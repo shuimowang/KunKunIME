@@ -1,0 +1,687 @@
+//! 协议 `kunkunime://import/schema` 的方案包下载：仅官方域名（每一跳）+ 限额下载到私有临时文件。
+//!
+//! 下载机制照抄 `theme_import`（ureq 同步请求，超时 + 体积上限），但方案包是
+//! 二进制 zip，限额放宽到 64 MB / 30s。下载成功后由 main 的协议路由转交
+//! `scheme.previewImport` + schema_manager 既有确认对话框，本模块不做导入语义。
+//!
+//! 重定向不交给 ureq 自动跟：它会跨域、也会 https→http 降级，白名单只拦得住第一跳。
+//! 这里关掉自动跟随，每一跳都重新过 [`check_official_url`]，读正文前最终地址必在官方域。
+
+use std::hash::{BuildHasher, Hasher};
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+
+use crate::net_task::{ReadError, copy_limited};
+
+/// 一类下载包的落盘参数。方案包与主题包共用这套下载 / 落盘逻辑，只有文案、前缀与上限不同。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PkgKind {
+    /// 报错文案里的主语（「方案包」「主题包」）。
+    pub label: &'static str,
+    /// 落盘文件名前缀；清理陈旧残留只认这个前缀。
+    pub prefix: &'static str,
+    /// 落盘文件扩展名（不含点）。
+    pub ext: &'static str,
+    /// 正文上限（字节）。
+    pub max: usize,
+    /// 超限时的报错。
+    pub too_large: &'static str,
+}
+
+/// 方案包（zip 内含词库，比主题大得多）。
+pub(crate) const SCHEMA_PKG: PkgKind = PkgKind {
+    label: "方案包",
+    prefix: "windinput_schema_import-",
+    ext: "zip",
+    max: 64 * 1024 * 1024,
+    too_large: "方案包超过 64 MB 限制",
+};
+/// 连接 / 单次读两道超时。不设整体超时：64 MB 在慢网下多久都可能，卡死的连接由这两道
+/// 兜住，嫌慢由用户在下载框里取消；下载在工作线程里跑，不卡界面。
+const CONNECT_TIMEOUT_SECS: u64 = 8;
+const READ_TIMEOUT_SECS: u64 = 15;
+/// 最多跟随的重定向跳数（与原先交给 ureq 时的 `.redirects(3)` 同额）。
+const MAX_REDIRECTS: usize = 3;
+/// 早于这个时长的残留（进程在确认框开着时被杀）下次下载时顺手删掉。
+const STALE_SECS: u64 = 24 * 60 * 60;
+
+/// 官方域判定：`windinput.com` 本域或其任意子域（大小写不敏感）。
+///
+/// 子域必须以 `.windinput.com` **带点后缀**锚定 —— 只比 `ends_with("windinput.com")`
+/// 会放过 `evil-windinput.com` 这类蹭名域。端口不在这里处理：调用方先从 URL
+/// 解析出纯 host 再来问。
+pub fn is_official_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    host == "windinput.com" || host.ends_with(".windinput.com")
+}
+
+/// 解析并校验一个官方 https 地址，返回解析后的 URL（请求时用它的规范串）。
+///
+/// **校验与请求必须用同一个解析器**：ureq 底下是 `url` crate，它把 `\` 当路径分隔符，
+/// `https://evil.com\.windinput.com/a` 的 host 是 `evil.com`。此前手写的解析只认 `/`，
+/// 会把同一个串的 host 判成 `evil.com\.windinput.com`、放过官方域校验——两边对 host
+/// 的理解只要有一处不同，白名单就形同虚设。
+///
+/// 拒绝：非 https、带 userinfo（`user@` 本身就是伪装手法，官方链接用不到）、host 不是
+/// 域名（IP 字面量）或不在官方域。
+pub(crate) fn parse_official_https(url: &str) -> Result<url::Url, String> {
+    let parsed = url::Url::parse(url.trim()).map_err(|_| "链接必须是 https://".to_string())?;
+    if parsed.scheme() != "https" {
+        return Err("链接必须是 https://".to_string());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("链接不得带用户名或密码".to_string());
+    }
+    match parsed.host() {
+        Some(url::Host::Domain(host)) if is_official_host(host) => Ok(parsed),
+        _ => Err("链接必须来自 windinput.com 官方域名".to_string()),
+    }
+}
+
+/// 正文流。64 MB 的包不整块读进内存：边读边落盘，峰值只有一个分块。
+pub(crate) type Body = Box<dyn Read + Send>;
+
+/// 一次 HTTP 往返的结果：重定向交回调用方逐跳校验，正文是还没读的流。
+pub(crate) enum Fetched {
+    Redirect(String),
+    Body(Body),
+}
+
+/// 第一跳的校验：https + 官方域。
+pub(crate) fn check_official_url(url: &str) -> Result<(), String> {
+    check_official_url_as(url, SCHEMA_PKG.label)
+}
+
+/// [`check_official_url`] 的通用版，`label` 是报错里的主语。
+pub(crate) fn check_official_url_as(url: &str, label: &str) -> Result<(), String> {
+    parse_official_https(url)
+        .map(|_| ())
+        .map_err(|e| format!("{label}{e}"))
+}
+
+/// 按「每一跳先校验、再请求」的次序取方案包正文。`fetch` 只做一次往返、不跟随重定向。
+///
+/// 拆出 `fetch` 是为了单测：真 TLS 起不了本地服务，注入假往返就能覆盖跨域与降级重定向。
+pub(crate) fn fetch_official(
+    url: &str,
+    label: &str,
+    mut fetch: impl FnMut(&str) -> Result<Fetched, String>,
+) -> Result<Body, String> {
+    let mut current = parse_official_https(url).map_err(|e| format!("{label}{e}"))?;
+    for _ in 0..=MAX_REDIRECTS {
+        // 请求用解析后的规范串：发出去的就是校验过的那一个地址。
+        match fetch(current.as_str())? {
+            Fetched::Body(body) => return Ok(body),
+            Fetched::Redirect(location) => {
+                // 相对地址按当前地址补全（与浏览器 / ureq 同一套规则），补全后再整串重验。
+                current = current
+                    .join(location.trim())
+                    .ok()
+                    .and_then(|u| parse_official_https(u.as_str()).ok())
+                    .ok_or_else(|| {
+                        format!("{label}链接重定向到了非官方或非 https 地址，已拒绝：{location}")
+                    })?;
+            }
+        }
+    }
+    Err(format!("{label}链接重定向超过 {MAX_REDIRECTS} 次，已放弃"))
+}
+
+/// 真实的一次往返：不自动跟随重定向，且只走 https（`https_only` 是兜底，逐跳校验已拦）。
+pub(crate) fn http_fetch(agent: &ureq::Agent, url: &str, label: &str) -> Result<Fetched, String> {
+    let response = agent
+        .get(url)
+        .call()
+        .map_err(|e| format!("下载{label}失败：{e}"))?;
+    if (300..400).contains(&response.status()) {
+        return response
+            .header("location")
+            .map(|l| Fetched::Redirect(l.to_string()))
+            .ok_or_else(|| format!("下载{label}失败：{} 重定向缺少地址", response.status()));
+    }
+    Ok(Fetched::Body(Box::new(response.into_reader())))
+}
+
+/// 下载落盘的方案包。**drop 即删文件**：确认对话框是异步的，文件要活到用户确认或取消
+/// （见 schema_manager 的 `PendingImport::Downloaded`），之后随待导入项一起释放。
+#[derive(Debug)]
+pub struct DownloadedPackage {
+    path: PathBuf,
+}
+
+impl DownloadedPackage {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for DownloadedPackage {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// 下载落盘的目录。
+///
+/// Linux：`$XDG_CACHE_HOME/WindInput/import`（0700）。`/tmp` 多用户共享，固定文件名会被
+/// 别的用户先占住（确定性拒绝服务），没开 `fs.protected_regular` 时还能在确认前换包。
+/// Windows / macOS：系统临时目录本就是每用户私有（`%LOCALAPPDATA%\Temp`、`$TMPDIR`），
+/// 沿用；随机文件名与用后即删照样适用。
+pub(crate) fn download_dir() -> Result<PathBuf, String> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        let dir = dirs::cache_dir()
+            .ok_or_else(|| "无法确定用户缓存目录（HOME 未设置）".to_string())?
+            .join("WindInput")
+            .join("import");
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)
+            .map_err(|e| format!("创建下载目录 {} 失败：{e}", dir.display()))?;
+        // 目录早已存在（旧版本或用户自建）时 mode 不生效，补一次。
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("设置下载目录权限失败：{e}"))?;
+        Ok(dir)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(std::env::temp_dir())
+    }
+}
+
+/// 删掉 `dir` 里 `prefix` 开头的陈旧残留（只删早于 [`STALE_SECS`] 的）。
+/// 刚下的、确认框还开着的不碰。
+pub(crate) fn purge_stale(dir: &Path, prefix: &str) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let max_age = std::time::Duration::from_secs(STALE_SECS);
+    for e in entries.flatten() {
+        let stale = e.file_name().to_string_lossy().starts_with(prefix)
+            && e.metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > max_age));
+        if stale {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// 随机文件名 + `create_new`（O_EXCL）流式落盘：撞名重试，绝不打开别人预先放好的文件或链接。
+/// 超限、取消、读写失败时已写的部分随守卫 drop 删掉。
+pub(crate) fn save_stream(
+    dir: &Path,
+    body: impl Read,
+    kind: &PkgKind,
+    cancel: &AtomicBool,
+) -> Result<DownloadedPackage, String> {
+    save_stream_raw(dir, body, kind, cancel).map_err(|e| match e {
+        ReadError::TooLarge => kind.too_large.to_string(),
+        ReadError::Cancelled => "已取消下载".to_string(),
+        ReadError::Io(m) => format!("读取{}响应失败：{m}", kind.label),
+        ReadError::Write(m) => format!("写入临时文件失败：{m}"),
+    })
+}
+
+/// [`save_stream`] 不配文案的版本：调用方要按失败种类分流时用（本机 HTTP 服务超限回 413）。
+pub(crate) fn save_stream_raw(
+    dir: &Path,
+    mut body: impl Read,
+    kind: &PkgKind,
+    cancel: &AtomicBool,
+) -> Result<DownloadedPackage, ReadError> {
+    for _ in 0..16 {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u32(std::process::id());
+        h.write_u128(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default(),
+        );
+        let path = dir.join(format!("{}{:016x}.{}", kind.prefix, h.finish(), kind.ext));
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+        let mut file = match opts.open(&path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(ReadError::Write(e.to_string())),
+        };
+        // 先交给守卫：写一半失败也随 drop 删掉。
+        let pkg = DownloadedPackage { path };
+        copy_limited(&mut body, &mut file, kind.max, cancel)?;
+        return Ok(pkg);
+    }
+    Err(ReadError::Write("随机文件名连续冲突".to_string()))
+}
+
+/// 生产用 agent：不自动跟随重定向（交给 [`fetch_official`] 逐跳校验），只走 https。
+pub(crate) fn download_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
+        .timeout_read(std::time::Duration::from_secs(READ_TIMEOUT_SECS))
+        .redirects(0)
+        .https_only(true)
+        .build()
+}
+
+/// 测试与小体积调用的便捷入口：内存里的字节落盘。
+#[cfg(test)]
+pub(crate) fn save_package(dir: &Path, bytes: &[u8]) -> Result<DownloadedPackage, String> {
+    save_stream(dir, bytes, &SCHEMA_PKG, &AtomicBool::new(false))
+}
+
+/// 校验官方域（每一跳）并下载方案包到私有临时文件，返回 drop 即删的句柄。
+/// **阻塞**，只能在工作线程里调（见 [`crate::net_task`]）。
+pub fn download_schema_package(
+    url: &str,
+    cancel: &AtomicBool,
+) -> Result<DownloadedPackage, String> {
+    let agent = download_agent();
+    let body = fetch_official(url, SCHEMA_PKG.label, |u| {
+        http_fetch(&agent, u, SCHEMA_PKG.label)
+    })?;
+    let dir = download_dir()?;
+    purge_stale(&dir, SCHEMA_PKG.prefix);
+    save_stream(&dir, body, &SCHEMA_PKG, cancel)
+}
+
+/// 下载并让 core 预览，一并在工作线程里做完——下载完紧跟的 `scheme.previewImport`
+/// 最长也要等 5s，放回 UI 线程等于把卡顿只挪了个位置。预览失败时包在这里 drop 即删。
+pub fn download_and_preview(
+    url: &str,
+    cancel: &AtomicBool,
+) -> Result<(DownloadedPackage, serde_json::Value), String> {
+    let pkg = download_schema_package(url, cancel)?;
+    // 下载完到 RPC 之间被取消：别再让 core 去解析一个没人要的包（包随 drop 删除）。
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("已取消下载".to_string());
+    }
+    let preview = crate::rpc::call_core(
+        "scheme.previewImport",
+        &serde_json::json!({ "path": pkg.path().to_string_lossy() }),
+    )
+    .map_err(|e| format!("读取方案包失败：{e}"))?;
+    Ok((pkg, preview))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn official_host_accepts_bare_and_subdomains_case_insensitive() {
+        assert!(is_official_host("windinput.com"));
+        assert!(is_official_host("WindInput.COM"));
+        assert!(is_official_host("dl.windinput.com"));
+        assert!(is_official_host("a.b.WINDINPUT.com"));
+    }
+
+    /// 蹭名域必须被点后缀锚定拦下——这是白名单存在的意义。
+    #[test]
+    fn official_host_rejects_lookalike_and_foreign_domains() {
+        assert!(!is_official_host("evil-windinput.com"));
+        assert!(!is_official_host("windinput.com.evil.com"));
+        assert!(!is_official_host("windinput.org"));
+        assert!(!is_official_host("example.com"));
+        assert!(!is_official_host(""));
+    }
+
+    fn ok(url: &str) -> bool {
+        parse_official_https(url).is_ok()
+    }
+
+    #[test]
+    fn official_https_accepts_ports_case_and_idn_subdomains() {
+        assert!(ok("https://dl.windinput.com/pkg.zip"));
+        assert!(ok("https://Windinput.Com:8443/a?b=c#d"), "端口不参与域判定");
+        assert!(ok("https://例子.windinput.com/x"), "IDN 子域按 punycode 判");
+        assert_eq!(
+            parse_official_https("HTTPS://CDN.WindInput.com/a b.zip")
+                .unwrap()
+                .as_str(),
+            "https://cdn.windinput.com/a%20b.zip",
+            "请求用的是规范串"
+        );
+    }
+
+    /// 与 ureq（`url` crate）对 host 的理解必须一致：`\` 是路径分隔符，`\.windinput.com`
+    /// 与 `\@windinput.com` 都不能让 `evil.com` 混进来。
+    #[test]
+    fn official_https_rejects_parser_differential_tricks() {
+        for bad in [
+            "https://evil.com\\.windinput.com/a.wtheme",
+            "https://evil.com\\@windinput.com/a.zip",
+            "https://windinput.com@evil.com/pkg.zip",
+            "https://user:pw@windinput.com/pkg.zip",
+            "https://user@windinput.com/pkg.zip",
+            "https://evil.com%2F.windinput.com/a",
+            "https://evil.com#.windinput.com/a",
+            "https://evil.com?.windinput.com/a",
+            "http://windinput.com/a.zip",
+            "https:///no-host",
+            "https://[::1]/x",
+            "https://127.0.0.1/x",
+            "https:/汉字",
+            "汉https://x",
+            "https://",
+            "",
+        ] {
+            assert!(!ok(bad), "{bad} 不该通过");
+        }
+        // 解析出的 host 与 ureq 将要连接的一致
+        let u = url::Url::parse("https://evil.com\\.windinput.com/a").unwrap();
+        assert_eq!(u.host_str(), Some("evil.com"));
+    }
+
+    /// 协议链接里编码过的反斜杠：解码后照样被拒。
+    #[test]
+    fn protocol_link_with_encoded_backslash_is_rejected() {
+        let req = crate::protocol::parse_protocol_url(
+            "kunkunime://import/schema?url=https%3A%2F%2Fevil.com%5C.windinput.com%2Fa.zip",
+        )
+        .unwrap();
+        assert_eq!(req.url, "https://evil.com\\.windinput.com/a.zip");
+        assert!(check_official_url(&req.url).is_err());
+        let req = crate::protocol::parse_protocol_url(
+            "kunkunime://import/schema?url=https%3A%2F%2Fevil.com%5C%40windinput.com%2Fa.zip",
+        )
+        .unwrap();
+        assert!(check_official_url(&req.url).is_err());
+    }
+
+    fn read_all(mut body: Body) -> Vec<u8> {
+        let mut v = Vec::new();
+        body.read_to_end(&mut v).unwrap();
+        v
+    }
+
+    /// 流式落盘：超限 / 取消时已写的部分文件随守卫删掉，不留残渣。
+    #[test]
+    fn save_stream_removes_partial_file_on_cancel() {
+        let dir = scratch_dir("stream_cancel");
+        let err = save_stream(&dir, &b"data"[..], &SCHEMA_PKG, &AtomicBool::new(true)).unwrap_err();
+        assert!(err.contains("取消"), "{err}");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "半截文件要删掉"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 写了一部分才超限 / 断流：半截文件必须删掉（文件在第一块写入后才有内容）。
+    #[test]
+    fn save_stream_removes_partial_file_when_over_limit_or_broken() {
+        let dir = scratch_dir("stream_partial");
+        let big = vec![1u8; 40_000];
+        let small = PkgKind {
+            max: 20_000,
+            ..SCHEMA_PKG
+        };
+        let err = save_stream(&dir, &big[..], &small, &AtomicBool::new(false)).unwrap_err();
+        assert!(err.contains("64 MB"), "{err}");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "超限的半截文件要删"
+        );
+
+        struct Breaks(bool);
+        impl Read for Breaks {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.0 {
+                    return Err(std::io::Error::other("断流"));
+                }
+                self.0 = true;
+                buf[..10].fill(7);
+                Ok(10)
+            }
+        }
+        let err = save_stream(&dir, Breaks(false), &small, &AtomicBool::new(false)).unwrap_err();
+        assert!(err.contains("断流"), "{err}");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "断流的半截文件要删"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_stream_writes_whole_body() {
+        let dir = scratch_dir("stream_ok");
+        let pkg = save_stream(&dir, &b"PKzip"[..], &SCHEMA_PKG, &AtomicBool::new(false)).unwrap();
+        assert_eq!(std::fs::read(pkg.path()).unwrap(), b"PKzip");
+        drop(pkg);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 假往返：按地址查表应答，记下实际请求过的地址。
+    fn scripted<'a>(
+        table: &'a [(&'a str, Result<&'a str, &'a str>)],
+        seen: &'a std::cell::RefCell<Vec<String>>,
+    ) -> impl FnMut(&str) -> Result<Fetched, String> + 'a {
+        move |u| {
+            seen.borrow_mut().push(u.to_string());
+            match table.iter().find(|(k, _)| *k == u) {
+                Some((_, Ok(body))) => Ok(Fetched::Body(Box::new(std::io::Cursor::new(
+                    body.as_bytes().to_vec(),
+                )))),
+                Some((_, Err(loc))) => Ok(Fetched::Redirect(loc.to_string())),
+                None => Err(format!("unexpected request {u}")),
+            }
+        }
+    }
+
+    /// 官方域直链与官方域内的重定向（含 `/path` 与 `//host` 写法）照常下载。
+    #[test]
+    fn fetch_follows_official_redirects() {
+        let seen = Default::default();
+        let table = [("https://windinput.com/a.zip", Ok("PK"))];
+        let body = fetch_official(
+            "https://windinput.com/a.zip",
+            "方案包",
+            scripted(&table, &seen),
+        );
+        assert_eq!(read_all(body.unwrap()), b"PK");
+
+        let seen = Default::default();
+        let table = [
+            ("https://windinput.com/s/a", Err("/files/a.zip")),
+            (
+                "https://windinput.com/files/a.zip",
+                Err("//dl.windinput.com/a.zip"),
+            ),
+            (
+                "https://dl.windinput.com/a.zip",
+                Err("HTTPS://CDN.windinput.com/a.zip"),
+            ),
+            ("https://cdn.windinput.com/a.zip", Ok("PK")),
+        ];
+        let body = fetch_official(
+            "https://windinput.com/s/a",
+            "方案包",
+            scripted(&table, &seen),
+        );
+        assert_eq!(read_all(body.unwrap()), b"PK");
+        assert_eq!(seen.borrow().len(), 4);
+
+        // 相对地址按当前地址补全（与 ureq 同规则），补全后仍在官方域即放行。
+        let seen = Default::default();
+        let table = [
+            ("https://windinput.com/d/a", Err("b.zip")),
+            ("https://windinput.com/d/b.zip", Ok("PK")),
+        ];
+        let body = fetch_official(
+            "https://windinput.com/d/a",
+            "方案包",
+            scripted(&table, &seen),
+        );
+        assert_eq!(read_all(body.unwrap()), b"PK");
+    }
+
+    /// 跨域与 https→http 降级的重定向必须拒绝，且**不向那个地址发请求**——
+    /// 交给 ureq 自动跟随时，白名单只校验了第一跳。
+    #[test]
+    fn fetch_rejects_foreign_or_downgraded_redirects() {
+        for bad in [
+            "https://evil.com/a.zip",
+            "https://evil-windinput.com/a.zip",
+            "http://windinput.com/a.zip",
+            "//evil.com/a.zip",
+            "https://windinput.com@evil.com/a.zip",
+            "ftp://windinput.com/a.zip",
+            "https://evil.com\\.windinput.com/a.zip",
+            "/\\evil.com/a.zip",
+        ] {
+            let seen = std::cell::RefCell::new(Vec::new());
+            let table = [("https://windinput.com/a", Err(bad))];
+            let err = fetch_official("https://windinput.com/a", "方案包", scripted(&table, &seen))
+                .err()
+                .unwrap();
+            assert!(err.contains("已拒绝"), "{bad}: {err}");
+            assert_eq!(seen.borrow().len(), 1, "{bad}: 不得请求重定向目标");
+        }
+    }
+
+    #[test]
+    fn fetch_gives_up_after_max_redirects() {
+        let seen = Default::default();
+        let table = [("https://windinput.com/loop", Err("/loop"))];
+        let err = fetch_official(
+            "https://windinput.com/loop",
+            "方案包",
+            scripted(&table, &seen),
+        )
+        .err()
+        .unwrap();
+        assert!(err.contains("超过"), "{err}");
+        assert_eq!(seen.borrow().len(), MAX_REDIRECTS + 1);
+    }
+
+    /// 真 ureq 的往返语义：`redirects(0)` 时 3xx 原样交回（不报错、不跟随），正文照读；
+    /// `https_only` 的 agent 对 http 地址直接拒绝。本地起不了 TLS，这里用明文本地服务
+    /// 验前两条，生产 agent 的 https_only 另验第三条。
+    #[test]
+    fn http_fetch_hands_back_redirects_without_following() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let worker = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let req = server.recv().unwrap();
+                let resp = if req.url() == "/r" {
+                    tiny_http::Response::from_string("")
+                        .with_status_code(302)
+                        .with_header(
+                            tiny_http::Header::from_bytes("Location", "https://evil.com/x")
+                                .unwrap(),
+                        )
+                } else {
+                    tiny_http::Response::from_string("PK")
+                };
+                req.respond(resp).unwrap();
+            }
+        });
+        let agent = ureq::AgentBuilder::new().redirects(0).build();
+        match http_fetch(&agent, &format!("http://127.0.0.1:{port}/r"), "方案包").unwrap() {
+            Fetched::Redirect(l) => assert_eq!(l, "https://evil.com/x"),
+            Fetched::Body(_) => panic!("不应跟随重定向"),
+        }
+        match http_fetch(&agent, &format!("http://127.0.0.1:{port}/a.zip"), "方案包").unwrap() {
+            Fetched::Body(b) => assert_eq!(read_all(b), b"PK"),
+            Fetched::Redirect(_) => panic!("应读到正文"),
+        }
+        worker.join().unwrap();
+
+        assert!(
+            http_fetch(
+                &download_agent(),
+                &format!("http://127.0.0.1:{port}/a.zip"),
+                "方案包"
+            )
+            .is_err()
+        );
+    }
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "wind_setting_schema_dl_{tag}_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// 随机名 + O_EXCL：两次落盘不同名、互不覆盖；drop 即删。
+    #[test]
+    fn save_package_uses_fresh_names_and_drop_deletes() {
+        let dir = scratch_dir("save");
+        let a = save_package(&dir, b"one").unwrap();
+        let b = save_package(&dir, b"two").unwrap();
+        assert_ne!(a.path(), b.path());
+        assert!(
+            a.path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(SCHEMA_PKG.prefix)
+        );
+        assert_eq!(std::fs::read(a.path()).unwrap(), b"one");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(a.path()).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        let (pa, pb) = (a.path().to_path_buf(), b.path().to_path_buf());
+        drop(a);
+        assert!(!pa.exists());
+        assert!(pb.exists());
+        drop(b);
+        assert!(!pb.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 陈旧残留只删本模块前缀的；别的文件不碰。
+    #[test]
+    fn purge_stale_only_touches_our_old_files() {
+        let dir = scratch_dir("purge");
+        let ours = dir.join(format!("{}old.zip", SCHEMA_PKG.prefix));
+        let other = dir.join("someone_else.zip");
+        let fresh = save_package(&dir, b"x").unwrap();
+        for p in [&ours, &other] {
+            let f = std::fs::File::create(p).unwrap();
+            f.set_modified(
+                std::time::SystemTime::now() - std::time::Duration::from_secs(STALE_SECS + 60),
+            )
+            .unwrap();
+        }
+        purge_stale(&dir, SCHEMA_PKG.prefix);
+        assert!(!ours.exists());
+        assert!(other.exists());
+        assert!(fresh.path().exists(), "刚下的不删");
+        drop(fresh);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 白名单校验发生在任何网络请求之前——非官方域直接拒绝，不发请求。
+    #[test]
+    fn download_rejects_non_official_before_request() {
+        let err = download_schema_package(
+            "https://evil-windinput.com/pkg.zip",
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert!(err.contains("官方域名"), "{err}");
+        let err = download_schema_package("http://windinput.com/pkg.zip", &AtomicBool::new(false))
+            .unwrap_err();
+        assert!(err.contains("https"), "{err}");
+    }
+}

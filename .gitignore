@@ -1,0 +1,7 @@
+/.work/
+/artifacts/
+/target/
+/dist/
+/out/
+*.pdb
+__pycache__/

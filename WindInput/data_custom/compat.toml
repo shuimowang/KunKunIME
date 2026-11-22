@@ -1,0 +1,5 @@
+# 保留 Chromium 打拼音时的原有占位策略；选词结束后不向 ProseMirror 插入联想占位。
+[[apps]]
+process = "ChatGPT.exe"
+comment = "Codex 聊天输入框：选词后立即提交，后续联想保留在候选窗"
+assoc_placeholder = "none"
