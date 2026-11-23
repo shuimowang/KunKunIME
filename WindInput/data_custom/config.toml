@@ -18,6 +18,9 @@ mode = "continuous"
 select_keys_commit = false
 select_keys_as_punctuation = true
 
+[keys]
+select_key_groups = []
+
 [keys.key_actions]
 semicolon = "none"
 "ctrl+shift+semicolon" = "rare_char"

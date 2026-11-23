@@ -98,6 +98,22 @@ fn pinyin_english_and_literal_typing() {
     assert_eq!(config.schema.active, "pinyin");
     assert_eq!(config.schema.available, ["pinyin", "shuangpin", "english"]);
     let c = Coordinator::new_headless(config, Some(&data));
+    for (spelling, expected) in [("", "；"), ("ni", "你；")] {
+        for ch in spelling.bytes() {
+            tap(&c, u32::from(ch.to_ascii_uppercase()));
+        }
+        match tap(&c, wind_keys::keymap::VK_SEMICOLON) {
+            KeyAction::InsertText { text, .. }
+            | KeyAction::CommitThenDeferComposition {
+                commit_text: text, ..
+            } => {
+                assert_eq!(text, expected);
+            }
+            other => {
+                panic!("Expected a single semicolon press to commit {expected:?}, got {other:?}")
+            }
+        }
+    }
     select(&c, "beijingdaxue", "北京大学", "北京大学");
     select(&c, "github", "GitHub", "GitHub");
     select(&c, "templa", "template", "template");
