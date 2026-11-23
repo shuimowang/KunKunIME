@@ -74,34 +74,29 @@ impl Coordinator {
 
         // ① 学过的后缀（已按 count/last_used 排好序）。
         if let Some(store) = self.store.as_ref() {
-            match store.list_completions(
+            for (suffix, _) in store.completion_candidates(
                 CompletionKind::EmailSuffix,
                 typed,
-                0,
+                true,
                 MAX_COMPLETION_CANDIDATES,
             ) {
-                Ok((rows, _)) => {
-                    for (suffix, _) in rows {
-                        if seen.insert(suffix.clone()) {
-                            out.push(suffix);
-                        }
-                    }
+                if seen.insert(suffix.to_ascii_lowercase()) {
+                    out.push(suffix);
                 }
-                // 学习数据读不出来不该让补全整个失效：预置表还在，退化成「没学过」即可。
-                Err(e) => tracing::debug!("邮箱后缀学习数据读取失败，退化为仅预置表: {e}"),
             }
         }
 
         // ② 预置表，按配置顺序。已在 ① 出现过的跳过——同一个后缀出两条，用户怎么用都
         // 消不掉其中一条，这正是预置表与学习数据必须同域（都不带 `@`）的理由。
+        let typed = typed.to_ascii_lowercase();
         for suffix in &self.rt().config.input.email.suffixes {
             if out.len() >= MAX_COMPLETION_CANDIDATES {
                 break;
             }
-            if suffix.is_empty() || !suffix.starts_with(typed) {
+            if suffix.is_empty() || !suffix.to_ascii_lowercase().starts_with(&typed) {
                 continue;
             }
-            if seen.insert(suffix.clone()) {
+            if seen.insert(suffix.to_ascii_lowercase()) {
                 out.push(suffix.clone());
             }
         }
@@ -109,42 +104,28 @@ impl Coordinator {
         out
     }
 
-    /// 刷新网址候选：从历史里取以当前缓冲为前缀的记录。
-    ///
-    /// 历史开关关闭时**不查库也不出候选**——不是「查出来再丢掉」：关着的时候库里本就
-    /// 没有数据，查询纯属每键一次无谓的读事务。
+    /// 网址模式读取手动补全；打开网址历史后，也读取学习记录。
     pub(crate) fn update_url_candidates(&self, state: &mut State) {
         state.candidates.clear();
         self.reset_candidate_view(state);
         state.preedit = state.url_buffer.clone();
-
-        if !self.rt().config.input.url.history_enabled {
-            return;
-        }
         let Some(store) = self.store.as_ref() else {
             return;
         };
-        let buffer = state.url_buffer.clone();
-        match store.list_completions(
-            CompletionKind::UrlHistory,
-            &buffer,
-            0,
-            MAX_COMPLETION_CANDIDATES,
-        ) {
-            Ok((rows, _)) => {
-                state.candidates = rows
-                    .into_iter()
-                    // 与缓冲逐字相同的那条不出：它上屏的结果与「无候选时上屏原文」完全
-                    // 一样，留着只是占掉首选位置，让用户以为自己在选什么东西。
-                    .filter(|(text, _)| text != &buffer)
-                    .map(|(text, _)| Candidate {
-                        text,
-                        ..Default::default()
-                    })
-                    .collect();
-            }
-            Err(e) => tracing::debug!("网址历史读取失败，本次不出补全候选: {e}"),
-        }
+        state.candidates = store
+            .completion_candidates(
+                CompletionKind::UrlHistory,
+                &state.url_buffer,
+                self.rt().config.input.url.history_enabled,
+                MAX_COMPLETION_CANDIDATES,
+            )
+            .into_iter()
+            .filter(|(text, _)| text != &state.url_buffer)
+            .map(|(text, _)| Candidate {
+                text,
+                ..Default::default()
+            })
+            .collect();
     }
 
     /// 当前高亮候选的文本。无候选（或下标越界）时 `None`。

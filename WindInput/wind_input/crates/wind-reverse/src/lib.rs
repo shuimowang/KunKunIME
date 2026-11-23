@@ -1261,6 +1261,35 @@ impl ReverseLookup {
             .join(" ")
     }
 
+    /// 用无声调全拼匹配手动补全文本的开头。保留其中的 ASCII 字符；
+    /// 匹配到输入末尾就返回，不必为长文本分配一份完整拼音。
+    pub fn completion_pinyin_prefix(&self, text: &str, ascii_prefix: &str) -> bool {
+        if ascii_prefix.is_empty() || !ascii_prefix.is_ascii() {
+            return false;
+        }
+        let mut keys = ascii_prefix.bytes();
+        for ch in text.chars() {
+            let mut scalar = [0; 4];
+            let spelling: &str = if ch.is_ascii() {
+                ch.encode_utf8(&mut scalar)
+            } else if let Some(reading) = self.pinyin.readings(ch).and_then(|r| r.first()) {
+                reading
+            } else {
+                return false;
+            };
+            for letter in spelling.chars().map(unaccented) {
+                let Some(key) = keys.next() else { return true };
+                if !letter.is_ascii() || !(letter as u8).eq_ignore_ascii_case(&key) {
+                    return false;
+                }
+            }
+            if keys.len() == 0 {
+                return true;
+            }
+        }
+        false
+    }
+
     /// 五笔词组取码（86 版首码法）：1字=全码；2字=各取前2码；3字=前2字各首码+末字前2码；
     /// ≥4字=前3字首码+末字首码。
     ///
@@ -1332,17 +1361,21 @@ impl ReverseLookup {
 /// `ń`/`ḿ` 去调）。改其一时核对另一处是否也该改。
 fn strip_tone(py: &str) -> String {
     py.chars()
-        .map(|c| match c {
-            'ā' | 'á' | 'ǎ' | 'à' => 'a',
-            'ō' | 'ó' | 'ǒ' | 'ò' => 'o',
-            'ē' | 'é' | 'ě' | 'è' => 'e',
-            'ī' | 'í' | 'ǐ' | 'ì' => 'i',
-            'ū' | 'ú' | 'ǔ' | 'ù' => 'u',
-            'ǖ' | 'ǘ' | 'ǚ' | 'ǜ' | 'ü' => 'v',
-            other => other,
-        })
+        .map(unaccented)
         .collect::<String>()
         .to_lowercase()
+}
+
+fn unaccented(c: char) -> char {
+    match c {
+        'ā' | 'á' | 'ǎ' | 'à' => 'a',
+        'ō' | 'ó' | 'ǒ' | 'ò' => 'o',
+        'ē' | 'é' | 'ě' | 'è' => 'e',
+        'ī' | 'í' | 'ǐ' | 'ì' => 'i',
+        'ū' | 'ú' | 'ǔ' | 'ù' => 'u',
+        'ǖ' | 'ǘ' | 'ǚ' | 'ǜ' | 'ü' => 'v',
+        other => other,
+    }
 }
 
 #[cfg(test)]
@@ -2628,6 +2661,23 @@ mod tests {
         // 多音字"重"：首音 zhòng（最常用），次音 chóng
         rl.set_pinyin(vec![('重', vec!["zhòng", "chóng"]), ('要', vec!["yào"])]);
         assert_eq!(rl.gen_pinyin("重要"), "zhong yao");
+    }
+
+    #[test]
+    fn manual_completion_matches_chinese_or_mixed_text_by_pinyin_prefix() {
+        let mut lookup = ReverseLookup::default();
+        lookup.set_pinyin(vec![
+            ('请', vec!["qǐng"]),
+            ('查', vec!["chá", "zhā"]),
+            ('绿', vec!["lǜ"]),
+        ]);
+        assert!(lookup.completion_pinyin_prefix("请查收附件", "QINGCH"));
+        assert!(lookup.completion_pinyin_prefix("请查收附件", "qingcha"));
+        assert!(lookup.completion_pinyin_prefix("绿API", "lvap"));
+        assert!(!lookup.completion_pinyin_prefix("请/查", "qingch"));
+        assert!(!lookup.completion_pinyin_prefix("请查", "qingchashou"));
+        assert!(!lookup.completion_pinyin_prefix("请查", ""));
+        assert!(!lookup.completion_pinyin_prefix("请查", "请"));
     }
 
     /// `readings_of`：读音按表内顺序（最常用在前）、`max` 截断、0 = 不限；查不到给空串。

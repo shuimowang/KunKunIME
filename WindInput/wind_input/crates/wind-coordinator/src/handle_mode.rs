@@ -2489,6 +2489,7 @@ impl Coordinator {
     /// **成员顺序即候选优先级**——把 `quick_input.calc` 排在最前即得「计算结果作首选」。
     pub(crate) fn update_mix_candidates(&self, state: &mut State) {
         self.refill_mix_candidates(state);
+        self.add_manual_quick_candidates(state);
         self.grid_resume(state);
     }
 

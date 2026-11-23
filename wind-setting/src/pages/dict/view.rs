@@ -143,7 +143,7 @@ pub fn build_page_for(mgr: DictManagerState) -> Element {
                 Some("按编码调整位置或隐藏候选。添加词条请切换到码表或拼音。")
             }
             WordCategory::Shadow => Some("按编码固定候选位置或隐藏候选。"),
-            _ => None,
+            cat => cat.completion_form().map(|form| form.usage),
         };
         text.map_or_else(
             || Element::leaf().height(0),
@@ -152,7 +152,7 @@ pub fn build_page_for(mgr: DictManagerState) -> Element {
                     .font_size(12.0)
                     .fg_role(Role::TextMuted)
                     .width_match()
-                    .max_lines(2)
+                    .max_lines(3)
             },
         )
     });
@@ -160,7 +160,11 @@ pub fn build_page_for(mgr: DictManagerState) -> Element {
     let help = help.visible_when(move || {
         matches!(
             help_vis.current_category(),
-            WordCategory::Freq | WordCategory::Shadow
+            WordCategory::Freq
+                | WordCategory::Shadow
+                | WordCategory::MailSuffix
+                | WordCategory::UrlHistory
+                | WordCategory::QuickHistory
         )
     });
 
@@ -457,12 +461,20 @@ fn build_toolbar(mgr: &DictManagerState) -> Element {
 
     let (m_clr_s, e_clr_s, v_search, m_sub_s) =
         (mgr.clone(), mgr.clone(), mgr.clone(), mgr.clone());
+    let search_mgr = mgr.clone();
+    let placeholder = mgr.table_epoch.map(move |_| {
+        if search_mgr.current_category().completion_form().is_some() {
+            "搜索补全内容…".to_string()
+        } else {
+            "搜索编码或词条…".to_string()
+        }
+    });
     let search_row = Element::row()
         .width_match()
         .cross(Align::Center)
         .spacing(4)
         .child(
-            Element::text_input(mgr.search, "搜索编码或词条…")
+            Element::text_input(mgr.search, placeholder)
                 // 回车立即搜（系统词条平时停手才搜，见 `sys_cats::build_search_debounce`）
                 .on_submit(move |_| m_sub_s.flush_sys_search())
                 .weight(1.0)
@@ -832,6 +844,25 @@ fn render_cell(
     text: &str,
 ) -> Option<Element> {
     match columns.get(col)?.field {
+        WordField::Text if mgr.display_row(row)?.manual_completion => Some(
+            Element::row()
+                .width_match()
+                .cross(Align::Center)
+                .spacing(6)
+                .child(
+                    Element::label(text)
+                        .weight(1.0)
+                        .max_lines(1)
+                        .truncate(Truncate::End)
+                        .tooltip(text),
+                )
+                .child(
+                    Element::label("手动")
+                        .font_size(11.0)
+                        .fg_role(Role::TextMuted)
+                        .max_lines(1),
+                ),
+        ),
         // 固定状态用文字，只有可切换的行才有复选框。
         WordField::Enabled => {
             let r = mgr.display_row(row)?;
@@ -1603,6 +1634,72 @@ mod tests {
     use serde_json::json;
     use windui::core::Tree;
     use windui::geometry::Size;
+
+    #[test]
+    fn completion_add_buttons_open_and_submit_a_single_text_value() {
+        use super::super::state::DOMAIN_COMPLETION;
+        use windui::event::{MouseButton, PointerEvent, PointerKind};
+        use windui::geometry::Point;
+        let _guard = crate::rpc::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("WIND_RPC_MOCK", "1") };
+        let mgr = DictManagerState::new();
+        mgr.domain.set(DOMAIN_COMPLETION);
+        for (tab, (cat, rpc, sample)) in [
+            (WordCategory::MailSuffix, "mailSuffix.add", "@example.com"),
+            (
+                WordCategory::UrlHistory,
+                "urlHistory.add",
+                "https://example.com/docs",
+            ),
+            (WordCategory::QuickHistory, "quickHistory.add", "请查收附件"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            mgr.sub_tab.set(tab);
+            mgr.on_nav_changed();
+            assert_eq!(mgr.current_category(), cat);
+            let mut tree = Tree::new();
+            let root = build_toolbar(&mgr).width(620).build(&mut tree);
+            tree.root = Some(root);
+            tree.layout_root(Size::new(620, 120), &mut windui::text::NullTextEngine);
+            let bar = tree.get(root).unwrap().children[0];
+            let button = tree.get(bar).unwrap().children[1];
+            let rect = tree.abs_bounds(button);
+            assert!(rect.w > 0 && rect.h > 0, "the Add button must be visible");
+            let point = Point::new(rect.x + rect.w / 2, rect.y + rect.h / 2);
+            let (mut hover, mut capture) = (None, None);
+            for kind in [PointerKind::Down, PointerKind::Up] {
+                tree.dispatch_pointer(
+                    PointerEvent::single(kind, point, MouseButton::Left),
+                    &mut hover,
+                    &mut capture,
+                );
+            }
+            assert!(mgr.completion_add_visible.get());
+            assert!(!mgr.edit_visible.get(), "no code or weight fields");
+            assert_eq!(mgr.completion_add_target.get(), cat);
+            mgr.edit_text.set(sample.to_string());
+            crate::rpc::force_mock_error(rpc, Some("未能写入"));
+            mgr.submit_completion();
+            crate::rpc::force_mock_error(rpc, None);
+            assert!(mgr.completion_add_visible.get());
+            assert_eq!(mgr.edit_text.get(), sample);
+            crate::rpc::take_mock_calls();
+            mgr.submit_completion();
+            assert!(!mgr.completion_add_visible.get());
+            let calls = crate::rpc::take_mock_calls();
+            assert!(
+                calls
+                    .iter()
+                    .any(|(m, args)| m == rpc && *args == json!({"text":sample}))
+            );
+            assert!(calls.iter().any(|(m, _)| m == mgr.current_spec().rpc.list));
+        }
+        unsafe { std::env::remove_var("WIND_RPC_MOCK") };
+    }
 
     /// 「*」说明行：只在候选调整出现；拼音/英文域恒显示，其它域看表里有无 `*` 行。
     #[test]

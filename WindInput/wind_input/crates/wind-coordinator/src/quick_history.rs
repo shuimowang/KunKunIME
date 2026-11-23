@@ -78,6 +78,62 @@ pub(crate) fn worth_remembering(text: &str) -> bool {
 }
 
 impl Coordinator {
+    /// 用户指定的补全与自动历史分开：在内置快捷输入里即使不学习，也能按前缀选用。
+    /// 保留当前首选（如原文或算式结果）和已有候选的相对顺序。
+    pub(crate) fn add_manual_quick_candidates(&self, state: &mut State) {
+        if state.mix_buffer.is_empty()
+            || !state.committed_text.is_empty()
+            || !self
+                .rt()
+                .config
+                .schema
+                .mix_modes
+                .get(state.mix_id as usize)
+                .is_some_and(|mode| mode.id == wind_config::config::QUICK_MIX_ID)
+        {
+            return;
+        }
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
+        let want = state.mix_buffer.to_ascii_lowercase();
+        let first = state.candidates.first().map(|c| c.text.as_str());
+        let manual: Vec<_> = store
+            .completion_candidates(CompletionKind::QuickHistory, "", false, usize::MAX)
+            .into_iter()
+            .filter(|(text, _)| {
+                Some(text.as_str()) != first && self.quick_prefix_matches(text, true, &want)
+            })
+            .take(QUICK_HISTORY_QUOTA)
+            .collect();
+        if manual.is_empty() {
+            return;
+        }
+        state
+            .candidates
+            .retain(|c| !manual.iter().any(|(text, _)| *text == c.text));
+        let offset = 1.min(state.candidates.len());
+        state.candidates.splice(
+            offset..offset,
+            manual.into_iter().map(|(text, _)| Candidate {
+                text,
+                id: QUICK_HISTORY_ID.to_string(),
+                ..Default::default()
+            }),
+        );
+    }
+
+    fn quick_prefix_matches(&self, text: &str, manual: bool, prefix: &str) -> bool {
+        text.to_lowercase().starts_with(prefix)
+            || (manual
+                && !text.is_ascii()
+                && self
+                    .reverse
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .completion_pinyin_prefix(text, prefix))
+    }
+
     /// 本融合实例是否启用了历史成员。
     pub(crate) fn mix_has_history(&self, idx: u8) -> bool {
         self.rt()
@@ -152,7 +208,7 @@ impl Coordinator {
         for (text, rec) in rows
             .into_iter()
             .filter(|(text, _)| text != buffer)
-            .filter(|(text, _)| text.to_lowercase().starts_with(&want))
+            .filter(|(text, rec)| self.quick_prefix_matches(text, rec.manual, &want))
             .take(QUICK_HISTORY_QUOTA)
         {
             recs.insert(
@@ -191,7 +247,9 @@ impl Coordinator {
         };
         let want = buffer.to_lowercase();
         rows.into_iter()
-            .filter(|(text, _)| text != buffer && text.to_lowercase().starts_with(&want))
+            .filter(|(text, rec)| {
+                text != buffer && self.quick_prefix_matches(text, rec.manual, &want)
+            })
             .take(QUICK_HISTORY_QUOTA)
             .map(|(text, rec)| {
                 let cand = Candidate {

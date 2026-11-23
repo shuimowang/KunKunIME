@@ -33,6 +33,7 @@ pub fn build_dict_dialogs(mgr: &DictManagerState) -> Element {
         .child(build_auto_encode(mgr))
         .child(build_quick_dialog(mgr))
         .child(build_common_dialog(mgr))
+        .child(build_completion_dialog(mgr))
         .child(build_shadow_dialog(mgr))
         .child(build_view_dialog(mgr))
         .child(build_export_dialog(mgr))
@@ -772,6 +773,42 @@ fn build_common_dialog(mgr: &DictManagerState) -> Element {
     Element::dialog(mgr.common_edit_visible, frame)
 }
 
+/// 只填写要补全的字面内容。分类固定为打开对话框时的类别。
+fn build_completion_dialog(mgr: &DictManagerState) -> Element {
+    let target = mgr.completion_add_target;
+    let example = target.map(|cat| {
+        cat.completion_form()
+            .map(|form| form.example.to_string())
+            .unwrap_or_default()
+    });
+    let submit = mgr.clone();
+    let text = mgr.edit_text;
+    let input = Element::text_input(text, example)
+        .width_match()
+        .on_submit(move |_| submit.submit_completion());
+    let body = dialog_body().child(input);
+    let visible = mgr.completion_add_visible;
+    let add = mgr.clone();
+    let footer = dialog_footer()
+        .child(Element::leaf().weight(1.0))
+        .child(
+            Element::button("取消")
+                .small()
+                .outline_soft()
+                .on_click(move |_| visible.set(false)),
+        )
+        .child(
+            Element::button("添加")
+                .small()
+                .enabled_when(move || text.with(|value| !value.trim().is_empty()))
+                .on_click(move |_| add.submit_completion()),
+        );
+    Element::dialog(
+        visible,
+        dialog_frame(420, dialog_header(mgr.edit_title), body, Some(footer)),
+    )
+}
+
 /// 候选调整手动添加：编码 / 词条 / 类型(固定位置|隐藏) / 目标位置(仅固定位置)。
 fn build_shadow_dialog(mgr: &DictManagerState) -> Element {
     let submit = mgr.clone();
@@ -1127,6 +1164,57 @@ mod tests {
     use crate::state::SchemaInfo;
     use windui::core::Tree;
     use windui::geometry::Size;
+
+    #[test]
+    fn completion_dialog_submit_button_sends_content_and_reports_existing_item() {
+        use super::super::state::DOMAIN_COMPLETION;
+        use serde_json::json;
+        use windui::event::{MouseButton, PointerEvent, PointerKind};
+        use windui::geometry::Point;
+
+        let _guard = crate::rpc::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("WIND_RPC_MOCK", "1") };
+        let st = DictManagerState::new();
+        st.domain.set(DOMAIN_COMPLETION);
+        st.sub_tab.set(0);
+        st.on_nav_changed();
+        st.open_add();
+        st.edit_text.set("@example.com".into());
+        let mut tree = Tree::new();
+        let root = build_completion_dialog(&st).build(&mut tree);
+        tree.root = Some(root);
+        frame(&mut tree);
+        let panel = tree.get(root).unwrap().children[0];
+        let footer = *tree.get(panel).unwrap().children.last().unwrap();
+        let submit = *tree.get(footer).unwrap().children.last().unwrap();
+        let r = tree.abs_bounds(submit);
+        assert!(r.w > 0 && r.h > 0);
+        let point = Point::new(r.x + r.w / 2, r.y + r.h / 2);
+        crate::rpc::take_mock_calls();
+        crate::rpc::force_mock_reply(
+            "mailSuffix.add",
+            Some(json!({"ok":true,"added":false,"text":"example.com"})),
+        );
+        let (mut hover, mut capture) = (None, None);
+        for kind in [PointerKind::Down, PointerKind::Up] {
+            tree.dispatch_pointer(
+                PointerEvent::single(kind, point, MouseButton::Left),
+                &mut hover,
+                &mut capture,
+            );
+        }
+        crate::rpc::force_mock_reply("mailSuffix.add", None);
+        assert!(!st.completion_add_visible.get());
+        assert_eq!(st.feedback.get().unwrap().1, "这项补全已在列表中");
+        assert!(
+            crate::rpc::take_mock_calls()
+                .iter()
+                .any(|(m, p)| m == "mailSuffix.add" && *p == json!({"text":"@example.com"}))
+        );
+        unsafe { std::env::remove_var("WIND_RPC_MOCK") };
+    }
 
     /// 建一个「五笔 · 用户词库」的场（同 `state.rs` 各用例的建场方式）。
     fn user_dict_state() -> DictManagerState {

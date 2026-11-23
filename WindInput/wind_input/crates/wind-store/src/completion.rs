@@ -78,8 +78,10 @@ impl CompletionKind {
 }
 
 /// 一条学习记录。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct CompletionRecord {
+    /// 用户显式添加的补全，独立于自动学习开关，自动裁剪应保留。
+    pub manual: bool,
     /// 用过多少次。
     pub count: u32,
     /// 最后一次使用的 Unix 秒。
@@ -106,6 +108,7 @@ fn dec_rec(b: &[u8]) -> Option<CompletionRecord> {
         return None;
     }
     Some(CompletionRecord {
+        manual: false,
         count: u32::from_le_bytes(b[0..4].try_into().ok()?),
         last_used: i64::from_le_bytes(b[4..12].try_into().ok()?),
     })
@@ -159,7 +162,7 @@ fn file_fp(p: &std::path::Path) -> Option<String> {
         .map(|c| wind_userdata::text::fold::fingerprint(c.as_ref().map(|(b, _)| b.as_slice())))
 }
 
-pub(crate) const COMPLETION_COLUMNS: [&str; 4] = ["kind", "text", "count", "last_used"];
+pub(crate) const COMPLETION_COLUMNS: [&str; 5] = ["kind", "text", "count", "last_used", "manual"];
 
 type CompletionMap = std::collections::BTreeMap<(&'static str, String), CompletionRecord>;
 
@@ -180,7 +183,11 @@ fn parse_completion_table(
         match (kind, count, last) {
             (Some(k), Ok(count), Ok(last_used)) if !text.is_empty() => {
                 map.entry((k.as_str(), text.to_string()))
-                    .or_insert(CompletionRecord { count, last_used });
+                    .or_insert(CompletionRecord {
+                        count,
+                        last_used,
+                        manual: doc.get(r, "manual") == "true",
+                    });
             }
             _ => bad += 1,
         }
@@ -198,6 +205,7 @@ pub(crate) fn render_completion_table(map: &CompletionMap) -> String {
                 t.clone(),
                 r.count.to_string(),
                 r.last_used.to_string(),
+                r.manual.to_string(),
             ]
         })
         .collect();
@@ -288,18 +296,81 @@ impl Store {
         }
         let now = now_secs();
         let mut g = self.completions();
-        let r = g
-            .map
-            .entry((kind.as_str(), text.to_string()))
-            .or_insert(CompletionRecord {
-                count: 0,
-                last_used: 0,
-            });
+        let r = g.map.entry((kind.as_str(), text.to_string())).or_default();
         r.count = r.count.saturating_add(1);
         r.last_used = now;
         g.dirty = true;
         g.generation += 1;
         Ok(true)
+    }
+
+    /// 将记录标为手动补全。显式操作需要可靠落盘，失败时不向读者暴露未保存的值。
+    pub fn add_manual_completion(&self, kind: CompletionKind, text: &str) -> anyhow::Result<bool> {
+        anyhow::ensure!(
+            !text.is_empty() && text.chars().count() <= COMPLETION_TEXT_MAX_CHARS,
+            "补全文本须为 1 至 {COMPLETION_TEXT_MAX_CHARS} 个字符"
+        );
+        let _io = self.completion_io.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = self.completions();
+        anyhow::ensure!(!g.unreadable, "补全文件无法读取，请检查文件后重试");
+        let key = (kind.as_str(), text.to_owned());
+        let previous = g.map.get(&key).copied();
+        if previous.is_some_and(|rec| rec.manual) {
+            return Ok(false);
+        }
+        g.map.insert(
+            key.clone(),
+            CompletionRecord {
+                manual: true,
+                ..previous.unwrap_or_default()
+            },
+        );
+        let bytes = render_completion_table(&g.map).into_bytes();
+        if let Err(error) =
+            wind_userdata::text::fold::commit_text(&self.completion_path(), &bytes, g.fp.as_deref())
+        {
+            match previous {
+                Some(rec) => {
+                    g.map.insert(key, rec);
+                }
+                None => {
+                    g.map.remove(&key);
+                }
+            }
+            return Err(error);
+        }
+        g.fp = Some(wind_userdata::text::fold::fingerprint(Some(&bytes)));
+        g.dirty = false;
+        g.generation += 1;
+        Ok(true)
+    }
+
+    /// 给输入模式查询候选。手动项优先；关闭历史时只返回用户亲自添加的项。
+    pub fn completion_candidates(
+        &self,
+        kind: CompletionKind,
+        prefix: &str,
+        include_learned: bool,
+        limit: usize,
+    ) -> Vec<(String, CompletionRecord)> {
+        let k = kind.as_str();
+        let insensitive = kind != CompletionKind::UrlHistory;
+        let start = if insensitive { "" } else { prefix };
+        let typed = prefix.to_ascii_lowercase();
+        let mut rows: Vec<_> = self
+            .completions()
+            .map
+            .range((k, start.to_owned())..)
+            .take_while(|((key, text), _)| *key == k && text.starts_with(start))
+            .filter(|((_, text), rec)| {
+                (rec.manual || include_learned)
+                    && (!insensitive || text.to_ascii_lowercase().starts_with(&typed))
+            })
+            .map(|((_, text), rec)| (text.clone(), *rec))
+            .collect();
+        rows.sort_by(|a, b| b.1.manual.cmp(&a.1.manual).then_with(|| better(a, b)));
+        rows.truncate(limit);
+        rows
     }
 
     pub fn get_completion(
@@ -387,8 +458,9 @@ impl Store {
         if max == 0 {
             return Ok(0);
         }
-        let (mut all, total) = self.list_completions(kind, "", 0, 0)?;
-        if total <= max {
+        let (mut all, _) = self.list_completions(kind, "", 0, 0)?;
+        all.retain(|(_, rec)| !rec.manual);
+        if all.len() <= max {
             return Ok(0);
         }
         // 把 `keep` 提到队首再切，保留集恰好仍是 `max` 条。
@@ -401,7 +473,11 @@ impl Store {
         let mut g = self.completions();
         let mut removed = 0usize;
         for (text, _) in all.into_iter().skip(max) {
-            if g.map.remove(&(kind.as_str(), text)).is_some() {
+            if let std::collections::btree_map::Entry::Occupied(entry) =
+                g.map.entry((kind.as_str(), text))
+                && !entry.get().manual
+            {
+                entry.remove();
                 removed += 1;
             }
         }
@@ -410,7 +486,7 @@ impl Store {
         Ok(removed)
     }
 
-    /// 导出**全部** kind 为 jsonl（每行 `{"kind","text","count","last_used"}`）。
+    /// 导出全部补全项，保留手动标记、使用次数和最近使用时间。
     ///
     /// 不按 kind 分文件：备份包里多一个文件就多一处要在 `create_backup` /
     /// `restore_backup` / `RESTORE_SECTIONS` 三处同步登记的地方。
@@ -424,6 +500,7 @@ impl Store {
                     "text": text,
                     "count": rec.count,
                     "last_used": rec.last_used,
+                    "manual": rec.manual,
                 }))?);
                 out.push('\n');
             }
@@ -431,7 +508,8 @@ impl Store {
         Ok(out)
     }
 
-    /// 从 jsonl 导入。已存在的条目取 `max(count)` / `max(last_used)`。导入完立即落盘。
+    /// 合并备份时保留较大的使用次数、最近使用时间，以及任一方的手动标记。
+    /// 老版本未记录 `manual`，这类记录沿用自动学习语义。
     ///
     /// 返回 `(imported, skipped)`。非法行、未知 kind、超长文本都计入 skipped 而不报错
     /// ——备份还原时为一条坏记录中断整个还原，代价远大于丢掉那一条。
@@ -465,15 +543,18 @@ impl Store {
                 }
                 let count = v.get("count").and_then(|x| x.as_u64()).unwrap_or(1) as u32;
                 let last_used = v.get("last_used").and_then(|x| x.as_i64()).unwrap_or(0);
+                let manual = v.get("manual").and_then(|x| x.as_bool()).unwrap_or(false);
                 let r =
                     g.map
                         .entry((kind.as_str(), word.to_string()))
                         .or_insert(CompletionRecord {
                             count: 0,
                             last_used: 0,
+                            manual: false,
                         });
                 r.count = r.count.max(count);
                 r.last_used = r.last_used.max(last_used);
+                r.manual |= manual;
                 g.dirty = true;
                 g.generation += 1;
                 imported += 1;
@@ -590,6 +671,59 @@ mod tests {
 
     fn has(s: &Store, kind: CompletionKind, text: &str) -> bool {
         s.get_completion(kind, text).unwrap().is_some()
+    }
+
+    #[test]
+    fn manual_completion_is_idempotent_persistent_and_exempt_from_history_pruning() {
+        let tag = "manual_add";
+        let s = store(tag);
+        let kind = CompletionKind::UrlHistory;
+        let url = "https://example.test/kept";
+        let old = "https://example.test/old";
+        let recent = "https://example.test/new";
+        s.record_completion(kind, url).unwrap();
+        let learned = s.get_completion(kind, url).unwrap().unwrap();
+        assert!(s.add_manual_completion(kind, url).unwrap());
+        assert!(!s.add_manual_completion(kind, url).unwrap());
+        let saved = s.get_completion(kind, url).unwrap().unwrap();
+        assert_eq!(
+            saved,
+            CompletionRecord {
+                manual: true,
+                ..learned
+            }
+        );
+        let s = reopen(tag, s);
+        assert_eq!(s.get_completion(kind, url).unwrap(), Some(saved));
+        s.record_completion(kind, old).unwrap();
+        s.record_completion(kind, recent).unwrap();
+        s.prune_completions(kind, 1, Some(recent)).unwrap();
+        assert!(!has(&s, kind, old));
+        assert!(has(&s, kind, recent));
+        assert_eq!(
+            s.completion_candidates(kind, "https://", false, 7),
+            vec![(url.to_owned(), saved)]
+        );
+        assert_eq!(s.completion_candidates(kind, "https://", true, 7).len(), 2);
+        assert!(s.remove_completion(kind, url).unwrap());
+        assert!(
+            s.completion_candidates(kind, "https://", false, 7)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn failed_manual_completion_write_keeps_the_original_map() {
+        let s = store("manual_conflict");
+        let kind = CompletionKind::QuickHistory;
+        s.add_manual_completion(kind, "saved").unwrap();
+        let path = s.completion_path();
+        let existing = std::fs::read_to_string(&path).unwrap();
+        let external = format!("{existing}\n# changed externally\n");
+        std::fs::write(&path, &external).unwrap();
+        assert!(s.add_manual_completion(kind, "another").is_err());
+        assert!(!has(&s, kind, "another"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), external);
     }
 
     /// dict.reload 指名补全文件：手改的内容生效，不被内存里未落盘的旧版本盖掉。
@@ -1001,6 +1135,31 @@ mod tests {
             );
             assert_eq!(CompletionKind::from_key(kind.as_str()), Some(kind));
         }
+    }
+
+    #[test]
+    fn manual_completion_restore_keeps_manual_status_and_usage() {
+        let source = store("manual_backup");
+        let restored = store("manual_restore");
+        let old = r#"{"kind":"quick_history","text":"release notes","count":7,"last_used":65}"#;
+        let manual = r#"{"kind":"quick_history","text":"release notes","count":0,"last_used":0,"manual":true}"#;
+
+        source.import_completions_jsonl(manual).unwrap();
+        let backup = source.export_completions_jsonl().unwrap();
+        restored.import_completions_jsonl(old).unwrap();
+        let read = || {
+            restored
+                .get_completion(CompletionKind::QuickHistory, "release notes")
+                .unwrap()
+                .unwrap()
+        };
+        assert!(!read().manual);
+        assert_eq!(restored.import_completions_jsonl(&backup).unwrap(), (1, 0));
+        assert!(read().manual);
+        restored.import_completions_jsonl(old).unwrap();
+        let record = read();
+        assert!(record.manual);
+        assert_eq!((record.count, record.last_used), (7, 65));
     }
 
     #[test]

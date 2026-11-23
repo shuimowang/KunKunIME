@@ -4549,6 +4549,7 @@ dependencies = [
  "siphasher",
  "toml 0.8.23",
  "tracing",
+ "url",
  "wind-aux-code",
  "wind-bridge",
  "wind-candidate",
@@ -4629,7 +4630,7 @@ dependencies = [
 
 [[package]]
 name = "wind_setting"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "chrono",

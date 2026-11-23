@@ -310,6 +310,8 @@ pub struct DictManagerState {
 
     // ── 加/改词对话框（用户词库 / 短语）──
     pub edit_visible: Signal<bool>,
+    pub(crate) completion_add_visible: Signal<bool>,
+    pub(crate) completion_add_target: Signal<WordCategory>,
     pub edit_title: Signal<String>,
     /// 编码字段的标签（随类别）。
     pub edit_l_code: Signal<String>,
@@ -713,6 +715,8 @@ impl DictManagerState {
             import_boundary_pending: signal(0),
             import_boundary_rejected: signal(0),
             edit_visible: signal(false),
+            completion_add_visible: signal(false),
+            completion_add_target: signal(WordCategory::MailSuffix),
             edit_title: signal(String::new()),
             edit_l_code: signal("编码".to_string()),
             edit_l_text: signal("词条".to_string()),
@@ -1421,6 +1425,9 @@ impl DictManagerState {
             WordCategory::Temp => "还没有待转正的临时词。",
             WordCategory::Freq => "还没有选词频次记录。",
             WordCategory::Shadow => "还没有固定位置或隐藏候选的规则。",
+            WordCategory::MailSuffix | WordCategory::UrlHistory | WordCategory::QuickHistory => {
+                "还没有补全项，可点击「添加」。"
+            }
             WordCategory::CommonChars if self.only_modified.get() => "没有已修改的字符。",
             _ => "此列表暂无条目。",
         }
@@ -2824,6 +2831,10 @@ impl DictManagerState {
                 Some(f) => {
                     format!("确定删除{f} 的 {n} 条筛选结果？其余条目不受影响。此操作不可恢复。")
                 }
+                None if self.current_category().completion_form().is_some() => format!(
+                    "确定清空「{}」的全部 {n} 条补全？手动添加和自动记录的条目都会删除，此操作不可恢复。",
+                    self.current_spec().title
+                ),
                 None => format!("确定清空全部 {n} 条数据？此操作不可恢复。"),
             },
         };
@@ -2927,6 +2938,13 @@ impl DictManagerState {
     /// 打开"添加"对话框（清空字段，按类别设标签与默认权重）。
     pub fn open_add(&self) {
         let cat = self.current_category();
+        if let Some(form) = cat.completion_form() {
+            self.edit_text.set(String::new());
+            self.edit_title.set(form.title.to_string());
+            self.completion_add_target.set(cat);
+            self.completion_add_visible.set(true);
+            return;
+        }
         let (title, lc, lt) = match cat {
             WordCategory::UserDict | WordCategory::UserLib => ("添加词条", "编码", "词条"),
             WordCategory::PhraseUser => ("添加短语", "编码", "短语"),
@@ -2945,6 +2963,39 @@ impl DictManagerState {
         // 预填字段同样会 bump 版本号，不复位就会被自动出码判成「用户手改编码」。
         self.auto_encode.reseed();
         self.edit_visible.set(true);
+    }
+
+    /// 手动补全以文本本身为键。让 core 校验、归一化并区分新建与重复添加。
+    pub(crate) fn submit_completion(&self) {
+        if !self.completion_add_visible.get() || self.edit_text.get().trim().is_empty() {
+            return;
+        }
+        let cat = self.completion_add_target.get();
+        let reply = rpc::call_core(
+            spec_for(cat).rpc.add,
+            &json!({"text": self.edit_text.get()}),
+        );
+        match reply {
+            Ok(value) if value["ok"] == true => {
+                self.completion_add_visible.set(false);
+                if self.current_category() == cat {
+                    let query = self.search.get().trim().to_lowercase();
+                    let text = value["text"].as_str().unwrap_or_default();
+                    if !text.to_lowercase().contains(&query) {
+                        self.search.set(String::new());
+                    }
+                    *self.offset.borrow_mut() = 0;
+                    self.reload();
+                }
+                if value["added"] == true {
+                    self.notify_ok("已添加补全项");
+                } else {
+                    self.notify_info("这项补全已在列表中");
+                }
+            }
+            Ok(_) => self.notify_err("未能确认补全项已保存，请重试。"),
+            Err(err) => self.notify_err(&err),
+        }
     }
 
     /// 预填加词对话框（供加词小窗/快捷键使用）：定位 schema 所属域 → 用户词库子标签，

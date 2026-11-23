@@ -15,6 +15,7 @@
 //! 把 wind-transfer/fontdb 等重依赖挡在 Android 闭包之外。
 
 mod batch_remove;
+mod completion_input;
 mod theme_render;
 pub use theme_render::set_preview_build_id;
 mod user_dicts;
@@ -577,15 +578,18 @@ fn web_data_dispatch<H: WebDataRpc + ?Sized>(
         // RPC 再各写一遍等于把「同形态」这件事在第三处重新论证一遍。
         // 命名空间分开是给设置端用的——「清空网址历史」不该顺带抹掉邮箱学习。
         "mailSuffix.listPaged" => h.web_completion_list_paged(CompletionKind::EmailSuffix, params),
+        "mailSuffix.add" => h.web_completion_add(CompletionKind::EmailSuffix, params),
         "mailSuffix.delete" => h.web_completion_delete(CompletionKind::EmailSuffix, params),
         "mailSuffix.clear" => h.web_completion_clear(CompletionKind::EmailSuffix),
         "urlHistory.listPaged" => h.web_completion_list_paged(CompletionKind::UrlHistory, params),
+        "urlHistory.add" => h.web_completion_add(CompletionKind::UrlHistory, params),
         "urlHistory.delete" => h.web_completion_delete(CompletionKind::UrlHistory, params),
         "urlHistory.clear" => h.web_completion_clear(CompletionKind::UrlHistory),
         // 快捷输入历史（成员 `quick_input.history`），同一张表的第三个分区。
         "quickHistory.listPaged" => {
             h.web_completion_list_paged(CompletionKind::QuickHistory, params)
         }
+        "quickHistory.add" => h.web_completion_add(CompletionKind::QuickHistory, params),
         "quickHistory.delete" => h.web_completion_delete(CompletionKind::QuickHistory, params),
         "quickHistory.clear" => h.web_completion_clear(CompletionKind::QuickHistory),
 
@@ -2557,10 +2561,35 @@ pub trait WebDataRpc: WebDataHost {
         let items: Vec<Value> = page
             .into_iter()
             .map(|(text, rec)| {
-                json!({ "text": ui_text(&text), "count": rec.count, "lastUsed": rec.last_used })
+                json!({ "text": ui_text(&text), "count": rec.count, "lastUsed": rec.last_used, "manual": rec.manual })
             })
             .collect();
         Ok(json!({ "items": items, "total": total }))
+    }
+
+    fn web_completion_add(&self, kind: CompletionKind, params: &Value) -> anyhow::Result<Value> {
+        let text = completion_input::normalize(kind, str_param(params, "text")?)?;
+        if kind == CompletionKind::QuickHistory {
+            let first = text
+                .chars()
+                .next()
+                .expect("the normalizer requires nonempty content");
+            anyhow::ensure!(
+                first.is_ascii_graphic()
+                    || !self
+                        .reverse_lookup()
+                        .read()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .readings_of(first, 1, "")
+                        .is_empty(),
+                "请以能输入的英文、数字、符号或有拼音的汉字开头"
+            );
+        }
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let added = store.add_manual_completion(kind, &text)?;
+        Ok(json!({ "ok": true, "added": added, "text": text }))
     }
 
     /// 删一条补全学习数据。返回它本来在不在。

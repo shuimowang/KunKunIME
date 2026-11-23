@@ -1,8 +1,8 @@
 [custom]
 id = "kunkun-pinyin"
 name = "困困拼音"
-version = "0.1.1"
-base_version = "0.1.1"
+version = "0.1.2"
+base_version = "0.1.2"
 
 [schemas]
 hide = ["wubi86", "wubi86_pinyin"]

@@ -29,20 +29,20 @@ pub enum WordCategory {
     QuickFormat,
     /// 常用字覆盖（全局；只列**用户改过的字**，出厂那 8104 字不进列表）。
     CommonChars,
-    /// 邮箱后缀学习（全局；只读 + 逐条删 + 清空）。
+    /// 邮箱后缀（全局；手动添加、自动学习、逐条删和清空）。
     ///
     /// 记的是 `@` **之后**的域名（`qq.com`），不含用户名——所以它与网址历史虽然同属
     /// 「输入补全」这个域，隐私量级并不一样：core 那边前者跟随邮箱模式开关，后者另有
     /// 一道 `input.url.history_enabled`。
     MailSuffix,
-    /// 网址输入历史（全局；只读 + 逐条删 + 清空）。
+    /// 网址补全（全局；手动添加、可选学习、逐条删和清空）。
     ///
-    /// 出厂**不产生**任何数据（`input.url.history_enabled` 默认关），所以多数用户来到
+    /// 出厂**不自动记录**数据（`input.url.history_enabled` 默认关），所以多数用户来到
     /// 这个标签只会看到一张空表，那是对的。
     UrlHistory,
-    /// 快捷输入历史（全局；只读 + 逐条删 + 清空）。
+    /// 快捷输入补全（全局；手动添加、可选学习、逐条删和清空）。
     ///
-    /// 与网址历史同一张 core 表的第三个分区。出厂同样**不产生**数据：只有用户在「快捷
+    /// 与网址历史同一张 core 表的第三个分区。出厂同样**不自动记录**数据：只有用户在「快捷
     /// 候选来源」里勾上 `quick_input.history` 之后，快捷输入里上屏的字面文本才会记下来。
     QuickHistory,
     /// 字符集分类（全局；一行一个字符类，改的是**整个类**的属性）。
@@ -62,6 +62,36 @@ pub enum WordCategory {
     SysDicts,
     /// 一本系统词库的只读词条（服务端分页 / 搜索 / 排序；行操作「加进用户词库」）。
     SysEntries,
+}
+
+/// 手动添加补全时使用的标题、示例以及输入时调用该补全的方式。
+pub(crate) struct CompletionForm {
+    pub title: &'static str,
+    pub example: &'static str,
+    pub usage: &'static str,
+}
+
+impl WordCategory {
+    pub(crate) fn completion_form(self) -> Option<CompletionForm> {
+        Some(match self {
+            Self::MailSuffix => CompletionForm {
+                title: "添加邮箱后缀",
+                example: "例如 example.com",
+                usage: "在「输入规则 → 网址/邮箱输入」开启邮箱输入模式后，输入用户名和 @，再选择后缀。",
+            },
+            Self::UrlHistory => CompletionForm {
+                title: "添加网址",
+                example: "例如 https://docs.example.com/",
+                usage: "在「输入规则 → 网址/邮箱输入」开启网址输入模式后，输入网址开头（如 https）即可补全。",
+            },
+            Self::QuickHistory => CompletionForm {
+                title: "添加快捷输入内容",
+                example: "例如 请查收附件",
+                usage: "先在「输入规则 → 快捷输入」设置触发键。进入后按内容开头或全拼补全，如 qingcha 可选「请查收附件」。",
+            },
+            _ => return None,
+        })
+    }
 }
 
 /// 导航子标签的逻辑单元：短语两级 + 方案内四类。映射到 (标题, 类别, 短语系统标志)。
@@ -181,6 +211,8 @@ pub struct WordRow {
     pub text: String,
     pub weight: i64,
     pub count: i64,
+    /// 用户主动保存的补全项。
+    pub manual_completion: bool,
     pub position: i64,
     pub enabled: bool,
     pub kind: String,
@@ -314,6 +346,7 @@ impl WordRow {
                 WordRow {
                     text: s("text"),
                     count: i("count"),
+                    manual_completion: v.get("manual").and_then(Value::as_bool).unwrap_or(false),
                     last_used: fmt_last_used(v.get("lastUsed")),
                     ..Default::default()
                 }
@@ -1138,12 +1171,14 @@ const SPEC_MAIL_SUFFIX: CategorySpec = CategorySpec {
     client_search: false,
     columns: COLS_COMPLETION,
     ops: OpFlags {
+        add: true,
         remove: true,
         clear: true,
         ..OpFlags::NONE
     },
     rpc: RpcNames {
         list: "mailSuffix.listPaged",
+        add: "mailSuffix.add",
         remove: "mailSuffix.delete",
         clear: "mailSuffix.clear",
         ..RpcNames::EMPTY
@@ -1161,12 +1196,14 @@ const SPEC_URL_HISTORY: CategorySpec = CategorySpec {
     client_search: false,
     columns: COLS_COMPLETION,
     ops: OpFlags {
+        add: true,
         remove: true,
         clear: true,
         ..OpFlags::NONE
     },
     rpc: RpcNames {
         list: "urlHistory.listPaged",
+        add: "urlHistory.add",
         remove: "urlHistory.delete",
         clear: "urlHistory.clear",
         ..RpcNames::EMPTY
@@ -1188,12 +1225,14 @@ const SPEC_QUICK_HISTORY: CategorySpec = CategorySpec {
     client_search: false,
     columns: COLS_COMPLETION,
     ops: OpFlags {
+        add: true,
         remove: true,
         clear: true,
         ..OpFlags::NONE
     },
     rpc: RpcNames {
         list: "quickHistory.listPaged",
+        add: "quickHistory.add",
         remove: "quickHistory.delete",
         clear: "quickHistory.clear",
         ..RpcNames::EMPTY
@@ -2343,13 +2382,31 @@ mod tests {
         let quick = spec_for(WordCategory::QuickHistory);
         for s in [mail, url, quick] {
             assert!(!s.scoped_by_schema, "补全学习数据是全局的，不该带 schemaId");
-            assert!(s.ops.clear && s.ops.remove, "应支持清空与逐条删");
+            assert!(
+                s.ops.add && s.ops.clear && s.ops.remove,
+                "应支持添加、清空与逐条删"
+            );
             // 列里没有「编码」：这几类的 key 就是文本本身，core 也不返回 code 字段。
             assert!(
                 !s.columns.iter().any(|c| c.field == WordField::Code),
                 "补全学习数据没有编码这个概念"
             );
         }
+        assert_eq!(mail.rpc.add, "mailSuffix.add");
+        assert_eq!(url.rpc.add, "urlHistory.add");
+        assert_eq!(quick.rpc.add, "quickHistory.add");
+        let manual = WordRow::from_json(
+            WordCategory::UrlHistory,
+            &json!({"text": "https://example.com", "manual": true, "count": 0, "lastUsed": 0}),
+        );
+        assert!(manual.manual_completion);
+        assert_eq!(manual.cell_text(WordField::Count), "0");
+        assert_eq!(manual.cell_text(WordField::LastUsed), "—");
+        let learned = WordRow::from_json(
+            WordCategory::UrlHistory,
+            &json!({"text": "https://example.com"}),
+        );
+        assert!(!learned.manual_completion);
         assert_eq!(mail.rpc.clear, "mailSuffix.clear");
         assert_eq!(url.rpc.clear, "urlHistory.clear");
         assert_eq!(quick.rpc.clear, "quickHistory.clear");

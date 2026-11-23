@@ -2486,6 +2486,9 @@ pub(crate) fn mock_reply(method: &str, params: &Value) -> Value {
             { "code": "women", "text": "我们", "count": 7 }
         ]),
         // 设置页列表走分页版（`{items,total}`）；上面那条裸数组留给全量取用方。
+        "mailSuffix.add" | "urlHistory.add" | "quickHistory.add" => {
+            json!({"ok": true, "added": true, "text": params["text"]})
+        }
         "temp.listPaged" => json!({ "items": [
             { "code": "nihao", "text": "你好", "count": 3, "lastUsed": 1_758_000_000 },
             { "code": "women", "text": "我们", "count": 7, "lastUsed": 1_750_000_000 }
@@ -2623,7 +2626,8 @@ pub(crate) fn mock_reply(method: &str, params: &Value) -> Value {
             if id == "english" {
                 let schema: toml::Value = toml::from_str(include_str!(
                     "../../WindInput/data/schemas/english.schema.toml"
-                )).expect("内置英文方案须是有效 TOML");
+                ))
+                .expect("内置英文方案须是有效 TOML");
                 let mut value = serde_json::to_value(schema).unwrap();
                 value["followedBehavior"] = followed;
                 apply_mock_dict_overrides(id, &mut value);
