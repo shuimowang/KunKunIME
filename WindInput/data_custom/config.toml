@@ -21,3 +21,6 @@ select_keys_as_punctuation = true
 [keys.key_actions]
 semicolon = "none"
 "ctrl+shift+semicolon" = "rare_char"
+
+[ui.toolbar]
+items = ["mode", "-punct", "-full_width", "-s2t", "-t2s", "soft_keyboard", "settings"]
