@@ -60,7 +60,7 @@ pub fn all_tabs(app: &Rc<RefCell<AppState>>, state: &AppState) -> Vec<TabDef> {
         cards_tab_def("外观", appearance_page(app, &ui), ui),
         tab_def("统计", stats::build_page(state, &stats_nav), stats_nav),
         // ⚠ 顺序必须与 `cli::PAGES` 逐格一致，见那里的说明。
-        // 词库占满三栏工作区，入口保留与 cli::PAGES 相同的导航下标。
+        // 词库页由主内容区按需挂载，这里保留导航条目和稳定的深链下标。
         tab_def("词库", Element::leaf(), dict),
         tab_def("高级", advanced_page(app, state, &advanced), advanced),
         tab_def("关于", about_page(app, state), about),

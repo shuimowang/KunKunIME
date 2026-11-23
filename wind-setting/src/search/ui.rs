@@ -72,6 +72,8 @@ pub struct ResultRow {
 /// 故不属于任何窗口的 `SignalScope`，主窗关掉再开也不会失效。
 #[derive(Clone)]
 pub struct SearchState {
+    /// 选择普通设置项时，先显示目标页面再交给滚动锚点定位。
+    dictionary_visible: Signal<bool>,
     /// 索引：启动构建一次，之后只读。
     entries: Rc<Vec<SearchEntry>>,
     /// 运行期过滤：返回 false 的条目**此刻**不列出来（用户精简清单藏掉的）。
@@ -100,8 +102,9 @@ impl SearchState {
         self.entries = Rc::new(build_index(manifest));
     }
 
-    pub fn new(manifest: &Manifest) -> Self {
+    pub fn new(manifest: &Manifest, dictionary_visible: Signal<bool>) -> Self {
         Self {
+            dictionary_visible,
             entries: Rc::new(build_index(manifest)),
             filter: Rc::new(RefCell::new(None)),
             query: signal(String::new()),
@@ -210,6 +213,9 @@ fn commit(st: &SearchState, tab: Signal<usize>, jmp: Signal<Option<JumpRequest>>
     if !matches!(t, JumpTarget::SchemaLevel { .. }) && !st.hint.get().is_empty() {
         st.hint.set(String::new());
     }
+    if !matches!(t, JumpTarget::Dictionary) && st.dictionary_visible.get() {
+        st.dictionary_visible.set(false);
+    }
     jump::request(tab, jmp, t);
     st.dismiss();
 }
@@ -269,7 +275,8 @@ pub fn build_search_box(
     let clear_st = st.clone();
     let click_st = st.clone();
 
-    let input = Element::text_input(query, "搜索设置 · Ctrl+F")
+    let input = Element::text_input(query, "搜索设置")
+        .tooltip("搜索设置（Ctrl+F）")
         // 前置图标区留白，图标本身由下面的 SVG 叠上去（见 `icon` 的说明）。
         .leading_icon(' ')
         .width(BOX_W)
@@ -600,7 +607,7 @@ mod tests {
     use super::*;
 
     fn state() -> SearchState {
-        SearchState::new(&Manifest::from_embedded())
+        SearchState::new(&Manifest::from_embedded(), signal(false))
     }
 
     #[test]
@@ -733,6 +740,22 @@ mod tests {
             Some(JumpTarget::Dictionary)
         ));
         assert!(!st.open.get());
+    }
+
+    #[test]
+    fn unified_window_settings_search_leaves_dictionary_even_for_last_settings_tab() {
+        let st = state();
+        st.dictionary_visible.set(true);
+        let tab = signal(2);
+        let jmp = signal(None);
+        let target = JumpTarget::Row {
+            tab: 2,
+            anchor: "keys.select_key_groups".into(),
+        };
+        commit(&st, tab, jmp, target);
+        assert!(!st.dictionary_visible.get());
+        assert_eq!(tab.get(), 2);
+        assert!(jmp.get().is_some());
     }
 
     #[test]

@@ -102,7 +102,8 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
     // 静态色控件（图标 tint/渐变/淡底）用它做亮暗双态，须在页面构建前注册。
     crate::widgets::init_dark_sig(dark);
 
-    let titlebar = build_titlebar("设置");
+    let titlebar = build_titlebar("设置与词库");
+    let dictionary_visible = app.borrow().dictionary_visible;
 
     // 快速导入右键菜单：挂在左侧栏与底栏的空白处（真机反馈：挂满整个内容区太泛，
     // 所有条目上都会弹）。内容区不再挂，页内元素的自有菜单不受影响。
@@ -231,14 +232,25 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
         .height_match()
         .bg_role(Role::Divider)
         .visible_when(show_subnav);
+    let settings_content = Element::row()
+        .fill()
+        .child(subnav_col)
+        .child(subnav_divider)
+        .child(content)
+        .visible_when(move || !dictionary_visible.get());
+    let (dictionary_content, dictionary_dialogs) = dictionary_surfaces(app, dictionary_visible);
     let body = Element::row()
         .fill()
         .weight(1.0)
         .child(sidebar)
         .child(vdivider)
-        .child(subnav_col)
-        .child(subnav_divider)
-        .child(content);
+        .child(
+            Element::stack()
+                .fill()
+                .weight(1.0)
+                .child(settings_content)
+                .child(dictionary_content),
+        );
 
     // 底栏右键 = 侧栏那份导入菜单 + 「界面细节…」。后者**只挂底栏**：它是调设置窗自己外观的
     // 入口，与侧栏的导航 / 导入语义无关（用户 2026-10-14 明确要求左侧导航不加）。
@@ -266,7 +278,6 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
         .child(Element::divider())
         .child(footer);
 
-    let dictionary_visible = app.borrow().dictionary_visible;
     let mut settings_layer = Element::stack()
         .fill()
         .visible_when(move || !dictionary_visible.get())
@@ -327,36 +338,16 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
     // 捕获层必须在浮层**之前**（在其下层），否则点浮层里的项会先被它吃掉。
     let (search_scrim, search_overlay) =
         crate::search::ui::build_results_overlay(&search_state, tab_sig, jump_sig);
-    settings_layer = settings_layer.child(search_scrim).child(search_overlay);
-    // 查询重算和跳转监听都挂到设置层。
-    //
-    // 二者都挂**根**而不是侧栏：侧栏那个 col 有 `spacing`，而 spacing 是加在每对相邻
-    // 子节点之间的，塞进去等于把搜索框与导航的间距加了三遍（见上面 sidebar 处的说明）。
-    settings_layer = settings_layer.child(crate::search::ui::build_query_watcher(&search_state));
-    // ⚠ jump_sink 必须排在**锚点之后**（锚点都在 main_col 里，而它挂在根的末尾）。
-    // 响应式哨兵按树序派发：排到内容区之前的话，这一帧它读到的还是锚点写入之前的值，
-    // 开框要白等一帧。同 conflict_watcher 与 toast_sink 之间的先后讲究。
-    //
-    // 它管的是锚点管不了的两件事：跳转目标在对话框里时把框打开（第二跳才落到框内那
-    // 一行），以及方案级目标写出指示条文案。
-    settings_layer = settings_layer.child(crate::search::ui::build_jump_sink(
-        jump_sig,
-        search_state.hint,
-        app.borrow().fields.clone(),
-        {
-            let app = app.clone();
-            move || app.borrow().show_dictionary()
-        },
-    ));
-    // 两页各自保有导航、滚动位置和未完成的表单，共用全窗的文件导入和关闭提示。
     let (protocol_overwrite, protocol_remove) = build_protocol_confirm_dialogs(app);
     let (assoc_overwrite, assoc_remove) = build_assoc_confirm_dialogs(app);
     let mut root = Element::stack()
         .fill()
         .bg_role(Role::Bg)
-        .child(main_col.visible_when(move || !dictionary_visible.get()))
+        .child(main_col)
+        .child(search_scrim)
+        .child(search_overlay)
         .child(settings_layer)
-        .child(dictionary_workspace(app, dictionary_visible))
+        .child(dictionary_dialogs)
         .child(config_import_dialog)
         .child(crate::dialogs::schema_manager::build_import_confirm_dialog(
             app,
@@ -372,6 +363,17 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
         .child(crate::wizard::view::build_wizard_dialog(app))
         .child(build_conn_failed_dialog(app, conn_failed))
         .child(build_failed_save_exit(app, discard_on_error));
+    // 搜索在两种内容页上都可用；跳转监听排在设置锚点之后。
+    root = root.child(crate::search::ui::build_query_watcher(&search_state));
+    root = root.child(crate::search::ui::build_jump_sink(
+        jump_sig,
+        search_state.hint,
+        app.borrow().fields.clone(),
+        {
+            let app = app.clone();
+            move || app.borrow().show_dictionary()
+        },
+    ));
     // 按键冲突实时监听：每帧刷新 state.conflict（驱动常驻警告条），并对新出现的
     // 「可共存」组合写 feedback 弹一次说明 toast。
     //
@@ -387,8 +389,8 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
     root
 }
 
-/// 首次使用时再建词库界面，之后两页共享同一棵树。返回不会重建表格或丢失滚动位置。
-fn dictionary_workspace(app: &Rc<RefCell<AppState>>, visible: Signal<bool>) -> Element {
+/// 首次打开才构建词库；内容页保留表格位置，全窗对话框共用同一份词库状态。
+fn dictionary_surfaces(app: &Rc<RefCell<AppState>>, visible: Signal<bool>) -> (Element, Element) {
     let mounted = signal(visible.get());
     let mount_on_entry = crate::pages::dict::reactive::reactive_effect(
         move || visible.version(),
@@ -398,22 +400,30 @@ fn dictionary_workspace(app: &Rc<RefCell<AppState>>, visible: Signal<bool>) -> E
             }
         },
     );
-    let app = app.clone();
-    Element::stack()
+    let mgr = app.borrow().dict_mgr.clone();
+    let page_app = app.clone();
+    fn lazy(mounted: Signal<bool>, build: impl Fn() -> Element + 'static) -> Element {
+        Element::switcher(mounted, move |ready| {
+            let body = if ready { build() } else { Element::leaf() };
+            body.transition(windui::ui::presence::Presence::none())
+        })
+        .fill()
+    }
+    let page = Element::stack()
         .fill()
         .visible_when(move || visible.get())
         .child(mount_on_entry)
-        .child(
-            Element::switcher(mounted, move |ready| {
-                if ready {
-                    crate::dict_window::build_content(app.clone())
-                } else {
-                    Element::leaf()
-                }
-                .transition(windui::ui::presence::Presence::none())
-            })
-            .fill(),
-        )
+        .child(lazy(mounted, move || {
+            crate::dict_window::build_content(page_app.clone())
+        }));
+    let modal = mgr.clone();
+    let dialogs = Element::stack()
+        .fill()
+        .visible_when(move || visible.get() && modal.has_open_dialog())
+        .child(lazy(mounted, move || {
+            crate::pages::dict::build_dict_dialogs(&mgr)
+        }));
+    (page, dialogs)
 }
 
 /// 重建设置树前的登记复位:`fields.reset()` + 重注册「不在页面构建里注册的那批」
@@ -517,9 +527,10 @@ fn build_nav(
 ) -> Element {
     use crate::icons::{CHIP_PX, ICON_PX, nav_icon, tinted_role};
 
-    // 动作项下标经 `page_to_index` 取，不写字面量 4：PAGES 与 `all_tabs` 的顺序本来就
+    // 词库页下标经 `page_to_index` 取，不写字面量 4：PAGES 与 `all_tabs` 的顺序本来就
     // 靠约定对齐，这里再手抄一个下标，将来插一页就会指到隔壁那项上。
     let dict_idx = crate::cli::page_to_index("dict");
+    let dictionary_visible = app.borrow().dictionary_visible;
 
     // 顶上那行「设置」小标题已撤：窗口标题栏就写着「设置」，侧栏里再说一遍是重复，
     // 白占 26px 还把导航整体往下推。二级导航加进来之后左边有两栏清单，少一层无谓的
@@ -547,6 +558,13 @@ fn build_nav(
         }
         let svg = nav_icon(name);
         let is_dict = dict_idx == Some(i);
+        let selected = move || {
+            if dictionary_visible.get() {
+                is_dict
+            } else {
+                sel.get() == i
+            }
+        };
 
         // ── 选中态（渐变图标块 + accent 文字 + 左指示条）──
         //
@@ -600,7 +618,7 @@ fn build_nav(
                     .corner(1.5)
                     .bg_role(Role::Accent),
             )
-            .visible_when(move || sel.get() == i && li.get() == crate::look::nav::BAR);
+            .visible_when(move || selected() && li.get() == crate::look::nav::BAR);
         let selected_row = |bg_solid: bool| {
             let row = Element::row()
                 .width_match()
@@ -629,9 +647,9 @@ fn build_nav(
             )
         };
         let on = selected_row(false)
-            .visible_when(move || sel.get() == i && li.get() != crate::look::nav::SOLID);
+            .visible_when(move || selected() && li.get() != crate::look::nav::SOLID);
         let on_solid = selected_row(true)
-            .visible_when(move || sel.get() == i && li.get() == crate::look::nav::SOLID);
+            .visible_when(move || selected() && li.get() == crate::look::nav::SOLID);
 
         // ── 未选中态（可点击；图标取弱化正文色，随主题）──
         let app_for_click = app.clone();
@@ -641,6 +659,7 @@ fn build_nav(
                 if is_dict {
                     app_for_click.borrow().show_dictionary();
                 } else {
+                    app_for_click.borrow().return_to_settings();
                     sel.set(i);
                 }
             })
@@ -666,15 +685,14 @@ fn build_nav(
                     .max_lines(1)
                     .height(18),
             );
-        let off = off.visible_when(move || sel.get() != i);
-        let mut item = Element::stack().width_match().height(36);
-        if !is_dict {
-            item = item.child(on).child(on_solid);
-        }
-        item = item.child(off);
-        if !is_dict {
-            item = item.child(indicator);
-        }
+        let off = off.visible_when(move || !selected());
+        let item = Element::stack()
+            .width_match()
+            .height(36)
+            .child(on)
+            .child(on_solid)
+            .child(off)
+            .child(indicator);
         col = col.child(item);
     }
     Element::scroll().fill().child(col)
@@ -1002,11 +1020,12 @@ fn build_footer(
         (s.stats_mgr.clone(), s.tab)
     };
     let stats_tab = crate::cli::page_to_index("stats");
+    let dictionary_visible = app.borrow().dictionary_visible;
     let refresh_btn = Element::button("刷新数据")
         .small()
         .outline_soft()
         .on_click(move |_| stats_mgr.reload())
-        .visible_when(move || stats_tab == Some(tab_sig.get()));
+        .visible_when(move || !dictionary_visible.get() && stats_tab == Some(tab_sig.get()));
 
     let reset_confirm = app.borrow().reset_confirm;
     let reset_btn = Element::button("恢复本页")
@@ -1092,8 +1111,8 @@ fn build_footer(
         .child(autosave_note)
         .child(retry_btn)
         .child(refresh_btn)
-        .child(reset_btn)
-        .child(reload_btn)
+        .child(reset_btn.visible_when(move || !dictionary_visible.get()))
+        .child(reload_btn.visible_when(move || !dictionary_visible.get()))
         .child(
             Element::button("关闭")
                 .small()
@@ -1630,20 +1649,32 @@ mod tests {
     use crate::state::AppState;
 
     #[test]
-    fn unified_window_sidebar_and_back_preserve_both_pages() {
+    fn unified_window_keeps_the_same_navigation_and_title_on_every_page() {
         use super::*;
         use windui::core::{NodeId, Tree};
         use windui::event::{MouseButton, PointerEvent, PointerKind};
         use windui::geometry::{Point, Size};
 
-        fn locate(tree: &Tree, id: NodeId, text: &str) -> Option<Point> {
+        fn count_titlebars(tree: &Tree, id: NodeId) -> usize {
+            let node = tree.get(id).unwrap();
+            if !node.effective_visible() {
+                return 0;
+            }
+            usize::from(node.window_drag)
+                + node
+                    .children
+                    .iter()
+                    .map(|&child| count_titlebars(tree, child))
+                    .sum::<usize>()
+        }
+        fn locate(tree: &Tree, id: NodeId, text: &str) -> Option<NodeId> {
             let node = tree.get(id)?;
             if !node.effective_visible() {
                 return None;
             }
-            let b = tree.abs_bounds(id);
-            if b.w > 0 && b.h > 0 && node.widget.display_text().as_deref() == Some(text) {
-                return Some(Point::new(b.x + b.w / 2, b.y + b.h / 2));
+            let bounds = tree.abs_bounds(id);
+            if bounds.w > 0 && bounds.h > 0 && node.widget.display_text().as_deref() == Some(text) {
+                return Some(id);
             }
             node.children
                 .iter()
@@ -1657,10 +1688,7 @@ mod tests {
                     &mut hover,
                     &mut capture,
                 );
-                assert!(
-                    !result.close && result.open_windows.is_empty(),
-                    "导航应在本窗切页"
-                );
+                assert!(!result.close && result.open_windows.is_empty());
             }
             tree.layout_root(Size::new(1000, 700), &mut windui::text::NullTextEngine);
         }
@@ -1670,25 +1698,61 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::set_var("WIND_RPC_MOCK", "1") };
         let app = Rc::new(RefCell::new(AppState::empty()));
-        let settings_tab = crate::cli::page_to_index("keys").unwrap();
-        app.borrow().tab.set(settings_tab);
+        let keys_tab = crate::cli::page_to_index("keys").unwrap();
+        let input_tab = crate::cli::page_to_index("input").unwrap();
+        app.borrow().tab.set(keys_tab);
         let mut tree = Tree::new();
         let root = build(&app).width(1000).height(700).build(&mut tree);
         tree.root = Some(root);
         tree.layout_root(Size::new(1000, 700), &mut windui::text::NullTextEngine);
 
-        let dictionary_nav = locate(&tree, root, "词库管理").expect("设置侧栏的词库入口");
-        click(&mut tree, dictionary_nav);
+        let main = tree.get(root).unwrap().children[0];
+        let title = tree.get(main).unwrap().children[0];
+        let body = tree.get(main).unwrap().children[2];
+        let sidebar = tree.get(body).unwrap().children[0];
+        let sidebar_bounds = tree.abs_bounds(sidebar);
+        let primary = |tree: &Tree, label| locate(tree, sidebar, label).unwrap();
+        let nav_pos = |tree: &Tree, label| {
+            let b = tree.abs_bounds(primary(tree, label));
+            Point::new(b.x + b.w / 2, b.y + b.h / 2)
+        };
+        let nav_weight =
+            |tree: &Tree, label| tree.get(primary(tree, label)).unwrap().style.font_weight;
+        let dict = nav_pos(&tree, "词库管理");
+        let keys = nav_pos(&tree, "按键设置");
+        let input = nav_pos(&tree, "输入规则");
+        let check_chrome = |tree: &Tree| {
+            assert_eq!(count_titlebars(tree, root), 1);
+            assert!(locate(tree, title, "设置与词库").is_some());
+            assert_eq!(tree.abs_bounds(sidebar), sidebar_bounds);
+            assert_eq!(nav_pos(tree, "词库管理"), dict);
+            assert_eq!(nav_pos(tree, "输入规则"), input);
+            assert_eq!(nav_pos(tree, "按键设置"), keys);
+        };
+        check_chrome(&tree);
+        assert_eq!(nav_weight(&tree, "按键设置"), 600);
+        assert_eq!(nav_weight(&tree, "词库管理"), 500);
+        click(&mut tree, dict);
+        check_chrome(&tree);
         assert!(app.borrow().dictionary_visible.get());
+        assert_eq!(nav_weight(&tree, "词库管理"), 600);
+        assert_eq!(nav_weight(&tree, "按键设置"), 500);
         let mgr = app.borrow().dict_mgr.clone();
         mgr.search.set("人物".into());
-        // 词库左栏底部的返回按钮，右边是同宽的刷新按钮。
-        click(&mut tree, Point::new(45, 672));
+
+        // 在词库中直接点刚才的设置页，即便 tab 数值相同也必须切回。
+        click(&mut tree, keys);
         assert!(!app.borrow().dictionary_visible.get());
-        assert_eq!(app.borrow().tab.get(), settings_tab);
-        click(&mut tree, dictionary_nav);
+        assert_eq!(app.borrow().tab.get(), keys_tab);
+        click(&mut tree, dict);
         assert_eq!(mgr.search.get(), "人物");
-        assert!(app.borrow().dictionary_visible.get());
+        // 点击不同设置页直接抵达，不需要先执行返回。
+        click(&mut tree, input);
+        check_chrome(&tree);
+        assert!(!app.borrow().dictionary_visible.get());
+        assert_eq!(app.borrow().tab.get(), input_tab);
+        assert_eq!(nav_weight(&tree, "输入规则"), 600);
+        assert_eq!(nav_weight(&tree, "词库管理"), 500);
         unsafe { std::env::remove_var("WIND_RPC_MOCK") };
     }
 
@@ -1783,10 +1847,12 @@ mod tests {
         let root = super::build(&app).width(w).height(hgt).build(&mut tree);
         tree.root = Some(root);
         tree.layout_root(Size::new(w, hgt), &mut windui::text::NullTextEngine);
-        // 根 stack → 主列 [标题栏, 分隔线, 主体, 分隔线, 底栏]；主体 = [侧栏, 分隔线, 二级导航, 分隔线, 内容]。
+        // 公共主导航右侧是工作区，设置页负责自己的二级导航和内容区。
         let main_col = tree.get(root).unwrap().children[0];
         let body = tree.get(main_col).unwrap().children[2];
-        let content = *tree.get(body).unwrap().children.last().unwrap();
+        let workspace = tree.get(body).unwrap().children[2];
+        let settings_page = tree.get(workspace).unwrap().children[0];
+        let content = *tree.get(settings_page).unwrap().children.last().unwrap();
         tree.abs_bounds(content).x
     }
 

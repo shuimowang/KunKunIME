@@ -1168,7 +1168,8 @@ impl AppState {
             false,
         );
         let manifest_user_hide_key = (user_hide.is_active(), user_hide.selectors());
-        let search = crate::search::SearchState::new(&manifest);
+        let dictionary_visible = signal(false);
+        let search = crate::search::SearchState::new(&manifest, dictionary_visible);
         // 方案设置对话框里的方案级项复用全局 key，也要按同一份折叠结果藏。
         schema_mgr.set_manifest(Rc::new(manifest.clone()));
         // 用户精简清单是活配置（运行期可改），方案对话框要现读它，不能只看清单快照。
@@ -1245,7 +1246,7 @@ impl AppState {
             conflict: signal(String::new()),
             schema_mgr,
             dict_mgr: DictManagerState::new(),
-            dictionary_visible: signal(false),
+            dictionary_visible,
             main_window_closed: signal(false),
             log_pack_tx: Rc::new(RefCell::new(None)),
             log_pack_busy: Rc::new(Cell::new(false)),

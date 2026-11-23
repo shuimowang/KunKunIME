@@ -131,13 +131,11 @@ impl SelectedRowKey {
 /// 词库管理状态（Signal 为 Copy，可直接 Clone 进闭包）。
 #[derive(Clone)]
 pub struct DictManagerState {
-    /// 数据域：0 = 命令短语（全局）；>=1 = `schemas[idx-1]`。
+    /// 域下标对应全局词库和折叠后的各个输入方案，见 `domain_slot`。
     pub domain: Signal<usize>,
     /// 方案域下的子标签：0=用户词库 1=临时词库 2=词频 3=候选调整。
     pub sub_tab: Signal<usize>,
-    /// 数据域下拉的响应式选项（首项"命令短语"，其后各方案；set_schemas 后填充）。
-    pub domain_items: Signal<Vec<String>>,
-    /// 数据域下拉的富内容选项（label + 引擎类型徽章）；与 `domain_items` 同序同步刷新。
+    /// 可切换的数据域，选项下标对应 domain。
     pub domain_rich_items: Signal<Vec<DropdownItem>>,
     /// 可选方案列表（来自 `AppState.schemas`）。
     pub schemas: Rc<RefCell<Vec<SchemaInfo>>>,
@@ -160,12 +158,6 @@ pub struct DictManagerState {
     pub display_rows: Rc<RefCell<Vec<WordRow>>>,
     /// 表格结构版本（单元素，导航变化时递增）：列集随类别变，须整表重建。
     pub table_epoch: Signal<Vec<u64>>,
-    /// 域列表版本（单元素，`set_schemas_no_reload` 时递增）：驱动词库窗左栏整体重建。
-    ///
-    /// 与 `domain_items` 分开而不是直接把左栏挂在它上面：`host_signal` 是按 Vec 的**每个
-    /// 元素**调一次构建器的，挂多元素信号会得到 N 份完整列表叠在一起。同 `table_epoch`，
-    /// 这里要的是「变了就整体重建」，故用单元素计数器。
-    pub domain_epoch: Signal<Vec<u64>>,
     /// 中栏版本（单元素）：切数据域、方案集或分库列表变化时递增，中栏整体重建。
     pub nav_epoch: Signal<Vec<u64>>,
     /// 右栏标题的第一段（类别或分组名：「用户词库」「临时词库」「系统词库」…），每次重载时按当前类别重算。
@@ -651,10 +643,12 @@ impl DictManagerState {
         Self {
             domain: signal(0),
             sub_tab: signal(0),
-            domain_items: signal(vec!["命令短语".to_string()]),
-            domain_rich_items: signal(vec![
-                DropdownItem::new("命令短语").badge("全局", Intent::Neutral),
-            ]),
+            domain_rich_items: signal(
+                GLOBAL_DOMAIN_LABELS
+                    .iter()
+                    .map(|name| DropdownItem::new(*name).badge("全局", Intent::Neutral))
+                    .collect(),
+            ),
             schemas: Rc::new(RefCell::new(Vec::new())),
             sub_tab_memory: Rc::new(RefCell::new(HashMap::new())),
             last_domain: Rc::new(Cell::new(0)),
@@ -664,7 +658,6 @@ impl DictManagerState {
             table_rows: signal(vec![]),
             display_rows: Rc::new(RefCell::new(Vec::new())),
             table_epoch: signal(vec![0]),
-            domain_epoch: signal(vec![0]),
             nav_epoch: signal(vec![0]),
             pane_title: signal(String::new()),
             pane_subtitle: signal(String::new()),
@@ -1120,7 +1113,7 @@ impl DictManagerState {
         v
     }
 
-    /// 数据域下拉的富内容选项：方案名为主文本、引擎类型为尾随徽章（拼音=强调色，其余=中性）。
+    /// 范围下拉用方案名作为主文本，仅在引擎类型与方案名不同时显示类型。
     /// 全局域一律标"全局"徽章。与 [`Self::domain_labels`] 同序、同源
     /// （[`GLOBAL_DOMAIN_LABELS`]）——两处各写一份字面量正是上一次加全局域时的漏网点。
     pub fn domain_rich_items(&self) -> Vec<DropdownItem> {
@@ -1135,9 +1128,14 @@ impl DictManagerState {
                 .split_once(" · ")
                 .map(|(n, _)| n.to_string())
                 .unwrap_or_else(|| e.label.clone());
-            // 每个方案域都带引擎类型徽章（统一中性色，不用强调色以免拼音一枝独秀）。
             let tag = engine_label(&e.kind);
-            v.push(DropdownItem::new(name).badge(tag, Intent::Neutral));
+            let show_tag = name != tag;
+            let item = DropdownItem::new(name);
+            v.push(if show_tag {
+                item.badge(tag, Intent::Neutral)
+            } else {
+                item
+            });
         }
         v
     }
@@ -1552,7 +1550,6 @@ impl DictManagerState {
     /// 注入方案列表但不触发 reload（供无表格视图的场景，如加词小窗，避免多余 list RPC）。
     pub(crate) fn set_schemas_no_reload(&self, schemas: &[SchemaInfo]) {
         *self.schemas.borrow_mut() = schemas.to_vec();
-        self.domain_items.set(self.domain_labels());
         self.domain_rich_items.set(self.domain_rich_items());
         // 导入导出的目标下拉与域下拉同源，只是去掉两个全局域（它们各有自己的导入导出流：
         // 短语走原生对话框、快捷输入走 quick.* 全局 RPC，都不是这套按方案分段的目标）。
@@ -1567,9 +1564,6 @@ impl DictManagerState {
             self.domain.set(DOMAIN_PHRASE);
         }
         self.last_domain.set(self.domain.get());
-        // 域集合已换一批，词库窗左栏须整体重建（新方案要出现、删掉的要消失）。
-        let epoch = self.domain_epoch.get().first().copied().unwrap_or(0);
-        self.domain_epoch.set(vec![epoch + 1]);
         self.bump_nav_epoch();
     }
 
@@ -8639,15 +8633,10 @@ mod tests {
                 .map(|(t, _)| t.as_str()),
             Some("码表")
         );
-        // 拼音域也带徽章，保持统一。
         assert_eq!(items[GLOBAL_DOMAINS + 1].label, "拼音");
-        assert_eq!(
-            items[GLOBAL_DOMAINS + 1]
-                .badge
-                .as_ref()
-                .map(|(t, _)| t.as_str()),
-            Some("拼音"),
-            "拼音域也应带引擎徽章以保持统一"
+        assert!(
+            items[GLOBAL_DOMAINS + 1].badge.is_none(),
+            "不重复显示拼音标签"
         );
     }
 }

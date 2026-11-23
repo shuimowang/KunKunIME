@@ -5,38 +5,32 @@ use std::rc::Rc;
 
 use windui::prelude::*;
 
-use crate::pages::dict::sidebar::build_sidebar;
-use crate::pages::dict::{build_dict_dialogs, view::build_page_for};
+use crate::pages::dict::{category_nav::build_category_nav, view::build_page_for};
 use crate::state::AppState;
 
-/// 数据域、类别与词条表共占整个工作区，返回时恢复上次的设置页面。
+/// 在固定主导航右侧显示当前范围的分类与词表。
 pub fn build_content(app: Rc<RefCell<AppState>>) -> Element {
     let mgr = app.borrow().dict_mgr.clone();
-    let vdivider = || {
-        Element::leaf()
-            .width(1)
-            .height_match()
-            .bg_role(Role::Divider)
-    };
-
     let app_menu = app.clone();
     let back = app.clone();
-    let back_button = Element::button("← 设置")
+    let back_button = Element::button("返回上页")
         .small()
         .outline_soft()
+        .tooltip("回到进入词库前的设置页")
         .on_click(move |_| back.borrow().return_to_settings());
-    let sidebar = build_sidebar(&mgr, back_button)
+    let sidebar = build_category_nav(&mgr, back_button)
         .on_context_menu(move || crate::pages::config_import::dictionary_import_menu(&app_menu));
 
     let body = Element::row()
         .fill()
         .weight(1.0)
         .child(sidebar)
-        .child(vdivider())
-        .child(crate::pages::dict::category_nav::build_category_nav(&mgr))
-        .child(vdivider())
-        // 右侧沿用词库页原有的子标签/工具栏/表格/分页。显式 `weight(1.0)` 而不只靠
-        // `fill()`：在 row 里没有权重的话它按内容宽度收缩，表格会缩成窄窄一条。
+        .child(
+            Element::leaf()
+                .width(1)
+                .height_match()
+                .bg_role(Role::Divider),
+        )
         .child(build_page_for(mgr.clone()).weight(1.0));
 
     let current = app.clone();
@@ -47,18 +41,7 @@ pub fn build_content(app: Rc<RefCell<AppState>>) -> Element {
         .text_align(Align::Center)
         .fg_role(Role::TextMuted)
         .visible_when(move || app.borrow().awaiting_dict_target());
-    let main_col = Element::col()
-        .fill()
-        .child(crate::shell::build_titlebar("词库管理"))
-        .child(Element::divider())
-        .child(body)
-        .child(loading);
-
-    Element::stack()
-        .fill()
-        .bg_role(Role::Bg)
-        .child(main_col)
-        .child(build_dict_dialogs(&mgr))
+    Element::col().fill().child(body).child(loading)
 }
 
 #[cfg(test)]
@@ -68,7 +51,7 @@ mod tests {
     use windui::event::{MouseButton, PointerEvent, PointerKind};
     use windui::geometry::{Point, Size};
 
-    const W: i32 = 800;
+    const W: i32 = crate::MAIN_MIN_W - crate::shell::NAV_W - 1;
     const H: i32 = 600;
 
     fn build_tree(app: &Rc<RefCell<AppState>>) -> Tree {
@@ -95,7 +78,7 @@ mod tests {
         let app = Rc::new(RefCell::new(AppState::empty()));
         let mut tree = build_tree(&app);
 
-        // x=100 在左栏内（宽 200），y=300 已在条目列表下方的空白处。
+        // 分类栏空白区域与设置侧栏使用相同的导入菜单。
         let (mut hover, mut capture) = (None, None);
         let res = tree.dispatch_pointer(
             PointerEvent::single(PointerKind::Down, Point::new(100, 300), MouseButton::Right),
@@ -140,37 +123,48 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// 接线守护：三栏各就各位，左栏条目与中栏节点右击各弹自己的菜单（而不是左栏空白处那份
-    /// 快速导入菜单，也不是什么都不弹）。
     #[test]
-    fn three_columns_and_their_context_menus() {
+    fn unified_window_dictionary_uses_one_context_sidebar() {
+        use windui::core::NodeId;
+        fn visible_label(tree: &Tree, id: NodeId, text: &str) -> Option<NodeId> {
+            let node = tree.get(id)?;
+            if !node.effective_visible() {
+                return None;
+            }
+            if node.widget.display_text().as_deref() == Some(text) {
+                return Some(id);
+            }
+            node.children
+                .iter()
+                .find_map(|child| visible_label(tree, *child, text))
+        }
+
         let _g = crate::rpc::ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::set_var("WIND_RPC_MOCK", "1") };
         let app = Rc::new(RefCell::new(AppState::empty()));
         let mut tree = build_tree(&app);
-
-        // 根 stack → 主列 [标题栏, 分隔线, 主体]；主体 [左栏, 竖线, 中栏, 竖线, 右栏]
         let root = tree.root.unwrap();
-        let main_col = tree.get(root).unwrap().children[0];
-        let body = tree.get(main_col).unwrap().children[2];
-        let cols = tree.get(body).unwrap().children.clone();
-        assert_eq!(cols.len(), 5, "数据域 | 类别 | 内容");
-        let side = tree.abs_bounds(cols[0]);
-        let nav = tree.abs_bounds(cols[2]);
-        assert_eq!(nav.w, crate::pages::dict::category_nav::CATNAV_W);
-        assert!(tree.abs_bounds(cols[4]).w > 300, "内容区要有宽度");
+        let body = tree.get(root).unwrap().children[0];
+        let columns = &tree.get(body).unwrap().children;
+        assert_eq!(columns.len(), 3, "分类栏、分隔线、词表");
+        let sidebar = columns[0];
+        assert_eq!(
+            tree.abs_bounds(sidebar).w,
+            crate::pages::dict::category_nav::CATNAV_W
+        );
+        assert!(
+            tree.abs_bounds(columns[2]).w >= 400,
+            "最小宽度下表格保留至少 400 DIP"
+        );
 
-        // 左栏第一项（短语）：上内边距 10 + 分组标题 30 之后的第一行
-        let item_h = crate::pages::dict::sidebar::ITEM_H;
-        let labels = right_click(&mut tree, side.x + 60, side.y + 10 + 30 + item_h / 2);
-        assert_eq!(labels, ["打开数据目录"]);
-
-        // 中栏第一项（系统短语）：上内边距 10 + 分组标题 30 + 间距 2 之后的第一行。系统短语只读，
-        // 没有编辑与导入导出，只剩打开数据目录。
-        let labels = right_click(&mut tree, nav.x + 60, nav.y + 10 + 30 + 2 + item_h / 2);
-        assert_eq!(labels, ["打开数据目录"]);
+        for name in ["词库范围", "系统短语"] {
+            let label = visible_label(&tree, sidebar, name).expect(name);
+            let bounds = tree.abs_bounds(label);
+            let labels = right_click(&mut tree, bounds.x + 2, bounds.y + bounds.h / 2);
+            assert_eq!(labels, ["打开数据目录"], "{name}");
+        }
         unsafe { std::env::remove_var("WIND_RPC_MOCK") };
     }
 }

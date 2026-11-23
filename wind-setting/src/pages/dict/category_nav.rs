@@ -1,4 +1,4 @@
-//! 词库窗中栏 — 当前数据域下的类别；「用户词库」再分出主词库与各分库。
+//! 词库分类栏包含范围选择、当前范围下的类别和分库。
 //!
 //! 取代原先横在表格上方的子标签行与分库切换器（分段 / 下拉两种形态）和「管理…」对话框：
 //! 类别、分库、分库开关都在这一栏，每个节点右键给出它能做的事，「用户词库」组旁的按钮新建或导入分库。
@@ -362,67 +362,86 @@ impl DictManagerState {
 
 /// 构建中栏：分组、导航与分库添加入口随 `nav_epoch` 重建。
 /// 底色同主窗二级导航（`SurfaceAlt`，与右栏同色、靠分隔线分开）。
-pub fn build_category_nav(mgr: &DictManagerState) -> Element {
+pub fn build_category_nav(mgr: &DictManagerState, back: Element) -> Element {
     let m_list = mgr.clone();
     let list =
         Element::host_signal(mgr.nav_epoch, move |_| build_list(&m_list)).padding_xy(SIDE_PAD, 0);
-    // 底栏随数据域重建：全局域整条不出（不留空条）。
-    let m_foot = mgr.clone();
-    let foot = Element::host_signal(mgr.nav_epoch, move |_| {
-        build_nav_footer(&m_foot).unwrap_or_else(|| Element::leaf().height(0))
-    });
+    let domain_menu = mgr.clone();
+    let selector = Element::col()
+        .width_match()
+        .spacing(5)
+        .padding_xy(SIDE_PAD, 2)
+        .child(
+            Element::label("词库范围")
+                .font_size(12.0)
+                .font_weight(600)
+                .fg_role(Role::TextMuted),
+        )
+        .child(
+            Element::dropdown_items_signal(mgr.domain_rich_items, mgr.domain)
+                .width_match()
+                .tooltip("切换输入方案或全局词库"),
+        )
+        .on_context_menu(move || domain_menu.domain_menu_items(domain_menu.domain.get()));
+    let m_refresh = mgr.clone();
+    let status = mgr.status;
+    let stats = mgr.clone();
+    let has_stats = mgr.clone();
+    let footer = Element::col()
+        .width_match()
+        .spacing(6)
+        .padding_xy(SIDE_PAD, 6)
+        .child(
+            Element::label_signal(status)
+                .font_size(11.0)
+                .fg_role(Role::TextMuted)
+                .width_match()
+                .max_lines(2)
+                .visible_when(move || !status.get().is_empty()),
+        )
+        .child(
+            Element::button(STATS_TITLE)
+                .small()
+                .outline_soft()
+                .width_match()
+                .tooltip("查看当前方案系统词库的词数分布与重码")
+                .on_click(move |_| stats.open_nav_stats())
+                .visible_when(move || has_stats.has_nav_stats()),
+        )
+        .child(
+            Element::row()
+                .width_match()
+                .spacing(6)
+                .child(back.weight(1.0))
+                .child(
+                    Element::button("刷新")
+                        .small()
+                        .outline_soft()
+                        .weight(1.0)
+                        .tooltip("重新读取数据文件并刷新词库")
+                        .on_click(move |_| {
+                            #[cfg(windows)]
+                            m_refresh.registration.refresh();
+                            m_refresh.refresh_all();
+                        }),
+                ),
+        );
+
     Element::col()
         .width(CATNAV_W)
         .height_match()
         .bg_role(Role::SurfaceAlt)
-        .padding_xy(0, 10)
+        .padding_xy(0, 8)
         .spacing(4)
+        .child(selector)
         .child(Element::scroll().fill().weight(1.0).child(list))
-        .child(foot)
-}
-
-/// 栏底按钮栏：分隔线 + 一排按钮，样式同左栏底栏。只有方案域有（目前只有「词库统计」）。
-fn build_nav_footer(mgr: &DictManagerState) -> Option<Element> {
-    if !mgr.has_nav_stats() {
-        return None;
-    }
-    let m = mgr.clone();
-    Some(
-        Element::col()
-            .width_match()
-            .child(Element::divider())
-            .child(
-                Element::row()
-                    .width_match()
-                    .cross(Align::Center)
-                    .spacing(6)
-                    .padding_xy(SIDE_PAD + ROW_PAD_X, 8)
-                    .child(
-                        Element::button(STATS_TITLE)
-                            .small()
-                            .outline_soft()
-                            .weight(1.0)
-                            .tooltip("查看当前方案系统词库的词数分布与重码")
-                            .on_click(move |_| m.open_nav_stats()),
-                    ),
-            ),
-    )
+        .child(Element::divider())
+        .child(footer)
 }
 
 fn build_list(mgr: &DictManagerState) -> Element {
     let mut col = Element::col().width_match().spacing(2);
-    let entries = mgr.nav_entries_now();
-    if entries
-        .first()
-        .is_some_and(|entry| !entry.node.is_heading())
-    {
-        let domain = mgr.domain_label_at(mgr.domain.get());
-        let name = domain
-            .split_once(" · ")
-            .map_or(domain.as_str(), |(name, _)| name);
-        col = col.child(group_title(name));
-    }
-    for e in entries {
+    for e in mgr.nav_entries_now() {
         col = col.child(if e.node.is_heading() {
             heading_row(mgr, &e)
         } else {
@@ -1022,14 +1041,13 @@ mod tests {
         });
     }
 
-    /// 方案域有底栏与「词库统计」按钮，全局域没有（不留空条）；点按钮打开统计对话框、
+    /// 方案域可以打开词库统计。点按钮打开统计对话框、
     /// 不切类别、不改选中的节点。
     #[test]
     fn stats_button_bar_is_schema_only_and_opens_the_dialog() {
         with_mock(|| {
             let st = state();
             assert!(st.has_nav_stats());
-            assert!(build_nav_footer(&st).is_some(), "方案域有底栏");
             let (before, selected) = (st.sub_tab.get(), st.is_nav_selected(&NavNode::Main(0)));
             assert!(!st.stats.visible.get());
             st.open_nav_stats();
@@ -1042,7 +1060,6 @@ mod tests {
 
             st.domain.set(super::super::state::DOMAIN_PHRASE);
             assert!(!st.has_nav_stats(), "全局域没有系统词库");
-            assert!(build_nav_footer(&st).is_none(), "全局域不出整条栏");
         });
     }
 
@@ -1052,7 +1069,7 @@ mod tests {
         with_mock(|| {
             let st = cats_state();
             let mut tree = windui::core::Tree::new();
-            let root = build_category_nav(&st).build(&mut tree);
+            let root = build_category_nav(&st, Element::button("返回上页")).build(&mut tree);
             tree.root = Some(root);
             tree.layout_root(
                 windui::geometry::Size::new(CATNAV_W, 600),

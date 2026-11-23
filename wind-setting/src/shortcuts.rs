@@ -171,7 +171,7 @@ pub fn dispatch(ev: &KeyEvent, st: &AppState) -> Outcome {
         return Outcome::default();
     };
     match b.action {
-        Action::FocusSearch | Action::DismissSearch if st.dictionary_visible.get() => {
+        Action::FocusSearch if st.dictionary_visible.get() && st.dict_mgr.has_open_dialog() => {
             Outcome::default()
         }
         Action::SubmitDictDialog if !st.dictionary_visible.get() => Outcome::default(),
@@ -335,6 +335,17 @@ mod tests {
         let out = dispatch(&ev(Key::Other(vk::F), true), &st);
         assert!(out.handled);
         assert!(out.focus_main_input);
+    }
+
+    #[test]
+    fn unified_window_ctrl_f_opens_global_search_from_the_dictionary() {
+        let st = state();
+        st.show_dictionary();
+        st.search.query.set("候选".into());
+        let out = dispatch(&ev(Key::Other(vk::F), true), &st);
+        assert!(out.handled && out.focus_main_input && st.search.open.get());
+        assert!(dispatch(&ev(Key::Escape, false), &st).handled);
+        assert!(!st.search.open.get() && st.dictionary_visible.get());
     }
 
     /// 已有查询时，Ctrl+F 当场把浮层展开——不留给哨兵，那要等下一个重排帧。
