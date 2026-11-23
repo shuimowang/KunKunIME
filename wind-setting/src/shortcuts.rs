@@ -132,7 +132,7 @@ pub const BINDINGS: &[Binding] = &[
 
 /// 这次按键是不是「关闭窗口」（Ctrl+W）。
 ///
-/// 给**子窗**用：`App::on_shortcut` 只归主窗，词库窗 / 应用兼容窗这类 `open_window` 出来的
+/// 给**子窗**用：`App::on_shortcut` 只归主窗，应用兼容这类 `open_window` 出来的
 /// 子窗要靠自己的 `Window::on_shortcut`，而它们只需要这一条——搜索框、加词对话框那几条
 /// 都是设置窗里的东西，拿整张表去分派只会误触（例如在子窗里 Ctrl+F 去聚焦设置窗的搜索框）。
 pub fn is_close_window(ev: &KeyEvent) -> bool {
@@ -171,6 +171,10 @@ pub fn dispatch(ev: &KeyEvent, st: &AppState) -> Outcome {
         return Outcome::default();
     };
     match b.action {
+        Action::FocusSearch | Action::DismissSearch if st.dictionary_visible.get() => {
+            Outcome::default()
+        }
+        Action::SubmitDictDialog if !st.dictionary_visible.get() => Outcome::default(),
         Action::FocusSearch => {
             // 展开在这里当场做，**不等焦点哨兵**：哨兵挂在 `on_update` 上，而那只在
             // 需要重排的帧才跑；焦点转移本身不保证后面还有这样一帧，于是浮层要等到
@@ -270,6 +274,7 @@ mod tests {
     fn enter_submits_the_open_word_dialog() {
         fn check(name: &str, show: impl Fn(&crate::pages::dict::state::DictManagerState)) {
             let st = state();
+            st.dictionary_visible.set(true);
             show(&st.dict_mgr);
             for ctrl in [false, true] {
                 let out = dispatch(&ev(Key::Enter, ctrl), &st);
@@ -291,6 +296,7 @@ mod tests {
     #[test]
     fn enter_in_shadow_dialog_routes_to_shadow_submit() {
         let st = state();
+        st.dictionary_visible.set(true);
         st.dict_mgr.shadow_add_visible.set(true);
         let out = dispatch(&ev(Key::Enter, false), &st);
         assert_eq!(out.submit_dict, Some(DictSubmit::Shadow));
@@ -305,6 +311,21 @@ mod tests {
         assert!(
             !out.handled && out.submit_dict.is_none(),
             "确认框开着时回车必须放行给它自己的按钮"
+        );
+    }
+
+    #[test]
+    fn unified_window_shortcuts_follow_the_visible_workspace() {
+        let st = state();
+        st.dict_mgr.edit_visible.set(true);
+        assert!(dispatch(&ev(Key::Enter, false), &st).submit_dict.is_none());
+        st.dictionary_visible.set(true);
+        st.search.query.set("候选".into());
+        assert!(!dispatch(&ev(Key::Other(vk::F), true), &st).handled);
+        assert!(!st.search.open.get());
+        assert_eq!(
+            dispatch(&ev(Key::Enter, false), &st).submit_dict,
+            Some(DictSubmit::Word)
         );
     }
 

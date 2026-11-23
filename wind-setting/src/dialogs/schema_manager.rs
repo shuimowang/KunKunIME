@@ -4768,14 +4768,10 @@ fn build_draggable_row(entry: SchemaEntry, mgr: &SchemaManagerState, handle: Ele
 
 // ──────────────────────── UI 构建 ────────────────────────
 
-/// `app` 只为导入确认那一支所需（片段应用后回灌配置镜像）。
-pub fn build_schema_manager_dialog(
-    app: &Rc<RefCell<AppState>>,
-    state: &SchemaManagerState,
-) -> Element {
+/// 设置工作区中的方案管理对话框。
+pub fn build_schema_manager_dialog(state: &SchemaManagerState) -> Element {
     let confirm_dlg = build_confirm_dialog(state);
     let settings_dlg = build_schema_settings_dialog(state);
-    let import_dlg = build_import_confirm_dialog(app, state);
     let hotkey_dlg = build_schema_hotkey_dialog(state);
     let trigger_dlg = build_trigger_keys_dialog(state);
     let ka_dlg = build_key_actions_dialog(state);
@@ -4787,7 +4783,6 @@ pub fn build_schema_manager_dialog(
         .fill()
         .child(confirm_dlg)
         .child(settings_dlg)
-        .child(import_dlg)
         // 排在方案设置之后 = 叠在它上面：这几个对话框都是从方案设置里打开的。
         .child(hotkey_dlg)
         .child(trigger_dlg)
@@ -5116,23 +5111,11 @@ fn build_schema_hotkey_dialog(state: &SchemaManagerState) -> Element {
     )
 }
 
-/// 方案包导入确认：一份可滚动的**富文本导入报表**（见
-/// [`SchemaManagerState::build_import_report`]）+ 合并（默认）/ 替换（danger）二选一。
-/// zip 与文本信封共用本对话框。
-///
-/// 报表把包名、说明、元信息、文件统计、逐条配置改动收进**同一份文档**，层级与配色
-/// 由它自己的样式表统一定义——此前是六个控件各管一段、各自带字号，凑在一起谁也不
-/// 比谁显眼。
-///
-/// `app` 用于第二步 `config.applyPatch` 成功后回灌配置镜像——core 的逐键
-/// `config.changed` 回声到达时镜像已持有同值，被识别为本端写入，不弹「已在别处更改」。
-///
-/// 只挂在**主窗**（本对话框是 `build_schema_manager_dialog` 的一部分）。词库窗的右键
-/// 导入也能选到 `.zip`/`.wpkg`，但那条路先把主窗拉到前台再弹选择器（见
-/// `config_import::import_menu_items_via_main_window`），确认框照样出现在主窗里——
-/// 词库窗不再挂一份：`import_confirm_visible` 是同一个 `Signal`，两棵树各画一遍就是
-/// 两个窗口同时弹同一个确认框。
-fn build_import_confirm_dialog(app: &Rc<RefCell<AppState>>, state: &SchemaManagerState) -> Element {
+/// 方案包可能从设置或词库导入，两页共用这一层确认框。
+pub(crate) fn build_import_confirm_dialog(
+    app: &Rc<RefCell<AppState>>,
+    state: &SchemaManagerState,
+) -> Element {
     let merge = state.clone();
     let replace = state.clone();
     let cancel = state.clone();
@@ -6255,7 +6238,7 @@ fn build_section(kind: SettingsSection, state: &SchemaManagerState) -> Element {
                     )
                 })
                 .collect();
-            // 过渡提示后的跳转链接：打开词库窗并定位到本方案的「系统词库 → 词库列表」。
+            // 过渡提示后的跳转链接：进入词库页并定位到本方案的「系统词库 → 词库列表」。
             let link_state = state.clone();
             let dict_link = crate::widgets::HintLink::new(EXT_DICTS_LINK, move |ctx| {
                 link_state.open_dict_for_current(ctx)

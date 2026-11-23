@@ -53,12 +53,12 @@ const AREA_PAD: i32 = 8;
 /// fit 目标框：图区内容区的逻辑尺寸，随请求发给 core（`fit_w`/`fit_h`，正整数，core 拿它
 /// 折算渲染倍率、clamp 1–3；缺省不带 = 旧行为）。取常量是因为请求发出时布局还没跑，拿不到
 /// 实时尺寸；宽度没有可写的代码级推导链（窗口 − 主导航 − 二级导航 − 页边距 − 卡边距 − 图区
-/// 内边距，散在四个文件里），默认窗口下实测 570，由 `fit_consts_match_real_layout` 在真树上
+/// 内边距，散在四个文件里），默认窗口下实测 610，由 `fit_consts_match_real_layout` 在真树上
 /// 钉住，布局一动这里跟着红。高度 = [`AREA_H`] − 上下内边距。
-pub(crate) const FIT_W: i32 = 570;
+pub(crate) const FIT_W: i32 = 610;
 pub(crate) const FIT_H: i32 = AREA_H - 2 * AREA_PAD;
 const _: () = assert!(FIT_H == 184);
-const _: () = assert!(FIT_W == 570);
+const _: () = assert!(FIT_W == 610);
 /// 草稿里出预览要带上的段（`ui.<段>`）。工具栏预览（`kind = toolbar`）取 `ui.toolbar` 段
 /// 渲染（core 端 `candidate_preview_draft` 折算 `toolbar_items`），缺了它改工具栏设置
 /// 永远出的是生效配置的图、不反映草稿；状态提示等与预览无关的段不带。
@@ -81,7 +81,7 @@ pub fn kind_param(idx: usize) -> Option<&'static str> {
     (idx == 1).then_some("toolbar")
 }
 
-/// 段索引 → fit 目标框：候选窗带图区内容区尺寸（570×184，core 折算渲染倍率撑满图区）；
+/// 段索引 → fit 目标框：候选窗带图区内容区尺寸（610×184，core 折算渲染倍率撑满图区）；
 /// 工具栏不带（两维省键，core 回到自然逻辑尺寸渲染；省键的理由是协议只收正整数、
 /// 省键即旧版请求形状），显示端 1:1 居中、不放大。越界按候选窗算。
 pub(crate) fn kind_fit(idx: usize) -> (i32, i32) {

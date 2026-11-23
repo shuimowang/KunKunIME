@@ -43,12 +43,8 @@ pub enum JumpTarget {
     Card { tab: usize, anchor: String },
     /// 方案级：跳到方案页，附指示条路径（「哪个方案」要用户自己选）。
     SchemaLevel { hint_path: Vec<String> },
-    /// 打开词库窗。
-    ///
-    /// 词库**不是**主窗的一页：它早已迁进独立窗口，主窗那一格只剩个永不显示的占位
-    /// （`pages::dict_page` 返回空叶子）。所以词库相关的条目不能切页——切过去是一屏
-    /// 空白——只能请求开窗，主窗停在原页不动（与侧栏那个「词库」动作项同一语义）。
-    DictWindow,
+    /// 切换到管理窗口的词库页，保留可返回的设置页。
+    Dictionary,
 }
 
 impl JumpTarget {
@@ -59,7 +55,7 @@ impl JumpTarget {
             Self::SchemaLevel { .. } => page_tab("schema"),
             // 归属上算词库页（`every_page_has_entries` 据此计数），但**不会**被切过去：
             // `jump::request` 对本变体不动 tab。
-            Self::DictWindow => page_tab("dict"),
+            Self::Dictionary => page_tab("dict"),
         }
     }
 }
@@ -417,7 +413,7 @@ const HANDWRITTEN: &[Handwritten] = &[
     Handwritten { id: "schema:import", anchor: "schema:list", page: "schema", title: "导入方案包", section: "输入方案", keywords: "wpkg 安装 添加", feature: "" },
     Handwritten { id: "schema:export", anchor: "schema:list", page: "schema", title: "导出方案包", section: "输入方案", keywords: "wpkg 备份 分享", feature: "" },
     Handwritten { id: "schema:url-import", anchor: "schema:list", page: "schema", title: "从网址导入方案", section: "输入方案", keywords: "url 在线 下载", feature: "" },
-    // ── 词库：走开窗，锚点用不上（见 JumpTarget::DictWindow）──
+    // ── 词库：直接进入词库页（见 JumpTarget::Dictionary）──
     #[cfg(windows)]
     Handwritten { id: "dict:register-ime", anchor: "dict:manage", page: "dict", title: "注册为 Windows 输入法", section: "词库管理", keywords: "系统键盘 Win+空格 切换输入法 启用开发版", feature: "" },
     Handwritten { id: "dict:manage", anchor: "dict:manage", page: "dict", title: "词库管理", section: "词库", keywords: "词条 编辑 删除 查找", feature: "" },
@@ -477,9 +473,9 @@ fn handwritten_entries(manifest: &Manifest) -> Vec<SearchEntry> {
             title: h.title.to_string(),
             keywords: h.keywords.split_whitespace().map(str::to_string).collect(),
             path: vec![page_label(h.page).to_string(), h.section.to_string()],
-            // 词库条目走开窗而不是切页（见 `JumpTarget::DictWindow`）。
+            // 词库页自带方案与分类导航（见 `JumpTarget::Dictionary`）。
             target: if h.page == "dict" {
-                JumpTarget::DictWindow
+                JumpTarget::Dictionary
             } else {
                 JumpTarget::Card {
                     tab: page_tab(h.page),

@@ -46,8 +46,7 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
         // 「显示定制版隐藏的设置」可能在上一个主窗里切过：建树前按当前值重折清单。
         app.borrow_mut().refold_manifest_if_needed();
         let st = app.borrow();
-        // 先清空上一棵设置树的登记项，再构建新的。主窗可以关掉再开（见
-        // `dict_window` 与 `main::open_main_window`），本函数因此不再是"一辈子只跑一次"
+        // 先清空上一棵设置树的登记项，再构建新的。主窗可以关掉再开，本函数因此不再是"一辈子只跑一次"
         // ——不清的话，旧树那批 Signal 句柄会连同新的一起留在注册表里，而它们的槽位
         // 早已随上一个窗口的 `SignalScope` 回收、并被新信号复用。详见 `FieldRegistry::reset`。
         reset_registrations(app);
@@ -61,12 +60,16 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
         // 注意：tabs_vec 必须先求值——all_tabs 构建各 dialog_button 时把对话框登记进
         // st.fields.dialogs，随后才能在本元组里 take 出来挂到根窗口（元组按从左到右求值）。
         let tabs_vec = pages::all_tabs(app, &st);
-        // 方案设置对话框里的「前往设置」链接：它自己拿不到 AppState，由这里注入开词库窗的入口。
+        // 方案设置对话框的扩展词库入口使用同一窗口的词库页。
         // 用弱引用，避免 AppState → schema_mgr → 回调 → AppState 的环。
         let weak_app = Rc::downgrade(app);
-        st.schema_mgr.set_open_dict_at(Rc::new(move |ctx, id| {
+        st.schema_mgr.set_open_dict_at(Rc::new(move |_, id| {
             if let Some(app) = weak_app.upgrade() {
-                crate::dict_window::open_at(ctx, &app, id);
+                let st = app.borrow();
+                if !st.dict_mgr.has_open_dialog() {
+                    st.dict_mgr.open_sys_list_of(id);
+                }
+                st.show_dictionary();
             }
         }));
         // all_tabs 后各「支持全局」的功能键已登记 global_flags，汇总为 keys.global_hotkeys 写回/回填。
@@ -78,7 +81,7 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
             st.dark,
             st.conn,
             st.feedback,
-            build_schema_manager_dialog(app, &st.schema_mgr),
+            build_schema_manager_dialog(&st.schema_mgr),
             build_theme_import_dialog(app),
             build_theme_import_picker(app),
             pages::backup::build_backup_restore_dialog(&st.backup_mgr),
@@ -164,7 +167,7 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
     let search_box = crate::search::ui::build_search_box(&search_state, tab_sig, jump_sig);
     // 侧栏：Bg 角色 = 左栏精确色（比右内容区 SurfaceAlt 略暗）。
     //
-    // 两栏导航同时可见时，一级栏仍可容纳完整的四字标签和词库的独立窗口标识。
+    // 两栏导航同时可见时，一级栏仍可容纳完整的四字标签。
     // 定制版用 `feature:wizard` 关掉向导时侧栏不放入口；用户打开「显示定制版隐藏的设置」
     // 后才找回来（见 `wizard::should_auto_open` 对自动弹出的另一种处置）。
     let show_wizard_entry = !crate::custom_hide::wizard_hidden(crate::custom_hide::installed())
@@ -263,28 +266,15 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
         .child(Element::divider())
         .child(footer);
 
-    let (protocol_overwrite_dlg, protocol_remove_dlg) = build_protocol_confirm_dialogs(app);
-    let (assoc_overwrite_dlg, assoc_remove_dlg) = build_assoc_confirm_dialogs(app);
-    let theme_pkg_confirm_dlg = build_theme_package_confirm_dialog(app);
-
-    let mut root = Element::stack()
+    let dictionary_visible = app.borrow().dictionary_visible;
+    let mut settings_layer = Element::stack()
         .fill()
-        .bg_role(Role::Bg)
-        .child(main_col)
-        .child(protocol_overwrite_dlg)
-        .child(protocol_remove_dlg)
-        .child(assoc_overwrite_dlg)
-        .child(assoc_remove_dlg)
-        .child(theme_pkg_confirm_dlg)
-        .child(downloaded_theme_pkg_release(app))
+        .visible_when(move || !dictionary_visible.get())
         .child(dialog)
-        // 词库对话框已随词库页迁进独立窗（见 `dict_window::build_content`），不在这里挂。
         .child(theme_import_dialog)
         .child(theme_import_picker)
         .child(backup_dialog)
-        .child(config_import_dialog)
         .child(stats_confirm_dialog)
-        .child(build_failed_save_exit(app, discard_on_error))
         .child(build_reload_dialog(app, reload_confirm))
         .child(build_reset_dialog(app, reset_confirm))
         .child(build_theme_delete_dialog(app))
@@ -292,14 +282,11 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
             &app.borrow().theme_gallery,
         ))
         .child(build_theme_overwrite_dialog(app))
-        .child(build_update_dialog(app))
         .child(crate::dialogs::schema_download_dialog::build_schema_download_dialog(app))
-        .child(crate::wizard::view::build_wizard_dialog(app))
-        .child(build_conn_failed_dialog(app, conn_failed))
         .child(empty_redirect);
     // dialog_button 的对话框挂到根：全窗模态遮罩 + 居中（否则内联在设置行格内会偏下）。
     for dlg in field_dialogs {
-        root = root.child(dlg);
+        settings_layer = settings_layer.child(dlg);
     }
     // 外观页批内的对话框按代重挂：图钉翻转整代重建，旧代对话框的信号随旧代行回收，
     // 「挂根一次终身有效」在这里会留下读死句柄的节点（ModalScrim 的 on_update 一读
@@ -307,7 +294,7 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
     // （end_page_batch 移交），旧代节点随旧层移除——节点与死句柄同刻消失。mapper
     // 现取现用（build 消耗 Element），每代一批、用过即弃。容器必须排在九页之后：
     // 同一帧里外观页 switcher 先重建并移交本代批，容器后跑才拿得到。
-    root = root.child({
+    settings_layer = settings_layer.child({
         let app2 = Rc::clone(app);
         let pinned = app.borrow().appearance_pinned;
         Element::switcher(pinned, move |generation: u64| {
@@ -340,27 +327,51 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
     // 捕获层必须在浮层**之前**（在其下层），否则点浮层里的项会先被它吃掉。
     let (search_scrim, search_overlay) =
         crate::search::ui::build_results_overlay(&search_state, tab_sig, jump_sig);
-    root = root.child(search_scrim).child(search_overlay);
-    // 搜索的三枚 0×0 哨兵：查询变化即重算、词库条目开独立窗、跳转副作用汇。
+    settings_layer = settings_layer.child(search_scrim).child(search_overlay);
+    // 查询重算和跳转监听都挂到设置层。
     //
-    // 三枚都挂**根**而不是侧栏：侧栏那个 col 有 `spacing`，而 spacing 是加在每对相邻
+    // 二者都挂**根**而不是侧栏：侧栏那个 col 有 `spacing`，而 spacing 是加在每对相邻
     // 子节点之间的，塞进去等于把搜索框与导航的间距加了三遍（见上面 sidebar 处的说明）。
-    root = root.child(crate::search::ui::build_query_watcher(&search_state));
-    root = root.child(crate::search::ui::build_dict_request_watcher(
-        &search_state,
-        app,
-    ));
+    settings_layer = settings_layer.child(crate::search::ui::build_query_watcher(&search_state));
     // ⚠ jump_sink 必须排在**锚点之后**（锚点都在 main_col 里，而它挂在根的末尾）。
     // 响应式哨兵按树序派发：排到内容区之前的话，这一帧它读到的还是锚点写入之前的值，
     // 开框要白等一帧。同 conflict_watcher 与 toast_sink 之间的先后讲究。
     //
     // 它管的是锚点管不了的两件事：跳转目标在对话框里时把框打开（第二跳才落到框内那
     // 一行），以及方案级目标写出指示条文案。
-    root = root.child(crate::search::ui::build_jump_sink(
+    settings_layer = settings_layer.child(crate::search::ui::build_jump_sink(
         jump_sig,
         search_state.hint,
         app.borrow().fields.clone(),
+        {
+            let app = app.clone();
+            move || app.borrow().show_dictionary()
+        },
     ));
+    // 两页各自保有导航、滚动位置和未完成的表单，共用全窗的文件导入和关闭提示。
+    let (protocol_overwrite, protocol_remove) = build_protocol_confirm_dialogs(app);
+    let (assoc_overwrite, assoc_remove) = build_assoc_confirm_dialogs(app);
+    let mut root = Element::stack()
+        .fill()
+        .bg_role(Role::Bg)
+        .child(main_col.visible_when(move || !dictionary_visible.get()))
+        .child(settings_layer)
+        .child(dictionary_workspace(app, dictionary_visible))
+        .child(config_import_dialog)
+        .child(crate::dialogs::schema_manager::build_import_confirm_dialog(
+            app,
+            &app.borrow().schema_mgr,
+        ))
+        .child(build_theme_package_confirm_dialog(app))
+        .child(downloaded_theme_pkg_release(app))
+        .child(protocol_overwrite)
+        .child(protocol_remove)
+        .child(assoc_overwrite)
+        .child(assoc_remove)
+        .child(build_update_dialog(app))
+        .child(crate::wizard::view::build_wizard_dialog(app))
+        .child(build_conn_failed_dialog(app, conn_failed))
+        .child(build_failed_save_exit(app, discard_on_error));
     // 按键冲突实时监听：每帧刷新 state.conflict（驱动常驻警告条），并对新出现的
     // 「可共存」组合写 feedback 弹一次说明 toast。
     //
@@ -374,6 +385,35 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
     app.borrow_mut().seed_autosave_baseline();
     crate::memstat::mark("[build 出口]");
     root
+}
+
+/// 首次使用时再建词库界面，之后两页共享同一棵树。返回不会重建表格或丢失滚动位置。
+fn dictionary_workspace(app: &Rc<RefCell<AppState>>, visible: Signal<bool>) -> Element {
+    let mounted = signal(visible.get());
+    let mount_on_entry = crate::pages::dict::reactive::reactive_effect(
+        move || visible.version(),
+        move || {
+            if visible.get() && !mounted.get() {
+                mounted.set(true);
+            }
+        },
+    );
+    let app = app.clone();
+    Element::stack()
+        .fill()
+        .visible_when(move || visible.get())
+        .child(mount_on_entry)
+        .child(
+            Element::switcher(mounted, move |ready| {
+                if ready {
+                    crate::dict_window::build_content(app.clone())
+                } else {
+                    Element::leaf()
+                }
+                .transition(windui::ui::presence::Presence::none())
+            })
+            .fill(),
+        )
 }
 
 /// 重建设置树前的登记复位:`fields.reset()` + 重注册「不在页面构建里注册的那批」
@@ -457,9 +497,6 @@ fn build_subnav_col(
 /// 渐变图标块与淡底走 accent 角色色，换明暗 / 换强调色自动跟随。
 /// 「高级」项前插分隔线（参考稿 nav-sep）。
 ///
-/// 「词库」是**动作项**而非页项：点它开独立窗（[`crate::dict_window::open`]），主窗停在
-/// 原页不动。故它没有选中态、没有指示条，改在右侧挂一枚「外开」角标把这件事说出来——
-/// 不给提示的话，点一下侧栏而当前页纹丝不动，看着就是按钮坏了。
 /// 定制版藏空了的页没有侧栏入口，可深链（`--page`、命令直通车）仍会切过去：落到这种页
 /// 就改回首页，免得停在一张白板上。建窗时先校一次（冷启动的深链早于建窗），之后跟着切页信号。
 fn redirect_off_empty_tabs(empty: Vec<bool>, tab: Signal<usize>) -> Element {
@@ -478,7 +515,7 @@ fn build_nav(
     sel: Signal<usize>,
     app: &Rc<RefCell<AppState>>,
 ) -> Element {
-    use crate::icons::{CHIP_PX, EXTERNAL, ICON_PX, nav_icon, tinted_role};
+    use crate::icons::{CHIP_PX, ICON_PX, nav_icon, tinted_role};
 
     // 动作项下标经 `page_to_index` 取，不写字面量 4：PAGES 与 `all_tabs` 的顺序本来就
     // 靠约定对齐，这里再手抄一个下标，将来插一页就会指到隔壁那项上。
@@ -509,7 +546,7 @@ fn build_nav(
             );
         }
         let svg = nav_icon(name);
-        let is_action = dict_idx == Some(i);
+        let is_dict = dict_idx == Some(i);
 
         // ── 选中态（渐变图标块 + accent 文字 + 左指示条）──
         //
@@ -598,11 +635,11 @@ fn build_nav(
 
         // ── 未选中态（可点击；图标取弱化正文色，随主题）──
         let app_for_click = app.clone();
-        let mut off = Element::row()
+        let off = Element::row()
             .clickable()
-            .on_click(move |ctx| {
-                if is_action {
-                    crate::dict_window::open(ctx, &app_for_click);
+            .on_click(move |_| {
+                if is_dict {
+                    app_for_click.borrow().show_dictionary();
                 } else {
                     sel.set(i);
                 }
@@ -629,24 +666,13 @@ fn build_nav(
                     .max_lines(1)
                     .height(18),
             );
-        if is_action {
-            // 角标比正文更淡：它是对「点了会发生什么」的注解，不该与条目本身争视线。
-            off = off.child(tinted_role(EXTERNAL, 13, Role::TextSubtle).align(Align::Center));
-        }
-        // 动作项永不选中，`visible_when` 恒真即可 —— 但仍写成同一个判据，免得哪天
-        // `--tab <词库下标>` 之类的路径真把 sel 设成了它，整行凭空消失。
-        // （不写死那个数字：`cli::PAGES` 的顺序改过，词库现在是 5 不是 4。）
         let off = off.visible_when(move || sel.get() != i);
-
-        // 层叠顺序保持 on → off → indicator 不变（on/off 互斥显示，但指示条要压在最上）。
-        // 动作项不生成选中态与指示条：它们的 `visible_when` 恒假，留着只是两棵永不显示
-        // 的子树，白占布局签名。
         let mut item = Element::stack().width_match().height(36);
-        if !is_action {
+        if !is_dict {
             item = item.child(on).child(on_solid);
         }
         item = item.child(off);
-        if !is_action {
+        if !is_dict {
             item = item.child(indicator);
         }
         col = col.child(item);
@@ -1602,6 +1628,69 @@ fn confirm_dialog_frame(
 #[cfg(test)]
 mod tests {
     use crate::state::AppState;
+
+    #[test]
+    fn unified_window_sidebar_and_back_preserve_both_pages() {
+        use super::*;
+        use windui::core::{NodeId, Tree};
+        use windui::event::{MouseButton, PointerEvent, PointerKind};
+        use windui::geometry::{Point, Size};
+
+        fn locate(tree: &Tree, id: NodeId, text: &str) -> Option<Point> {
+            let node = tree.get(id)?;
+            if !node.effective_visible() {
+                return None;
+            }
+            let b = tree.abs_bounds(id);
+            if b.w > 0 && b.h > 0 && node.widget.display_text().as_deref() == Some(text) {
+                return Some(Point::new(b.x + b.w / 2, b.y + b.h / 2));
+            }
+            node.children
+                .iter()
+                .find_map(|&child| locate(tree, child, text))
+        }
+        fn click(tree: &mut Tree, pos: Point) {
+            let (mut hover, mut capture) = (None, None);
+            for kind in [PointerKind::Down, PointerKind::Up] {
+                let result = tree.dispatch_pointer(
+                    PointerEvent::single(kind, pos, MouseButton::Left),
+                    &mut hover,
+                    &mut capture,
+                );
+                assert!(
+                    !result.close && result.open_windows.is_empty(),
+                    "导航应在本窗切页"
+                );
+            }
+            tree.layout_root(Size::new(1000, 700), &mut windui::text::NullTextEngine);
+        }
+
+        let _guard = crate::rpc::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("WIND_RPC_MOCK", "1") };
+        let app = Rc::new(RefCell::new(AppState::empty()));
+        let settings_tab = crate::cli::page_to_index("keys").unwrap();
+        app.borrow().tab.set(settings_tab);
+        let mut tree = Tree::new();
+        let root = build(&app).width(1000).height(700).build(&mut tree);
+        tree.root = Some(root);
+        tree.layout_root(Size::new(1000, 700), &mut windui::text::NullTextEngine);
+
+        let dictionary_nav = locate(&tree, root, "词库管理").expect("设置侧栏的词库入口");
+        click(&mut tree, dictionary_nav);
+        assert!(app.borrow().dictionary_visible.get());
+        let mgr = app.borrow().dict_mgr.clone();
+        mgr.search.set("人物".into());
+        // 词库左栏底部的返回按钮，右边是同宽的刷新按钮。
+        click(&mut tree, Point::new(45, 672));
+        assert!(!app.borrow().dictionary_visible.get());
+        assert_eq!(app.borrow().tab.get(), settings_tab);
+        click(&mut tree, dictionary_nav);
+        assert_eq!(mgr.search.get(), "人物");
+        assert!(app.borrow().dictionary_visible.get());
+        unsafe { std::env::remove_var("WIND_RPC_MOCK") };
+    }
 
     /// 建整个主窗，在侧栏下方空白与底栏中段各右击一次，返回两份菜单的项文案。
     fn sidebar_and_footer_menus(hide: &[&str]) -> (Vec<String>, Vec<String>) {

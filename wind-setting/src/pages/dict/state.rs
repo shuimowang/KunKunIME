@@ -1086,6 +1086,28 @@ impl DictManagerState {
         note
     }
 
+    /// 外部深链不能在确认、编辑或导入期间替换当前操作的数据域。
+    pub(crate) fn has_open_dialog(&self) -> bool {
+        [
+            self.edit_dialog,
+            self.libs.prompt_visible,
+            self.confirm_visible,
+            self.edit_visible,
+            self.quick_edit_visible,
+            self.common_edit_visible,
+            self.completion_add_visible,
+            self.shadow_add_visible,
+            self.view_visible,
+            self.export_visible,
+            self.import_confirm_visible,
+            self.charset_new.visible,
+            self.stats.visible,
+            self.cats.info_visible,
+        ]
+        .iter()
+        .any(Signal::get)
+    }
+
     /// 数据域下拉选项标签（先两个全局域，其后折叠后各方案域）。
     ///
     /// 顺序必须与 [`domain_slot`] 的槽位一致——这里多写一项或少写一项，下拉的每一项都会

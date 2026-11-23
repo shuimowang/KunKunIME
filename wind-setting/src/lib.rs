@@ -81,43 +81,11 @@ use std::rc::Rc;
 use windui::core::EventCtx;
 use windui::prelude::*;
 
-/// 没有 `EventCtx` 的回调（`single_instance` 的 argv 处理）送往 UI 线程的请求。
-///
-/// 之所以要绕这一道：开窗请求只在副作用被采纳的时机才算数（控件事件回调、
-/// `App::channel` 的 `on_message`、`on_interval`），而 `single_instance` 的回调虽然也在
-/// UI 线程，却只收 argv、拿不到 ctx。经 channel 转一手，回调那侧就有 ctx 了。
-pub enum UiRequest {
-    /// 打开词库管理窗（实际开不开取决于 `take_dict_window_request`）。
-    OpenDictWindow,
-    /// 打开应用兼容窗（二次实例带 `--page compat`）。
-    OpenCompatWindow,
-    /// 重新开出主窗（主窗已关、词库窗还开着时点「设置」）。
-    OpenMainWindow,
-}
-
-/// 设置窗尺寸。`App::new` 与主窗重建两条路共用一份，免得各写各的、改一边漏一边。
-///
-/// ★ 宽度随二级导航一起从 820 抬到 950。左侧从「184 单栏」变成「140 + 1 + 168 + 1
-/// 三栏」，多吃掉 125px；不抬宽度的话内容区只剩约 480，方案页工具栏那排按钮会**再一次**
-/// 被挤出可视区（`pages::scheme_page` 里已为同一个症状把工具栏拆过两行）。950 - 310 = 640，
-/// 与改动前的 820 - 185 = 635 基本持平，等于「内容区宽度不变，导航多了一栏」。
-pub(crate) const MAIN_W: i32 = 950;
+/// 设置和词库共用同一窗口，容纳词库的数据域、分类和列表三栏。
+pub(crate) const MAIN_W: i32 = 990;
 pub(crate) const MAIN_H: i32 = 640;
-/// 最小宽度同步从 560 抬到 700：三栏导航占 310，560 下内容区只剩 250，
-/// 设置行的标题、说明与右侧控件挤在一起，等于这个下限处的界面不可用。
-pub(crate) const MAIN_MIN_W: i32 = 700;
+pub(crate) const MAIN_MIN_W: i32 = 760;
 pub(crate) const MAIN_MIN_H: i32 = 440;
-
-/// 词库窗尺寸。三栏：数据域 200 + 类别 168 + 内容；内容区与改三栏前（820 - 200）
-/// 基本持平。最小宽 760 时内容区约 390，与改前最小宽 560 时的 360 相当。
-///
-/// 两条路要用它：[`dict_window::open`]（从设置窗开词库），以及 `--page dict` 冷启动时
-/// 让 `App` 那个窗口**直接承载词库**的分叉（见 `main` 里的 `dict_as_main`）。漏掉后者
-/// 的症状是「托盘点词库管理开出来的窗比从设置里开的宽一圈」。
-pub(crate) const DICT_W: i32 = 990;
-pub(crate) const DICT_H: i32 = 640;
-pub(crate) const DICT_MIN_W: i32 = 760;
-pub(crate) const DICT_MIN_H: i32 = 440;
 
 /// 应用兼容窗尺寸：三栏（分类 184 + 进程列表 270 + 配置信息），配置信息一行要放下
 /// 标题、说明与控件，所以比词库窗宽一圈。
@@ -126,50 +94,9 @@ pub(crate) const COMPAT_H: i32 = 680;
 pub(crate) const COMPAT_MIN_W: i32 = 900;
 pub(crate) const COMPAT_MIN_H: i32 = 480;
 
-/// 设置主窗的单例键。窗口在的时候，别处 `open_window(Window::single(本键))` 会把它
-/// 激活到前台而不是再开一个——[`open_main_window`] 与词库窗的两个入口都靠这条。
+/// 主窗无论打开哪个页面，都以同一个键参与平台窗口单例仲裁。
 pub(crate) const MAIN_SINGLE_KEY: &str = "main";
-
-/// `App` 那个窗口这一趟要登记哪个单例键。
-///
-/// **按它承载的界面选，不能一律 `MAIN_SINGLE_KEY`**：`--page dict` 冷启动时 `App` 建的
-/// 是词库窗（见下面 `dict_as_main`），此时若把它登记成「main」，之后任何一次
-/// [`open_main_window`] 都会命中它、被平台当成"设置窗已经开着"，于是只把这个词库窗
-/// 激活到前台——用户点「设置」，跳出来的是他已经在看的词库。
-fn main_window_single_key(dict_as_main: bool) -> &'static str {
-    if dict_as_main {
-        dict_window::SINGLE_KEY
-    } else {
-        MAIN_SINGLE_KEY
-    }
-}
-
-/// 重新开出主窗。
-///
-/// 主窗关掉后进程并不退出——词库窗还开着的话它照常活着（windui 是「关掉最后一个窗口
-/// 才退出」）。此时用户再点「设置」，单实例监听（独立的 message-only 窗口，不随主窗死）
-/// 会收到 argv，但 windui 只会去 activate 那个已经不存在的主窗，什么都不会发生。
-/// 于是这里重新建一个。
-///
-/// 重建出来的是子窗，与 `App::run` 建的那个有一处**实质差别**：它不能注册 `App::channel`
-/// （通道只在建窗前可注册）。但通道本身挂在 App 级、并没有随主窗一起死，原先注册的三条
-/// （数据加载 / core 事件 / 升级）照常有人排空——重建后仍然收得到。
-///
-/// **主窗还开着时调用本函数是安全的**：`single(MAIN_SINGLE_KEY)` 此时命中既有窗口，
-/// 平台把它激活到前台（最小化的会还原），本次请求被丢弃，不会建出第二个。首个主窗
-/// 也登记了同一个键（`App::single_window`，见 [`main_window_single_key`]）——那正是
-/// 「把主窗拉到前台」唯一可走的路：`EventCtx` 没有"激活某个窗口"的原语，只有平台层
-/// 在单例判定命中时代做。
-///
-/// 故调用方**不需要**先查 `main_window_closed`：那个标志只用来分辨二次实例该 activate
-/// 还是重建，不是本函数的前置条件。
-/// `App` 那个窗口是不是设置主窗（决定 App 级诊断定时器挂不挂）。
-///
-/// 词库 / 兼容窗当首窗时不挂：之后开出的设置主窗由 [`open_main_window`] 自挂一份，
-/// 两份同时跑就是每 2 秒取两次。
-fn app_hosts_settings_shell(dict_as_main: bool, compat_as_main: bool) -> bool {
-    !dict_as_main && !compat_as_main
-}
+const MAIN_TITLE: &str = "困困输入法 · 设置与词库";
 
 /// 主窗的窗口级快捷键处理器。绑定表与分派都在 `shortcuts`——加一条快捷键在那里加一行即可。
 ///
@@ -208,11 +135,11 @@ fn settings_window_content(app: &Rc<RefCell<state::AppState>>) -> Element {
     let loading = Element::col()
         .fill()
         .bg_role(Role::Bg)
-        .child(shell::build_titlebar("设置"))
+        .child(shell::build_titlebar("设置与词库"))
         .child(Element::divider())
         .child(
             Element::stack().fill().weight(1.0).child(
-                Element::label("正在读取设置…")
+                Element::label("正在读取数据…")
                     .fg_role(Role::TextMuted)
                     .align(Align::Center),
             ),
@@ -230,9 +157,10 @@ fn autosave_settings(app: &Rc<RefCell<state::AppState>>) {
 /// 标题栏、系统关闭和快捷键共用此路径。写入失败时留在设置页重试。
 fn finish_settings_close(st: &mut state::AppState) -> bool {
     if !st.flush_autosave() {
+        st.return_to_settings();
         return false;
     }
-    st.mark_main_window_closed();
+    st.on_main_window_closed();
     true
 }
 
@@ -247,11 +175,9 @@ pub(crate) fn open_main_window(ctx: &mut EventCtx, app: &Rc<RefCell<state::AppSt
     let guard = app.clone();
     let autosave = app.clone();
     let tick = app.clone();
-    // 重建即视为主窗回来了：这一步要赶在 content 求值之前，否则窗口已经在了、
-    // 标志还写着"已关闭"，下一次二次实例会再重建一个。
     app.borrow().main_window_closed.set(false);
     ctx.open_window(
-        Window::new("困困输入法设置", MAIN_W, MAIN_H)
+        Window::new(MAIN_TITLE, MAIN_W, MAIN_H)
             .single(MAIN_SINGLE_KEY)
             .frameless(true)
             .centered(true)
@@ -279,24 +205,12 @@ pub(crate) fn open_main_window(ctx: &mut EventCtx, app: &Rc<RefCell<state::AppSt
     );
 }
 
-/// 把 `--page` / `--tab` 解出的目标下标分派到「切页」或「开词库窗」。
-///
-/// `dict` 已不是一个页：词库整体迁进了独立窗，主窗那一格只剩个永不显示的占位
-/// （见 `pages::dict_page`），`tab.set(dict_idx)` 只会得到一屏空白。
-///
-/// `notify` 透传给 [`state::AppState::request_dict_window`]：冷启动传 `false`（等
-/// `apply_loaded` 注入方案后再开），二次实例传 `true`（数据早已就绪，立刻推一帧）。
-///
-/// 冷启动与二次实例共用此入口 —— 两处各写一份 if 的话，改一边漏一边，而漏掉的那条
-/// 路径的症状是「点了词库管理，设置窗跳出来却是一片空白」。
-fn route_target(st: &state::AppState, idx: usize, notify: bool) {
+/// 深链切换主窗中的内容。词库页保留后台的设置位置。
+fn route_target(st: &state::AppState, idx: usize) {
     if Some(idx) == cli::page_to_index("dict") {
-        #[cfg(windows)]
-        if notify && st.dict_is_main() {
-            st.dict_mgr.registration.refresh();
-        }
-        st.request_dict_window(notify);
+        st.show_dictionary();
     } else {
+        st.return_to_settings();
         st.tab.set(idx);
     }
 }
@@ -376,9 +290,8 @@ pub fn run() {
             st.dark.set(true);
         }
         // 初始页：--page <id> / --page=<id> / 快捷 --<id> / --tab <n>。
-        // `--page dict` 走开窗而非切页，且冷启动不立刻推帧（等 apply_loaded），见 route_target。
         if let Some(idx) = cli::parse_target(&args) {
-            route_target(&st, idx, false);
+            route_target(&st, idx);
         }
         // 词库页深链（--schema/--type）：此刻方案列表尚未就绪，故只挂起，
         // 待 apply_loaded 注入方案后再定位（见 AppState::route_dict_target）。
@@ -422,48 +335,23 @@ pub fn run() {
         }
     );
 
-    // `--page dict` 冷启动（托盘/开始菜单的「词库管理」）让 `App` 的那个窗口**直接承载
-    // 词库**，不再建设置窗。此前是照建设置窗、再往上叠一个词库窗，于是点一次「词库管理」
-    // 冒出两个窗口——而用户要的就只是词库。
-    //
-    // 只能在这里分叉：`App::run` 建的窗口是无条件出现的，没有"建好但不显示"这条路
-    // （`start_hidden` 要求有托盘或全局热键把它唤回来，本应用两样都没有）。
-    let dict_as_main = app_state.borrow().take_dict_window_request();
-    if dict_as_main {
-        let st = app_state.borrow();
-        st.set_dict_is_main(true);
-        // 设置窗这一趟压根没建过，故按"已关闭"记账：之后点「设置」才会走重建那条路。
-        st.mark_main_window_closed();
-    }
-    // `--page compat` 同理：让 `App` 的窗口直接承载应用兼容窗，不再多叠一个设置窗。
-    let compat_as_main = !dict_as_main && cli::parse_compat_request(&args);
-    if compat_as_main {
-        app_state.borrow().mark_main_window_closed();
-    }
-    // 标题与尺寸都跟着这一趟承载的界面走：设置窗要多留一栏二级导航的宽度，词库窗不要
-    // （见 [`DICT_W`]）。此前两者同尺寸，只有标题在这里分叉。
+    let compat_as_main = cli::parse_compat_request(&args);
+    app_state.borrow().main_window_closed.set(compat_as_main);
     let (title, (win_w, win_h), (win_min_w, win_min_h)) = if compat_as_main {
         (
             compat_window::TITLE,
             (COMPAT_W, COMPAT_H),
             (COMPAT_MIN_W, COMPAT_MIN_H),
         )
-    } else if dict_as_main {
-        (
-            dict_window::TITLE,
-            (DICT_W, DICT_H),
-            (DICT_MIN_W, DICT_MIN_H),
-        )
     } else {
-        ("困困输入法设置", (MAIN_W, MAIN_H), (MAIN_MIN_W, MAIN_MIN_H))
+        (MAIN_TITLE, (MAIN_W, MAIN_H), (MAIN_MIN_W, MAIN_MIN_H))
     };
     memstat::mark("[App::new 前]");
     let app = App::new(title, win_w, win_h)
-        // 单例键要跟着这一趟承载的界面走（见 `main_window_single_key`）。
         .single_window(if compat_as_main {
             compat_window::SINGLE_KEY
         } else {
-            main_window_single_key(dict_as_main)
+            MAIN_SINGLE_KEY
         })
         .frameless()
         .centered()
@@ -498,65 +386,24 @@ pub fn run() {
         let _ = import_tx.send(ImportAction::File(p));
     }
 
-    // 单实例 + 二次运行激活/切页/协议/导入。
-    let app_id = single_instance_app_id(false);
-    let single_instance_state = app_state.clone();
-    let mut app = app.single_instance(app_id, move |argv| {
-        // 深链失效（点了"词库管理"却停在原页）时，这条是唯一能分辨「argv 没送到」
-        // 与「送到了但解析不出页」的证据。两种成因的修法完全不同，值一条 info。
-        tracing::info!("二次实例 argv: {:?}", argv.get(1..).unwrap_or(&[]));
-        if let Some(raw) = cli::parse_protocol(&argv) {
-            route_protocol(&raw, &single_instance_state);
-        } else if cli::parse_import_request(&argv) {
-            let _ = import_tx.send(ImportAction::ClipboardDialog);
-        } else if let Some(p) = cli::parse_import_file(&argv) {
-            let _ = import_tx.send(ImportAction::File(p));
-        } else if cli::parse_compat_request(&argv) {
-            // 应用兼容不是主窗的一页，走开窗；单例键已存在时（含它承载在 App 窗口里）只是激活。
-            single_instance_state.borrow().request_compat_window();
-        } else if let Some(idx) = cli::parse_target(&argv) {
-            let st = single_instance_state.borrow();
-            // 已运行的实例通常方案列表早已就绪，深链会立即生效；若恰好撞上启动
-            // 头几十毫秒数据还没回来，route_dict_target 会自动改为挂起。
-            if let Some(t) = cli::parse_dict_target(&argv) {
-                st.route_dict_target(t);
-            }
-            // notify = true：本回调没有 ctx、开不了窗（见 `UiRequest`），要经通道推一帧。
-            // 词库窗若已开着，`Window::single` 会把它激活到前台，深链参数照样生效。
-            route_target(&st, idx, true);
-        }
-
-        // 主窗已经关掉（词库窗还开着、进程因此活着）时，windui 只会去 activate 一个
-        // 不存在的窗口，用户看到的是「点了设置没反应」。这里补一次重建。
-        //
-        // ⚠️ 必须在上面那串 if-else **之外**：最常见的一次二次启动就是从托盘或开始菜单
-        // 点「设置」，那次 argv 一个参数都没有，上面每个分支都不匹配。把重建挂在
-        // `parse_target` 分支里，等于给它加了个"这次得带参数"的莫须有前提——而重建与
-        // argv 想干什么无关，它是**所有**后续动作的前置条件。
-        //
-        // 主窗还在的话这里什么都不做：单实例监听自己会把它拉到前台。
-        //
-        // 要的是应用兼容窗时不重建：用户没要设置窗，多冒一个只会添乱。
-        let st = single_instance_state.borrow();
-        if st.main_window_closed.get() && !cli::parse_compat_request(&argv) {
-            st.request_main_window();
-        }
+    // 在窗口事件循环里处理外部启动。这样即使首窗已关闭、进程只剩兼容窗，
+    // 仍可用 EventCtx 把请求送到主窗；重复启动复用同一个窗口键。
+    let launch_state = app_state.clone();
+    let launch_tx = app.channel::<Vec<String>>(move |ctx, argv| {
+        route_second_launch(ctx, &argv, &launch_state);
+    });
+    let mut app = app.single_instance(single_instance_app_id(false), move |argv| {
+        let _ = launch_tx.send(argv);
     });
 
     // 注册后台→UI 通道：数据就绪后在 UI 线程回调，更新 Signal 刷新界面。
     let app_state_cb = app_state.clone();
-    let tx = app.channel::<state::LoadedState>(move |ctx, data| {
+    let tx = app.channel::<state::LoadedState>(move |_ctx, data| {
         let connected = data.connected;
         app_state_cb.borrow_mut().apply_loaded(data);
         memstat::mark("[apply_loaded 后]");
         // 首启自动弹设置向导：数据就绪后才能按当前配置预填。
         wizard::maybe_auto_open(&app_state_cb, connected);
-        // 冷启动 `--page dict` 的落点：方案列表刚刚注入，此刻开窗左栏才有内容、
-        // `--schema` 也才解析得出域下标。channel 回调的副作用走
-        // `apply_dispatch_effects`，`open_window` 在这条路上是被采纳的。
-        if app_state_cb.borrow().take_dict_window_request() {
-            dict_window::open(ctx, &app_state_cb);
-        }
     });
 
     // 后台线程并行执行全部 RPC（fast-fail，管道不存在时几乎立即返回）。
@@ -637,24 +484,6 @@ pub fn run() {
         });
     }
 
-    // UI 请求通道：`single_instance` 的 argv 回调没有 ctx，开不了窗（见 `UiRequest`），
-    // 由它把请求转到这里 —— channel 的 on_message 收 `&mut EventCtx`，副作用被采纳。
-    let ui_state = app_state.clone();
-    let ui_tx = app.channel::<UiRequest>(move |ctx, req| match req {
-        UiRequest::OpenDictWindow => {
-            if ui_state.borrow().take_dict_window_request() {
-                dict_window::open(ctx, &ui_state);
-            }
-        }
-        UiRequest::OpenCompatWindow => compat_window::open(ctx, &ui_state),
-        UiRequest::OpenMainWindow => {
-            if ui_state.borrow().take_main_window_request() {
-                open_main_window(ctx, &ui_state);
-            }
-        }
-    });
-    app_state.borrow().set_ui_tx(ui_tx);
-
     // 日志打包通道：压缩在后台线程做，完成后在这里弹提示、在文件管理器里选中压缩包。
     let pack_state = app_state.clone();
     let log_pack_tx = app.channel::<log_tools::PackResult>(move |ctx, r| {
@@ -700,19 +529,11 @@ pub fn run() {
     }
 
     let ui = if compat_as_main {
-        // 同词库窗：不建设置外壳，静态色控件的亮暗双态要自己补上。
+        // 兼容窗不建设置外壳，静态色控件的亮暗双态要自己初始化。
         crate::widgets::init_dark_sig(app_state.borrow().dark);
         // 界面细节信号同理：不注册的话卡片拿到孤立的缺省信号，不跟随 `[ui.look]`。
         crate::widgets::init_look(app_state.borrow().look);
         compat_window::build_content(app_state.clone())
-    } else if dict_as_main {
-        // 词库窗自己不建设置外壳，但静态色控件（图标 tint / 渐变 / 淡底）的亮暗双态
-        // 是全局注册的，平时由 `shell::build` 顺手做掉——走这条路就得自己补上，否则
-        // 标题栏图标在暗色主题下是黑的。
-        crate::widgets::init_dark_sig(app_state.borrow().dark);
-        // 界面细节信号同理：不注册的话卡片拿到孤立的缺省信号，不跟随 `[ui.look]`。
-        crate::widgets::init_look(app_state.borrow().look);
-        dict_window::build_content(app_state.clone())
     } else {
         settings_window_content(&app_state)
     };
@@ -730,8 +551,7 @@ pub fn run() {
     // 诊断信息对话框的「每 2 秒自动刷新」。定时器挂在主窗上、随主窗生灭（重建的主窗在
     // `open_main_window` 里另挂一份）。对话框关着或没勾时回调什么都不做——不写信号就不出帧
     // （见 `App::on_interval` 的文档），代价只是每 2 秒一次平台定时器唤醒。
-    // 首窗不是设置主窗时不挂，保证任何时刻只有一份（见 `app_hosts_settings_shell`）。
-    if app_hosts_settings_shell(dict_as_main, compat_as_main) {
+    if !compat_as_main {
         let autosave = app_state.clone();
         app = app.on_interval(state::AUTOSAVE_INTERVAL, move |_| {
             autosave_settings(&autosave)
@@ -764,15 +584,6 @@ pub fn run() {
             ctx.toast("正在安装更新，请等待完成后再关闭");
             return false;
         }
-        // 本窗承载的是词库时直接放行：词库的写操作即时生效，没有"未保存改动"这回事，
-        // 拿设置页的判据拦它只会莫名其妙地弹确认框。复位标志，好让之后的
-        // 「词库管理」重新开得出窗（此刻可能还有设置子窗开着，进程不一定退出）。
-        if st.dict_is_main() {
-            st.set_dict_is_main(false);
-            // 同词库子窗：关窗即结束外部编辑。
-            st.dict_mgr.end_all_edits();
-            return true;
-        }
         // 应用兼容窗的改动即时落盘，同样没有「未保存改动」。
         if compat_as_main {
             return true;
@@ -804,6 +615,31 @@ enum ImportAction {
     File(std::path::PathBuf),
 }
 
+/// 已运行时，从托盘、Quicker、文件关联等入口重新打开应用。
+fn route_second_launch(ctx: &mut EventCtx, argv: &[String], app: &Rc<RefCell<state::AppState>>) {
+    if cli::parse_compat_request(argv) {
+        compat_window::open(ctx, app);
+        return;
+    }
+
+    if let Some(raw) = cli::parse_protocol(argv) {
+        route_protocol(&raw, app);
+    } else if cli::parse_import_request(argv) {
+        run_import_action(ctx, ImportAction::ClipboardDialog, app);
+    } else if let Some(p) = cli::parse_import_file(argv) {
+        run_import_action(ctx, ImportAction::File(p), app);
+    } else if let Some(idx) = cli::parse_target(argv) {
+        let st = app.borrow();
+        if let Some(target) = cli::parse_dict_target(argv) {
+            st.route_dict_target(target);
+        }
+        route_target(&st, idx);
+    } else {
+        app.borrow().return_to_settings();
+    }
+    open_main_window(ctx, app);
+}
+
 /// 导入动作统一落点（冷启动与二次唤起同路）。
 ///
 /// 文件分支不切页：方案包导入确认对话框挂在根上（全窗模态），与当前页无关；
@@ -823,7 +659,7 @@ fn run_import_action(
                 return;
             }
             if let Some(idx) = cli::page_to_index("advanced") {
-                st.tab.set(idx);
+                route_target(&st, idx);
             }
             st.config_import.open();
             st.config_import.read_clipboard(ctx);
@@ -847,16 +683,13 @@ fn route_protocol(raw: &str, state: &Rc<RefCell<state::AppState>>) {
             // 属于主题页、方案包导入的确认框属于方案页。不认识的 kind 不切页——只弹一句
             // "暂不支持"，把用户留在原处。
             //
-            // 此前这里是"theme 去 3、其余一律去 4"的两档粗分，schema 落到 4 纯属遗留：
-            // 4 是词库，与方案包导入毫无关系；而词库现在已迁出主窗、那一格是永不显示的
-            // 占位，再送过去就是一屏空白——用户点了个导入链接，设置窗跳出来却什么都没有。
             let target_page = match req.kind.as_str() {
                 "theme" => cli::page_to_index("theme"),
                 "schema" => cli::page_to_index("schema"),
                 _ => None,
             };
             if let Some(i) = target_page {
-                st.tab.set(i);
+                route_target(&st, i);
             }
             tracing::info!(
                 "协议导入请求: kind={} url={} name={}",
@@ -978,7 +811,6 @@ mod tests {
         let mut allowed = false;
         windui::testing::run_with_ctx(|ctx| allowed = close(ctx));
         assert!(allowed);
-        assert!(app.borrow().main_window_closed.get());
         let calls = rpc::take_mock_calls();
         assert!(
             calls
@@ -1123,133 +955,88 @@ mod tests {
         assert!(!st.theme_import_dialog_visible.get());
     }
 
-    /// `--page dict` 必须**开窗**而不是切页：主窗那一格是永不显示的占位，切过去就是
-    /// 一屏空白。这是本次把词库迁出主窗后最容易回退的一条。
     #[test]
-    fn dict_target_requests_window_and_leaves_tab_alone() {
+    fn unified_window_dictionary_deep_link_preserves_settings_location_across_repeated_launches() {
         let st = state::AppState::empty();
-        let before = st.tab.get();
+        let keys = cli::page_to_index("keys").unwrap();
+        let dict = cli::page_to_index("dict").unwrap();
+        route_target(&st, keys);
+        route_target(&st, dict);
+        route_target(&st, dict);
+        assert!(st.dictionary_visible.get());
+        assert_eq!(st.tab.get(), keys);
+        st.return_to_settings();
+        assert!(!st.dictionary_visible.get());
+        assert_eq!(st.tab.get(), keys);
+        route_target(&st, dict);
+        let theme = cli::page_to_index("theme").unwrap();
+        route_target(&st, theme);
+        assert!(!st.dictionary_visible.get());
+        assert_eq!(st.tab.get(), theme);
+    }
 
-        route_target(
-            &st,
-            cli::page_to_index("dict").expect("dict 必在 PAGES 中"),
-            false,
+    #[test]
+    fn unified_window_secondary_launches_target_one_window_and_honor_dictionary_shortcuts() {
+        let app = Rc::new(RefCell::new(state::AppState::empty()));
+        *app.borrow().theme_handle.borrow_mut() = Some(ThemeHandle::detached(Theme::default()));
+        let run = |args: &[&str]| {
+            let argv = args.iter().map(|v| v.to_string()).collect::<Vec<_>>();
+            let effects =
+                windui::testing::run_with_ctx(|ctx| route_second_launch(ctx, &argv, &app));
+            assert_eq!(effects.open_windows.len(), 1);
+            effects.open_windows[0].single.clone().unwrap()
+        };
+        assert_eq!(run(&["exe", "--page", "input"]), MAIN_SINGLE_KEY);
+        assert_eq!(
+            run(&["exe", "--dict", "--schema", "pinyin", "--type", "user-dict"]),
+            MAIN_SINGLE_KEY
         );
-
-        assert_eq!(st.tab.get(), before, "开词库窗不该动主窗的当前页");
-        assert!(st.take_dict_window_request(), "应挂起一个开窗请求");
+        assert!(app.borrow().dictionary_visible.get());
+        assert!(app.borrow().awaiting_dict_target());
+        assert_eq!(run(&["exe", "--page=dict"]), MAIN_SINGLE_KEY);
+        assert_eq!(run(&["exe"]), MAIN_SINGLE_KEY);
+        assert!(!app.borrow().dictionary_visible.get());
+        assert_eq!(app.borrow().tab.get(), cli::page_to_index("input").unwrap());
+        assert_eq!(run(&["exe", "--page", "compat"]), compat_window::SINGLE_KEY);
     }
 
-    /// 开窗请求取一次即清：否则 `apply_loaded` 与 UI 通道两处都会消费到它，
-    /// 一次深链开两回窗（非单例窗就是真开两个）。
     #[test]
-    fn dict_window_request_is_consumed_once() {
-        let st = state::AppState::empty();
-
-        st.request_dict_window(false);
-
-        assert!(st.take_dict_window_request());
-        assert!(!st.take_dict_window_request(), "第二次取应为空");
-    }
-
-    /// 其余页照旧切页，且不该顺带挂起开窗请求。
-    #[test]
-    fn non_dict_target_switches_tab() {
-        let st = state::AppState::empty();
-        let about = cli::page_to_index("about").expect("about 必在 PAGES 中");
-
-        route_target(&st, about, false);
-
-        assert_eq!(st.tab.get(), about);
-        assert!(!st.take_dict_window_request());
-    }
-
-    /// 「主窗已关闭」默认为假，置位后保持 —— 二次实例据此分辨该 activate 已有主窗
-    /// 还是重建一个。默认为真的话，第一次点设置就会平白多开一个主窗。
-    /// `App` 那个窗口的单例键必须跟着它承载的界面走。
-    ///
-    /// 一律登记成「main」的后果：`--page dict` 冷启动后点「设置」，`open_main_window`
-    /// 的单例判定命中这个词库窗，平台把它激活到前台就算完事——设置窗永远开不出来，
-    /// 而这一路没有任何报错。
-    #[test]
-    fn main_window_single_key_follows_what_it_hosts() {
-        assert_eq!(main_window_single_key(false), MAIN_SINGLE_KEY);
-        assert_eq!(main_window_single_key(true), dict_window::SINGLE_KEY);
-        assert_ne!(
-            MAIN_SINGLE_KEY,
-            dict_window::SINGLE_KEY,
-            "两个键同值的话，设置窗与词库窗会互相顶替"
+    fn unified_window_repeated_dictionary_launch_keeps_the_active_word_editor_target() {
+        let app = Rc::new(RefCell::new(state::AppState::empty()));
+        *app.borrow().theme_handle.borrow_mut() = Some(ThemeHandle::detached(Theme::default()));
+        let mgr = app.borrow().dict_mgr.clone();
+        mgr.edit_visible.set(true);
+        mgr.edit_text.set("尚未提交的人名".into());
+        let before = (mgr.domain.get(), mgr.sub_tab.get());
+        let argv = vec![
+            "exe".into(),
+            "--dict".into(),
+            "--schema=pinyin".into(),
+            "--type=user-dict".into(),
+        ];
+        let result = windui::testing::run_with_ctx(|ctx| route_second_launch(ctx, &argv, &app));
+        assert_eq!(
+            result.open_windows[0].single.as_deref(),
+            Some(MAIN_SINGLE_KEY)
         );
+        assert!(app.borrow().dictionary_visible.get());
+        assert!(!app.borrow().awaiting_dict_target());
+        assert!(mgr.edit_visible.get());
+        assert_eq!(mgr.edit_text.get(), "尚未提交的人名");
+        assert_eq!((mgr.domain.get(), mgr.sub_tab.get()), before);
     }
 
-    /// 主窗关了，诊断对话框的自动刷新就得停：冷启动先开的是词库 / 兼容窗时，App 级
-    /// 定时器挂在那个窗口上、主窗关掉后仍在跑，不复位就会在后台一直取数。
+    /// 主窗关闭后停止诊断刷新，即使独立的兼容窗口继续运行。
     #[test]
     fn closing_main_window_stops_memory_auto_refresh() {
         let st = state::AppState::empty();
         st.memory.visible.set(true);
         st.memory.auto.set(true);
 
-        st.mark_main_window_closed();
-
-        assert!(!st.memory.visible.get());
-        assert!(!st.memory.auto.get());
-    }
-
-    /// App 级的 2 秒定时器只在 `App` 那个窗口就是设置主窗时挂：词库 / 兼容窗当首窗时，
-    /// 之后开出的主窗由 `open_main_window` 自挂一份，两份同时跑就是每 2 秒取两次。
-    #[test]
-    fn app_level_memory_tick_only_when_first_window_is_settings() {
-        assert!(app_hosts_settings_shell(false, false));
-        assert!(!app_hosts_settings_shell(true, false));
-        assert!(!app_hosts_settings_shell(false, true));
-    }
-
-    #[test]
-    fn main_window_closed_starts_false_and_latches() {
-        let st = state::AppState::empty();
-        assert!(!st.main_window_closed.get());
-
-        st.mark_main_window_closed();
+        st.on_main_window_closed();
 
         assert!(st.main_window_closed.get());
-    }
-
-    /// 词库作为 `App` 主窗时不得再开第二个词库窗：`App::run` 建的窗口拿不到
-    /// `Window::single` 的键，单例登记表里没有它，挡不住重复开窗。
-    #[test]
-    fn dict_as_main_window_suppresses_extra_dict_window() {
-        let st = state::AppState::empty();
-        st.set_dict_is_main(true);
-
-        st.request_dict_window(false);
-
-        assert!(
-            !st.take_dict_window_request(),
-            "词库已是主窗，不该再挂起开窗请求"
-        );
-    }
-
-    /// 复位后恢复正常：词库主窗关掉、只剩设置子窗时，「词库管理」还得开得出来。
-    #[test]
-    fn dict_window_request_works_again_after_main_dict_closed() {
-        let st = state::AppState::empty();
-        st.set_dict_is_main(true);
-        st.set_dict_is_main(false);
-
-        st.request_dict_window(false);
-
-        assert!(st.take_dict_window_request());
-    }
-
-    /// 重开主窗的请求同样取一次即清，否则一次「点设置」会重建两个主窗。
-    #[test]
-    fn main_window_request_is_consumed_once() {
-        let st = state::AppState::empty();
-
-        st.request_main_window();
-
-        assert!(st.take_main_window_request());
-        assert!(!st.take_main_window_request(), "第二次取应为空");
+        assert!(!st.memory.visible.get());
+        assert!(!st.memory.auto.get());
     }
 }

@@ -531,55 +531,17 @@ pub fn import_menu_items(
     ]
 }
 
-/// 词库独立窗左栏的同一份右键菜单，但每项都**先把设置窗拉到前台**再触发。
-///
-/// 导入的界面只有主窗那一份（对话框挂在 `shell::build` 的根 stack 上），词库窗刻意不
-/// 自己挂一份：`visible` 是同一个 `Signal`，两棵树各画一遍就是两个窗口同时弹出同一个
-/// 框，其中一个还是用户根本没点过的那个窗。导入配置本就是设置窗的事，词库窗只做转交。
-///
-/// **拉主窗必须排在动作前面**：`ctx.open_window` 与 `ctx.request_pick_file` 都是延后
-/// 执行的，而平台先落窗口操作、后弹文件对话框（win32 里 `apply_window_op` 那一行紧挨着
-/// 排在 `apply_dialog_request` 之前）。反过来写的话，主窗被激活时会盖住已经弹出来的
-/// 系统文件选择器 —— 用户看到的是设置窗跳出来、然后什么都点不动。
-///
-/// 主窗开着与否都调 [`crate::open_main_window`]：它带着 `single(MAIN_SINGLE_KEY)`，
-/// 开着就是激活到前台，关着才重建（见该函数说明）。
-pub fn import_menu_items_via_main_window(app: &Rc<RefCell<AppState>>) -> Vec<MenuItem> {
-    // 定制版 `feature:config_import` 连同这份菜单一起藏（同 `shell::build` 那两处）。
-    if app.borrow().manifest.feature_hidden("config_import") {
+/// 词库侧栏使用主窗口的导入操作和对话框。
+pub fn dictionary_import_menu(app: &Rc<RefCell<AppState>>) -> Vec<MenuItem> {
+    let st = app.borrow();
+    if st.manifest.feature_hidden("config_import") {
         return Vec::new();
     }
-    let (app_clip, app_file) = (app.clone(), app.clone());
-    vec![
-        MenuItem::run(
-            "从剪贴板导入配置",
-            move |ctx| {
-                crate::open_main_window(ctx, &app_clip);
-                // 先取出再用：`read_clipboard` 之后还要走进 core 校验，别把 `AppState`
-                // 的借用一路带进去。
-                let ci = app_clip.borrow().config_import.clone();
-                ci.open();
-                ci.read_clipboard(ctx);
-            },
-            false,
-        ),
-        MenuItem::run(
-            "导入文件…",
-            move |ctx| {
-                crate::open_main_window(ctx, &app_file);
-                let (ci, mgr, ov) = {
-                    let st = app_file.borrow();
-                    (
-                        st.config_import.clone(),
-                        st.schema_mgr.clone(),
-                        ThemePkgConfirmSignals::of(&st),
-                    )
-                };
-                pick_import_file(ctx, &ci, &mgr, ov);
-            },
-            false,
-        ),
-    ]
+    import_menu_items(
+        &st.config_import,
+        &st.schema_mgr,
+        ThemePkgConfirmSignals::of(&st),
+    )
 }
 
 // ──────────────────────── 纯函数（便于单测） ────────────────────────
@@ -1215,7 +1177,7 @@ mod tests {
     /// 叫另一个，用户只会以为那是两件不同的事。两份是分开写的（词库窗那份每项前面多了
     /// 「把主窗拉到前台」一步），漂移不会有任何编译错误。
     #[test]
-    fn dict_window_menu_mirrors_the_main_window_one() {
+    fn dictionary_menu_mirrors_the_main_window_one() {
         let _g = crate::rpc::ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -1235,23 +1197,23 @@ mod tests {
         };
 
         assert_eq!(
-            labels(import_menu_items_via_main_window(&app)),
+            labels(dictionary_import_menu(&app)),
             labels(import_menu_items(&import, &mgr, test_overwrite_signals()))
         );
     }
 
-    /// 词库窗那份菜单也受 `feature:config_import` 管：藏了就是空表（windui 不弹空菜单）。
+    /// 词库侧栏菜单也受 `feature:config_import` 管：藏了就是空表（windui 不弹空菜单）。
     #[test]
-    fn dict_window_menu_follows_config_import_hide() {
+    fn dictionary_menu_follows_config_import_hide() {
         let _g = crate::rpc::ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::set_var("WIND_RPC_MOCK", "1") };
         let app = Rc::new(RefCell::new(AppState::empty()));
-        assert!(!import_menu_items_via_main_window(&app).is_empty(), "前提");
+        assert!(!dictionary_import_menu(&app).is_empty(), "前提");
         let (h, _) = wind_config::SettingsHide::parse(&["feature:config_import"]);
         app.borrow_mut().manifest = crate::custom_hide::settings_manifest(&h, false);
-        assert!(import_menu_items_via_main_window(&app).is_empty());
+        assert!(dictionary_import_menu(&app).is_empty());
         unsafe { std::env::remove_var("WIND_RPC_MOCK") };
     }
 

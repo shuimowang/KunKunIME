@@ -752,34 +752,16 @@ pub struct AppState {
     pub schema_mgr: SchemaManagerState,
     /// 词库管理页状态（导航/数据加载/写操作）。
     pub dict_mgr: DictManagerState,
-    /// 待打开词库窗（`--page dict` 深链、协议路由）。
-    ///
-    /// 开窗**必须**有个 `EventCtx`，而且得是副作用被采纳的时机：`Tree::call_on_update`
-    /// 只把 toast 捞出来、丢弃整个 `EventOutcome`，所以响应式哨兵里 `open_window` 永不
-    /// 生效。命令行解析（冷启动）与 `single_instance` 回调（二次实例）都没有 ctx，故先
-    /// 在此挂起，由带 ctx 的 channel 回调消费（见 `main` 的两个 channel）。
-    pending_dict_window: Cell<bool>,
-    /// 待重开主窗（主窗已关闭时二次实例送来 argv）。同 `pending_dict_window`：开窗要
-    /// `EventCtx`，命令行/单实例回调都没有，故先挂起、由带 ctx 的通道回调消费。
-    pending_main_window: Cell<bool>,
-    /// UI 请求通道：让**没有 ctx 的回调**（`single_instance` 的 argv 处理）能把
-    /// 「该开词库窗了」送到一个有 ctx 的时机。`main()` 在 App 构建期注入一次。
-    pub ui_tx: RefCell<Option<Sender<crate::UiRequest>>>,
+    /// 主窗显示词库时也保留设置页的 tab、搜索词及各表单的状态。
+    pub dictionary_visible: Signal<bool>,
+    /// 主窗关闭而兼容窗仍在时，暂停设置表单的自动保存。
+    pub main_window_closed: Signal<bool>,
     /// 日志打包通道：压缩放在后台线程（日志多时上百 MB，在 UI 线程做会卡住窗口），
     /// 结果经此回 UI 线程弹提示。`main()` 在 App 构建期注入一次。
     /// `Rc` 包一层：设置页按钮的回调要 `'static`，拿不到 `&AppState`。
     pub log_pack_tx: Rc<RefCell<Option<Sender<crate::log_tools::PackResult>>>>,
     /// 正在打包。连点不会起第二个线程。
     pub log_pack_busy: Rc<Cell<bool>>,
-    /// 主窗是否已经关闭。**不影响词库窗**——它独立存活（见 [`crate::dict_window::open`]）。
-    ///
-    /// 用途只有一个：二次实例送来 argv 时，据此判断该「把已有主窗拉到前台」（windui 的
-    /// 单实例监听自己会做）还是「重新开一个主窗」。没有它就分不清这两种情形，而两者
-    /// 用户看到的差别是「设置窗跳出来」与「点了没反应」。
-    ///
-    /// 只在主窗真正关闭时置位，`on_close_request` 被拦下（有未保存改动）时不置——
-    /// 那次关闭取消了，主窗还在。
-    pub main_window_closed: Signal<bool>,
     /// 运行期换肤句柄。重建主窗时 `shell::build` 要用它，而 `App::theme_handle()` 只在
     /// 建窗前拿得到，故建好后存一份进来。
     pub theme_handle: RefCell<Option<ThemeHandle>>,
@@ -798,15 +780,6 @@ pub struct AppState {
     pub accent_note: Signal<String>,
     /// 上一次换上的（明暗, 强调色）。相同就不再 `ThemeHandle::set`——那会整窗重绘。
     applied_theme: Cell<Option<(bool, Option<crate::accent::AccentSet>)>>,
-    /// 词库正作为 `App` 的那个窗口（`--page dict` 冷启动时如此）。
-    ///
-    /// 这种启动下**不建设置窗**：从托盘点「词库管理」却弹出两个窗口（设置窗 + 词库窗）
-    /// 是没道理的，用户要的就只是词库。
-    ///
-    /// 之所以要记一笔，是因为 `App::run` 建的那个窗口拿不到 `Window::single` 的键——
-    /// 单例登记表里没有它。不记的话，再来一次 `--page dict` 就会在它旁边**另开**一个
-    /// 词库窗；而记了就能识别出"已经有一个了"，交给单实例监听把它激活到前台。
-    dict_is_main: Cell<bool>,
     /// 待应用的词库页深链（`--page dict --schema .. --type ..`）。
     ///
     /// 冷启动解析命令行时方案列表尚未就绪（要等后台 RPC 回来才有），无从把 `--schema`
@@ -1272,12 +1245,10 @@ impl AppState {
             conflict: signal(String::new()),
             schema_mgr,
             dict_mgr: DictManagerState::new(),
-            pending_dict_window: Cell::new(false),
-            pending_main_window: Cell::new(false),
-            ui_tx: RefCell::new(None),
+            dictionary_visible: signal(false),
+            main_window_closed: signal(false),
             log_pack_tx: Rc::new(RefCell::new(None)),
             log_pack_busy: Rc::new(Cell::new(false)),
-            main_window_closed: signal(false),
             theme_handle: RefCell::new(None),
             accent_idx: signal(initial_accent.index()),
             look: crate::look::LookSignals::new(initial_look),
@@ -1286,7 +1257,6 @@ impl AppState {
             accent_fetched_for: RefCell::new(None),
             accent_note: signal(String::new()),
             applied_theme: Cell::new(None),
-            dict_is_main: Cell::new(false),
             pending_dict_target: Rc::new(RefCell::new(None)),
             backup_mgr: crate::pages::backup::BackupState::new(),
             config_import: crate::pages::config_import::ConfigImportState::new(),
@@ -2804,73 +2774,32 @@ impl AppState {
         });
     }
 
-    /// 注入 UI 请求通道的发送端。`main()` 在 App 构建期调用一次。
-    pub fn set_ui_tx(&self, tx: Sender<crate::UiRequest>) {
-        *self.ui_tx.borrow_mut() = Some(tx);
-    }
-
-    /// 请求打开词库窗。只置标志，真正开窗由带 `EventCtx` 的 channel 回调完成。
-    ///
-    /// `notify` 决定要不要顺带唤醒 UI 通道：
-    /// - 冷启动时传 `false` —— 那一刻方案列表还没到（后台 RPC 在飞），开出来的窗左栏是空的，
-    ///   `--schema wb` 也无从解析成域下标。标志由 `apply_loaded` 之后的回调消费，时机天然对。
-    /// - 二次实例 / 协议路由传 `true` —— 数据早已就绪，需要立刻推一帧把窗开出来。
-    pub fn request_dict_window(&self, notify: bool) {
-        // 词库已经是 `App` 的那个窗口时不再开第二个。单实例监听会把它激活到前台，
-        // 而深链参数（`--schema` / `--type`）照常经 `route_dict_target` 写进去生效。
-        if self.dict_is_main.get() {
-            return;
-        }
-        self.pending_dict_window.set(true);
-        if notify && let Some(tx) = self.ui_tx.borrow().clone() {
-            // 发送失败 = 窗口已关闭，此时开窗本来也没有意义。
-            let _ = tx.send(crate::UiRequest::OpenDictWindow);
+    /// 切换到词库，并保留返回时的设置页位置。
+    pub fn show_dictionary(&self) {
+        self.search.dismiss();
+        self.dictionary_visible.set(true);
+        if self.data_loaded && !self.dict_mgr.has_open_dialog() {
+            self.dict_mgr.reload();
+            #[cfg(windows)]
+            self.dict_mgr.registration.refresh();
         }
     }
 
-    /// 词库是否正作为 `App` 的主窗口。见 [`Self::dict_is_main`] 字段说明。
-    pub fn dict_is_main(&self) -> bool {
-        self.dict_is_main.get()
-    }
-
-    /// 标记词库为 `App` 的主窗口（`--page dict` 冷启动）；它关闭时须复位。
-    pub fn set_dict_is_main(&self, on: bool) {
-        self.dict_is_main.set(on);
-    }
-
-    /// 请求开应用兼容窗（二次实例带 `--page compat`）。本回调拿不到 ctx，经通道让 UI 线程开。
-    pub fn request_compat_window(&self) {
-        if let Some(tx) = self.ui_tx.borrow().clone() {
-            let _ = tx.send(crate::UiRequest::OpenCompatWindow);
-        }
-    }
-
-    /// 取走「该开词库窗了」这个请求（取一次即清）。
-    pub fn take_dict_window_request(&self) -> bool {
-        self.pending_dict_window.replace(false)
-    }
-
-    /// 请求重新开出主窗（主窗已关、二次实例又送来 argv 时）。
-    ///
-    /// 与 [`Self::request_dict_window`] 一样只置标志 + 推一帧：开窗要 `EventCtx`，而
-    /// `single_instance` 的回调没有。这条路在主窗已关的情况下仍然通——通道挂在 App 级，
-    /// 由还活着的词库窗接手排空。
-    pub fn request_main_window(&self) {
-        self.pending_main_window.set(true);
-        if let Some(tx) = self.ui_tx.borrow().clone() {
-            let _ = tx.send(crate::UiRequest::OpenMainWindow);
-        }
-    }
-
-    /// 取走「该开主窗了」这个请求（取一次即清）。
-    pub fn take_main_window_request(&self) -> bool {
-        self.pending_main_window.replace(false)
+    pub fn return_to_settings(&self) {
+        self.dictionary_visible.set(false);
     }
 
     /// 词库页深链统一入口：方案列表已就绪则立即定位，否则挂起等 [`Self::apply_loaded`] 消费。
     /// 冷启动（列表未就绪）与二次实例激活（已就绪）共用此入口，避免两条易走偏的路径。
     pub fn route_dict_target(&self, target: crate::cli::DictTarget) {
         if target.is_empty() {
+            return;
+        }
+        if self.dict_mgr.has_open_dialog() {
+            self.feedback.set(Some((
+                ToastKind::Info,
+                "请先完成当前词库操作，再打开指定词库。".into(),
+            )));
             return;
         }
         if self.data_loaded {
@@ -3338,13 +3267,14 @@ impl AppState {
 
     /// Close the settings window after its caller has flushed the pending changes.
     pub fn close_window(&self, ctx: &mut EventCtx) {
-        self.mark_main_window_closed();
+        self.on_main_window_closed();
         ctx.force_close();
     }
 
-    /// Mark the settings window closed without disturbing other open windows.
-    pub fn mark_main_window_closed(&self) {
+    /// 退出主窗时结束外部词库编辑，并停止诊断刷新。
+    pub fn on_main_window_closed(&self) {
         self.main_window_closed.set(true);
+        self.dict_mgr.end_all_edits();
         self.memory.visible.set(false);
         self.memory.auto.set(false);
     }

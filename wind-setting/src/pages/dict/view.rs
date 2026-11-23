@@ -27,9 +27,7 @@ use super::state::{DictManagerState, DomainKind};
 
 /// 按一份 [`DictManagerState`] 构建词库页主体。
 ///
-/// 收值而不是 `&AppState`：这一页现在只长在独立词库窗里，而 `Window::content` 收的是
-/// `'static` 闭包，借用进不去。本页原本也只依赖 `dict_mgr`（它自带全部 Signal 与 Rc，
-/// 是个自包含的 `Clone` 单元），传值即可。
+/// 事件回调持有同一份管理状态，切回设置后仍可恢复词库的筛选和选中项。
 pub fn build_page_for(mgr: DictManagerState) -> Element {
     // ── 响应式 effect：数据域/子标签变化 → 归零分页 + 重载（搜索词刻意保留）──
     let dom_v = mgr.domain;

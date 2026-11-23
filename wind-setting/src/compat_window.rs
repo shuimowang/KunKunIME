@@ -1,10 +1,9 @@
-//! 应用兼容独立窗 — 与主窗同进程的 windui 子窗（`EventCtx::open_window`），做法同
-//! [`crate::dict_window`]：`Signal` 是 `Copy` 句柄可直接传进来，换肤 / toast 天然联动。
+//! 应用兼容独立窗，与设置和词库共享状态及主题。
 //!
 //! 窗内三栏：左栏分类（应用规则 / 窗口作用域 / 上屏换行）与整体操作，中栏进程列表，右栏配置信息。
 //! 入口在设置窗「高级」页的「应用兼容」卡片，以及全局搜索里的应用兼容条目。
 //!
-//! 约束与词库窗相同（违反都是静默失败）：开窗只能在带 `EventCtx` 且副作用被采纳的时机；
+//! 开窗需要带 `EventCtx` 的事件回调；
 //! `content` 闭包里新建的 `Signal` 归本窗所有、关窗即回收，所以页内的载体信号都在
 //! [`crate::pages::compat::build_content`] 里现建，不存回长命的 `CompatState`。
 
@@ -65,12 +64,13 @@ pub fn build_content(app: Rc<RefCell<AppState>>) -> Element {
     )
 }
 
-/// 左栏底部的「← 设置」：开着设置窗就激活它，关了就重建，随后关掉本窗（同词库窗）。
+/// 左栏底部的「← 设置」激活管理窗口，随后关掉兼容窗口。
 fn build_back_button(app: Rc<RefCell<AppState>>) -> Element {
     Element::button("← 设置")
         .small()
         .outline_soft()
         .on_click(move |ctx| {
+            app.borrow().return_to_settings();
             crate::open_main_window(ctx, &app);
             ctx.request_close();
         })

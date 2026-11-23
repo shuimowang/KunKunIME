@@ -46,8 +46,6 @@ const LIST: &str = include_str!("../res/icons/ui/list.svg");
 const CHECK: &str = include_str!("../res/icons/ui/check.svg");
 /// 搜索框的前置放大镜（侧栏搜索框左侧）。
 pub const SEARCH: &str = include_str!("../res/icons/ui/search.svg");
-/// 「在新窗口打开」提示角标（侧栏词库项右侧）。
-pub const EXTERNAL: &str = include_str!("../res/icons/ui/external.svg");
 /// 「效果预览」卡头图钉（锁定预览卡固定页顶）。两态共用一枚，状态色区分。
 pub const PIN: &str = include_str!("../res/icons/ui/pin.svg");
 

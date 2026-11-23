@@ -1214,8 +1214,7 @@ impl Tree {
     ///
     /// 登记跟着遮罩节点的生命周期走、不跟信号走：`show` 常在比对话框长寿的作用域里创建，
     /// 子树重建删掉旧遮罩后信号仍活着，只看信号存活会让本表越积越长。故登记时顺带剔除
-    /// 已删节点。同一个 `show` 重建后**原位**换成新节点：本表的顺序就是 ESC 的关闭顺序，
-    /// 追加到末尾会让重建过的对话框跳到并列对话框之上。
+    /// 已删节点。同一个 `show` 重建后原位换成新节点。
     pub(crate) fn register_modal(&mut self, node: NodeId, show: Signal<bool>) {
         if let Some(entry) = self.modals.iter_mut().find(|(_, s)| *s == show) {
             entry.0 = node;
@@ -1242,11 +1241,17 @@ impl Tree {
     /// 顺带清掉遮罩节点已删除的登记，使反复重建带对话框的子树不会让本栈越积越长。
     pub(crate) fn close_topmost_modal(&mut self) -> bool {
         self.prune_modals();
-        for (_, sig) in self.modals.iter().rev() {
-            if sig.get() {
-                sig.set(false);
-                return true;
-            }
+        if !self.modals.iter().any(|(_, show)| show.get()) {
+            return false;
+        }
+        // 跨页保留的对话框可能仍然为打开状态。只关闭当前可见页面最上层的遮罩。
+        if let Some(show) = self
+            .topmost_modal()
+            .and_then(|id| self.get(id))
+            .and_then(|node| node.widget.modal_signal())
+        {
+            show.set(false);
+            return true;
         }
         false
     }

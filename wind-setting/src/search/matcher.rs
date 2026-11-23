@@ -46,7 +46,7 @@ const P_SCHEMA_LEVEL: i32 = 30;
 /// 但按纯文本匹配，「统计英文输入」是标题前缀（800）、「使用统计」只是子串（600），
 /// 开关反而排前面——反直觉。
 ///
-/// 导航型条目（手写页的整块卡片、词库窗）代表「去某个地方」，通常正是搜索时的首要
+/// 导航型条目（手写页的整块卡片、词库页）代表「去某个地方」，通常正是搜索时的首要
 /// 意图；具体设置项则是到了那里之后的事。故给它们跨一档的加成（250 > 前缀与子串
 /// 之间的 200），让同样命中的情况下整块优先。
 const B_NAVIGATION: i32 = 250;
@@ -71,7 +71,7 @@ fn score(entry: &SearchEntry, query: &str, words: &[&str]) -> i32 {
     }
     match entry.target {
         super::JumpTarget::SchemaLevel { .. } => raw - P_SCHEMA_LEVEL,
-        super::JumpTarget::Card { .. } | super::JumpTarget::DictWindow => raw + B_NAVIGATION,
+        super::JumpTarget::Card { .. } | super::JumpTarget::Dictionary => raw + B_NAVIGATION,
         _ => raw,
     }
 }

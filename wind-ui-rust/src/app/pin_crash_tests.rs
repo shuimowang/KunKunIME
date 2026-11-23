@@ -211,3 +211,29 @@ fn rebuilt_dialog_keeps_its_esc_order() {
     assert!(!upper.get(), "先关的应是上面那个");
     assert!(lower.get(), "下面那个（重建过）应还开着");
 }
+
+#[test]
+fn unified_window_escape_ignores_a_dialog_on_another_page() {
+    let _motion = MotionOff::on();
+    let first = signal(true);
+    let dialog = signal(true);
+    let mut host = App::new("workspace", W, H)
+        .content(
+            Element::stack().fill().child(
+                Element::stack()
+                    .fill()
+                    .visible_when(move || first.get())
+                    .child(Element::dialog(dialog, Element::leaf().size(BLOCK_W, 60))),
+            ),
+        )
+        .into_handler_for_test();
+    render(&mut host);
+    set(&mut host, first, false);
+    render(&mut host);
+    assert!(!host.tree.close_topmost_modal());
+    assert!(dialog.get());
+    set(&mut host, first, true);
+    render(&mut host);
+    assert!(host.tree.close_topmost_modal());
+    assert!(!dialog.get());
+}

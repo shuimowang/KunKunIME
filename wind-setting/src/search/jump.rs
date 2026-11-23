@@ -44,7 +44,7 @@ impl JumpRequest {
             } else {
                 host_anchor // 第一跳：先滚到卡片上的入口行
             }),
-            JumpTarget::SchemaLevel { .. } | JumpTarget::DictWindow => None,
+            JumpTarget::SchemaLevel { .. } | JumpTarget::Dictionary => None,
         }
     }
 }
@@ -72,8 +72,8 @@ fn send(tab: Signal<usize>, jump: Signal<Option<JumpRequest>>, target: JumpTarge
         s.set(n);
         n
     });
-    // 词库条目开的是独立窗，主窗停在原页——切过去只会得到一屏空白占位。
-    if !matches!(target, JumpTarget::DictWindow) {
+    // 词库使用自己的导航；保留设置页索引，以便返回时回到原位置。
+    if !matches!(target, JumpTarget::Dictionary) {
         tab.set(target.tab());
     }
     jump.set(Some(JumpRequest {
