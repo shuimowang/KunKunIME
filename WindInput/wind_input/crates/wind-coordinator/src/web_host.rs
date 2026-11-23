@@ -28,6 +28,7 @@ pub trait WebDataHost {
 
     fn engine_mgr(&self) -> &EngineManager;
     fn user_store(&self) -> Option<&Arc<Store>>;
+    fn email_suffix_presets(&self) -> Vec<String>;
     fn stat_collector(&self) -> Option<&StatCollector>;
     fn reverse_lookup(&self) -> &RwLock<ReverseLookup>;
     // 曾有 `themes_dir() -> Option<&Path>`（安装目录的 themes 根），已删：它只有一个
@@ -286,6 +287,9 @@ impl WebDataHost for Coordinator {
     }
     fn reverse_lookup(&self) -> &RwLock<ReverseLookup> {
         &self.reverse
+    }
+    fn email_suffix_presets(&self) -> Vec<String> {
+        self.rt().config.input.email.suffixes.clone()
     }
     fn add_word_context(&self) -> crate::handle_addword::AddWordContext {
         Coordinator::add_word_context(self)

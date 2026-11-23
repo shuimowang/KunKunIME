@@ -2486,6 +2486,10 @@ pub(crate) fn mock_reply(method: &str, params: &Value) -> Value {
             { "code": "women", "text": "我们", "count": 7 }
         ]),
         // 设置页列表走分页版（`{items,total}`）；上面那条裸数组留给全量取用方。
+        "mailSuffix.listPaged" => {
+            let cfg: Value = serde_json::from_str(MOCK_CONFIG).expect("valid mock config");
+            json!({"items": [], "total": 0, "presets": cfg["input"]["email"]["suffixes"]})
+        }
         "mailSuffix.add" | "urlHistory.add" | "quickHistory.add" => {
             json!({"ok": true, "added": true, "text": params["text"]})
         }

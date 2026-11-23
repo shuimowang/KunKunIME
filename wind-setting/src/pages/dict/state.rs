@@ -177,6 +177,8 @@ pub struct DictManagerState {
     /// 空态提示文本（无数据/未连接/无方案）；有数据时为空串（视图据此显隐覆盖层）。
     pub empty_msg: Signal<String>,
     pub(super) list_load_failed: Rc<Cell<bool>>,
+    /// 邮箱页当前生效的预置后缀。同个人条目分开，空列表也是有效配置。
+    pub(super) email_presets: Signal<Option<Vec<String>>>,
     /// 搜索框文本（可搜类别，由搜索框输入变化经响应式 effect 触发，见 [`Self::apply_search`]）。
     pub search: Signal<String>,
     /// 分页偏移（分页类别）。
@@ -312,6 +314,8 @@ pub struct DictManagerState {
     pub edit_visible: Signal<bool>,
     pub(crate) completion_add_visible: Signal<bool>,
     pub(crate) completion_add_target: Signal<WordCategory>,
+    /// 错误对应的输入框版本；用户改动文字后立即隐藏旧提示。
+    pub(crate) completion_add_error: Signal<Option<(u64, String)>>,
     pub edit_title: Signal<String>,
     /// 编码字段的标签（随类别）。
     pub edit_l_code: Signal<String>,
@@ -667,6 +671,7 @@ impl DictManagerState {
             sort: signal(None),
             empty_msg: signal(String::new()),
             list_load_failed: Rc::new(Cell::new(false)),
+            email_presets: signal(None),
             search: signal(String::new()),
             offset: Rc::new(RefCell::new(0)),
             total: signal(0),
@@ -717,6 +722,7 @@ impl DictManagerState {
             edit_visible: signal(false),
             completion_add_visible: signal(false),
             completion_add_target: signal(WordCategory::MailSuffix),
+            completion_add_error: signal(None),
             edit_title: signal(String::new()),
             edit_l_code: signal("编码".to_string()),
             edit_l_text: signal("词条".to_string()),
@@ -1264,6 +1270,14 @@ impl DictManagerState {
     pub fn apply_rows(&self, v: &Value) {
         self.list_load_failed.set(false);
         let spec = self.current_spec();
+        if spec.category == WordCategory::MailSuffix {
+            self.email_presets.set(v.get("presets").and_then(|p| {
+                p.as_array()?
+                    .iter()
+                    .map(|entry| entry.as_str().map(str::to_owned))
+                    .collect()
+            }));
+        }
         let (rows, total) = WordRow::parse_list(spec.category, spec.paged, v);
         *self.rows.borrow_mut() = rows;
         self.total.set(total);
@@ -1327,6 +1341,8 @@ impl DictManagerState {
             let start = if rows.is_empty() { 0 } else { off + 1 };
             let end = off + rows.len();
             format!("第 {start}-{end} / 共 {total} 条")
+        } else if spec.category == WordCategory::MailSuffix {
+            format!("个人后缀共 {total} 条")
         } else {
             format!("共 {total} 条")
         };
@@ -1413,6 +1429,9 @@ impl DictManagerState {
             return "无法读取列表，请检查困困输入法服务后刷新。".into();
         }
         if let Some(q) = self.active_search() {
+            if self.current_category() == WordCategory::MailSuffix {
+                return format!("没有匹配「{q}」的个人后缀，可清除搜索。");
+            }
             return format!("没有匹配「{q}」的词条，可清除搜索。");
         }
         if self.temp_filter() != (None, None) {
@@ -1425,7 +1444,8 @@ impl DictManagerState {
             WordCategory::Temp => "还没有待转正的临时词。",
             WordCategory::Freq => "还没有选词频次记录。",
             WordCategory::Shadow => "还没有固定位置或隐藏候选的规则。",
-            WordCategory::MailSuffix | WordCategory::UrlHistory | WordCategory::QuickHistory => {
+            WordCategory::MailSuffix => "还没有个人后缀，可点击「添加」。",
+            WordCategory::UrlHistory | WordCategory::QuickHistory => {
                 "还没有补全项，可点击「添加」。"
             }
             WordCategory::CommonChars if self.only_modified.get() => "没有已修改的字符。",
@@ -1494,6 +1514,9 @@ impl DictManagerState {
             Err(e) => {
                 // 保留上一份页数及页码，刷新时仍可重试当前页；错误态隐藏计数与分页。
                 self.list_load_failed.set(true);
+                if spec.category == WordCategory::MailSuffix {
+                    self.email_presets.set(None);
+                }
                 self.clear_selection();
                 self.rows.borrow_mut().clear();
                 self.notify_err(&format!("加载失败: {e}"));
@@ -2831,6 +2854,9 @@ impl DictManagerState {
                 Some(f) => {
                     format!("确定删除{f} 的 {n} 条筛选结果？其余条目不受影响。此操作不可恢复。")
                 }
+                None if self.current_category() == WordCategory::MailSuffix => format!(
+                    "确定清空全部 {n} 条个人后缀？手动添加和自动记录的个人条目都会删除，预置后缀会保留。"
+                ),
                 None if self.current_category().completion_form().is_some() => format!(
                     "确定清空「{}」的全部 {n} 条补全？手动添加和自动记录的条目都会删除，此操作不可恢复。",
                     self.current_spec().title
@@ -2940,6 +2966,7 @@ impl DictManagerState {
         let cat = self.current_category();
         if let Some(form) = cat.completion_form() {
             self.edit_text.set(String::new());
+            self.completion_add_error.set(None);
             self.edit_title.set(form.title.to_string());
             self.completion_add_target.set(cat);
             self.completion_add_visible.set(true);
@@ -2977,24 +3004,36 @@ impl DictManagerState {
         );
         match reply {
             Ok(value) if value["ok"] == true => {
+                let text = value["text"].as_str().unwrap_or_default();
+                self.completion_add_error.set(None);
                 self.completion_add_visible.set(false);
+                self.edit_text.set(String::new());
                 if self.current_category() == cat {
                     let query = self.search.get().trim().to_lowercase();
-                    let text = value["text"].as_str().unwrap_or_default();
                     if !text.to_lowercase().contains(&query) {
                         self.search.set(String::new());
                     }
                     *self.offset.borrow_mut() = 0;
                     self.reload();
                 }
-                if value["added"] == true {
-                    self.notify_ok("已添加补全项");
-                } else {
-                    self.notify_info("这项补全已在列表中");
+                match (cat, value["added"] == true) {
+                    (WordCategory::MailSuffix, true) => {
+                        self.notify_ok(&format!("已添加邮箱后缀 {text}"))
+                    }
+                    (WordCategory::MailSuffix, false) => {
+                        self.notify_info(&format!("邮箱后缀 {text} 已在个人列表中"))
+                    }
+                    (_, true) => self.notify_ok("已添加补全项"),
+                    (_, false) => self.notify_info("这项补全已在列表中"),
                 }
             }
-            Ok(_) => self.notify_err("未能确认补全项已保存，请重试。"),
-            Err(err) => self.notify_err(&err),
+            reply => {
+                let message = reply
+                    .err()
+                    .unwrap_or_else(|| "未能确认补全项已保存，请重试。".to_string());
+                self.completion_add_error
+                    .set(Some((self.edit_text.version(), message)));
+            }
         }
     }
 

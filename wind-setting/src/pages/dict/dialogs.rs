@@ -786,7 +786,31 @@ fn build_completion_dialog(mgr: &DictManagerState) -> Element {
     let input = Element::text_input(text, example)
         .width_match()
         .on_submit(move |_| submit.submit_completion());
-    let body = dialog_body().child(input);
+    let error = mgr.completion_add_error;
+    let show_error = move || {
+        let revision = text.version();
+        error.with(|e| e.as_ref().is_some_and(|(v, _)| *v == revision))
+    };
+    let error_text = error.map(|e| e.as_ref().map(|(_, msg)| msg.clone()).unwrap_or_default());
+    let body = dialog_body()
+        .child(input)
+        .child(
+            Element::label("粘贴完整邮箱时，只保存 @ 后面的域名。")
+                .font_size(12.0)
+                .fg_role(Role::TextMuted)
+                .width_match()
+                .visible_when(move || {
+                    target.get() == super::spec::WordCategory::MailSuffix && !show_error()
+                }),
+        )
+        .child(
+            Element::label_signal(error_text)
+                .font_size(12.0)
+                .fg_role(Role::Danger)
+                .width_match()
+                .max_lines(3)
+                .visible_when(show_error),
+        );
     let visible = mgr.completion_add_visible;
     let add = mgr.clone();
     let footer = dialog_footer()
@@ -795,7 +819,11 @@ fn build_completion_dialog(mgr: &DictManagerState) -> Element {
             Element::button("取消")
                 .small()
                 .outline_soft()
-                .on_click(move |_| visible.set(false)),
+                .on_click(move |_| {
+                    visible.set(false);
+                    error.set(None);
+                    text.set(String::new());
+                }),
         )
         .child(
             Element::button("添加")
@@ -1166,6 +1194,64 @@ mod tests {
     use windui::geometry::Size;
 
     #[test]
+    fn completion_add_errors_stay_in_one_field_and_clear_on_edit() {
+        use super::super::state::DOMAIN_COMPLETION;
+        use serde_json::json;
+        let _guard = crate::rpc::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("WIND_RPC_MOCK", "1") };
+        let st = DictManagerState::new();
+        st.domain.set(DOMAIN_COMPLETION);
+        st.sub_tab.set(0);
+        st.open_add();
+        let mut tree = Tree::new();
+        let root = build_completion_dialog(&st).build(&mut tree);
+        tree.root = Some(root);
+        frame(&mut tree);
+        let panel = tree.get(root).unwrap().children[0];
+        let body = tree.get(panel).unwrap().children[2];
+        let fields = tree.get(body).unwrap().children.clone();
+        let (hint, error) = (fields[1], fields[2]);
+        assert!(tree.get(hint).unwrap().effective_visible());
+        assert!(!tree.get(error).unwrap().effective_visible());
+        st.edit_text.set("missing-domain@".into());
+        let feedback_version = st.feedback.version();
+        crate::rpc::force_mock_error("mailSuffix.add", Some("请填写有效的邮箱域名"));
+        for _ in 0..4 {
+            st.submit_completion();
+            assert_eq!(
+                st.feedback.version(),
+                feedback_version,
+                "弹窗错误不产生顶部提示"
+            );
+            assert!(st.completion_add_visible.get());
+            assert!(tree.get(error).unwrap().effective_visible());
+            assert_eq!(
+                tree.get(error).unwrap().widget.display_text().as_deref(),
+                Some("请填写有效的邮箱域名")
+            );
+            assert!(!tree.get(hint).unwrap().effective_visible());
+        }
+        crate::rpc::force_mock_error("mailSuffix.add", None);
+        st.edit_text.set("reader@Example.com".into());
+        assert!(!tree.get(error).unwrap().effective_visible());
+        assert!(tree.get(hint).unwrap().effective_visible());
+        crate::rpc::force_mock_reply(
+            "mailSuffix.add",
+            Some(json!({"ok":true,"added":true,"text":"example.com"})),
+        );
+        st.submit_completion();
+        crate::rpc::force_mock_reply("mailSuffix.add", None);
+        assert!(!st.completion_add_visible.get());
+        assert_eq!(st.feedback.get().unwrap().1, "已添加邮箱后缀 example.com");
+        st.open_add();
+        assert!(st.edit_text.get().is_empty());
+        assert!(!tree.get(error).unwrap().effective_visible());
+        unsafe { std::env::remove_var("WIND_RPC_MOCK") };
+    }
+
+    #[test]
     fn completion_dialog_submit_button_sends_content_and_reports_existing_item() {
         use super::super::state::DOMAIN_COMPLETION;
         use serde_json::json;
@@ -1181,7 +1267,7 @@ mod tests {
         st.sub_tab.set(0);
         st.on_nav_changed();
         st.open_add();
-        st.edit_text.set("@example.com".into());
+        st.edit_text.set("reader@Example.com".into());
         let mut tree = Tree::new();
         let root = build_completion_dialog(&st).build(&mut tree);
         tree.root = Some(root);
@@ -1207,11 +1293,14 @@ mod tests {
         }
         crate::rpc::force_mock_reply("mailSuffix.add", None);
         assert!(!st.completion_add_visible.get());
-        assert_eq!(st.feedback.get().unwrap().1, "这项补全已在列表中");
+        assert_eq!(
+            st.feedback.get().unwrap().1,
+            "邮箱后缀 example.com 已在个人列表中"
+        );
         assert!(
             crate::rpc::take_mock_calls()
                 .iter()
-                .any(|(m, p)| m == "mailSuffix.add" && *p == json!({"text":"@example.com"}))
+                .any(|(m, p)| m == "mailSuffix.add" && *p == json!({"text":"reader@Example.com"}))
         );
         unsafe { std::env::remove_var("WIND_RPC_MOCK") };
     }

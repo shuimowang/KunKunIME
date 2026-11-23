@@ -11,21 +11,7 @@ pub(super) fn normalize(kind: CompletionKind, input: &str) -> Result<String> {
     let text = input.trim();
     ensure!(!text.is_empty(), "请输入补全内容");
     let result = match kind {
-        CompletionKind::EmailSuffix => {
-            let domain = text.strip_prefix('@').unwrap_or(text);
-            ensure!(
-                !domain.contains(['@', '/', '\\', ':', '?', '#', '%']),
-                "请输入邮箱域名，例如 example.com"
-            );
-            let Ok(Host::Domain(host)) = Host::parse(domain) else {
-                bail!("请输入有效的邮箱域名，例如 example.com");
-            };
-            ensure!(
-                valid_domain(&host),
-                "请输入有效的邮箱域名，例如 example.com"
-            );
-            host
-        }
+        CompletionKind::EmailSuffix => normalize_email_suffix(text)?,
         CompletionKind::UrlHistory => normalize_url(text)?,
         CompletionKind::QuickHistory => text.to_owned(),
     };
@@ -34,6 +20,36 @@ pub(super) fn normalize(kind: CompletionKind, input: &str) -> Result<String> {
         "补全内容最多 {COMPLETION_TEXT_MAX_CHARS} 个字符"
     );
     Ok(result)
+}
+
+fn normalize_email_suffix(text: &str) -> Result<String> {
+    const INVALID: &str = "请输入有效的邮箱域名或完整邮箱，例如 example.com 或 name@example.com";
+    let domain = match text.split_once('@') {
+        Some(("", domain)) => domain,
+        Some((local, domain)) => {
+            ensure!(
+                !local.starts_with('.')
+                    && !local.ends_with('.')
+                    && !local.contains("..")
+                    && local
+                        .chars()
+                        .all(|c| { c.is_alphanumeric() || ".!#$%&'*+-/=?^_`{|}~".contains(c) }),
+                INVALID
+            );
+            domain
+        }
+        None => text,
+    };
+    ensure!(
+        !domain.contains(['@', '/', '\\', ':', '?', '#', '%'])
+            && !domain.chars().any(char::is_whitespace),
+        INVALID
+    );
+    let Ok(Host::Domain(host)) = Host::parse(domain) else {
+        bail!(INVALID);
+    };
+    ensure!(valid_domain(&host), INVALID);
+    Ok(host)
 }
 
 fn valid_domain(host: &str) -> bool {
@@ -99,13 +115,33 @@ mod tests {
     #[test]
     fn normalizes_manual_completion_input() {
         use CompletionKind::{EmailSuffix, QuickHistory, UrlHistory};
+        for input in [
+            " Example.ORG ",
+            " @Example.ORG ",
+            " first.last+news@Example.ORG ",
+            "用户@Example.ORG",
+        ] {
+            assert_eq!(normalize(EmailSuffix, input).unwrap(), "example.org");
+        }
         assert_eq!(
-            normalize(EmailSuffix, " @Example.ORG ").unwrap(),
-            "example.org"
+            normalize(EmailSuffix, "笔名@例子.中国").unwrap(),
+            normalize(EmailSuffix, "例子.中国").unwrap()
         );
         for bad in [
             "@",
-            "me@example.org",
+            "reader@",
+            "@@example.org",
+            "a@b@example.org",
+            "first last@example.org",
+            "reader@ example.org",
+            "reader@example .org",
+            ".reader@example.org",
+            "first..last@example.org",
+            "reader.@example.org",
+            "mailto:reader@example.org",
+            "Reader <reader@example.org>",
+            "reader@example.org/path",
+            "reader@%65xample.org",
             "a..com",
             "-a.example",
             "a.example/x",

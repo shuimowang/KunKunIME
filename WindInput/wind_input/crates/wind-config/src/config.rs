@@ -5641,18 +5641,19 @@ pub struct EmailConfig {
 
 /// 出厂预置的邮箱后缀。
 ///
-/// 国内常用在前、国际常用在后——补全候选没有频次数据时就按这个顺序排，而本输入法的
-/// 用户绝大多数在国内。学过几次之后频次接管排序，这份顺序只影响冷启动那几次。
+/// 初次使用按此顺序展示常用邮箱；随后使用过的后缀优先。
 ///
 /// ⚠️ 这是**数组字段**（不是 map），所以用户在设置里删干净就是真的空表，不会被逐键
 /// 深合并把出厂值合回来——见 AGENTS.md「出厂预置的绑定/开关，落点必须是用户能清空的
 /// 载体」。空表时邮箱模式仍可用，只是没有预置候选，全靠学习数据。
 fn default_email_suffixes() -> Vec<String> {
     [
-        // 国内
         "qq.com",
+        "gmail.com",
         "163.com",
+        "outlook.com",
         "126.com",
+        "icloud.com",
         "foxmail.com",
         "sina.com",
         "sina.cn",
@@ -5663,12 +5664,8 @@ fn default_email_suffixes() -> Vec<String> {
         "yeah.net",
         "21cn.com",
         "tom.com",
-        // 国际
-        "gmail.com",
-        "outlook.com",
         "hotmail.com",
         "yahoo.com",
-        "icloud.com",
         "live.com",
         "me.com",
         "proton.me",

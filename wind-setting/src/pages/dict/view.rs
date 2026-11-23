@@ -295,6 +295,7 @@ pub fn build_page_for(mgr: DictManagerState) -> Element {
                 }),
         )
         .child(build_lib_notice(&mgr))
+        .child(build_mail_presets(&mgr))
         .child(toolbar)
         .child(charset_hint)
         .child(star_hint)
@@ -313,6 +314,49 @@ pub fn build_page_for(mgr: DictManagerState) -> Element {
         .child(io_format_effect)
         .child(edit_dialog_effect)
         .child(toast_sink(mgr.feedback))
+}
+
+fn build_mail_presets(mgr: &DictManagerState) -> Element {
+    let visible = mgr.clone();
+    let groups = mgr.email_presets.map(|presets| vec![presets.clone()]);
+    let presets = Element::host_signal(groups, |presets| {
+        let title = match &presets {
+            Some(items) => format!("预置后缀（{} 个）", items.len()),
+            None => "预置后缀".to_string(),
+        };
+        let contents = match presets {
+            Some(items) if !items.is_empty() => {
+                let mut domains = Element::flow().width_match().spacing(16).run_spacing(4);
+                for domain in items {
+                    domains = domains.child(Element::label(domain).font_size(12.0));
+                }
+                Element::scroll()
+                    .width_match()
+                    .max_height(84)
+                    .child(domains)
+            }
+            empty => Element::label(if empty.is_some() {
+                "当前配置没有预置后缀。"
+            } else {
+                "未能读取预置后缀，请点击左下角的「刷新」。"
+            })
+            .font_size(12.0)
+            .fg_role(Role::TextMuted)
+            .width_match(),
+        };
+        Element::col()
+            .width_match()
+            .spacing(6)
+            .child(Element::label(title).font_size(13.0).font_weight(600))
+            .child(contents)
+    });
+    Element::col()
+        .width_match()
+        .spacing(8)
+        .child(presets)
+        .child(Element::divider())
+        .child(Element::label("个人后缀").font_size(13.0).font_weight(600))
+        .visible_when(move || visible.current_category() == WordCategory::MailSuffix)
 }
 
 /// 选中分库有解析问题时的提示（「⚠ 分库「成语」：3 行格式不对，已跳过」）；没有问题不占位。
@@ -354,6 +398,8 @@ fn library_actions(mgr: &DictManagerState) -> Vec<MenuItem> {
         let m = mgr.clone();
         let label = if mgr.active_filter().is_some() {
             "删除筛选结果…"
+        } else if mgr.current_category() == WordCategory::MailSuffix {
+            "清空个人后缀…"
         } else {
             "清空当前列表…"
         };
@@ -463,7 +509,9 @@ fn build_toolbar(mgr: &DictManagerState) -> Element {
         (mgr.clone(), mgr.clone(), mgr.clone(), mgr.clone());
     let search_mgr = mgr.clone();
     let placeholder = mgr.table_epoch.map(move |_| {
-        if search_mgr.current_category().completion_form().is_some() {
+        if search_mgr.current_category() == WordCategory::MailSuffix {
+            "搜索个人后缀…".to_string()
+        } else if search_mgr.current_category().completion_form().is_some() {
             "搜索补全内容…".to_string()
         } else {
             "搜索编码或词条…".to_string()
@@ -1634,6 +1682,80 @@ mod tests {
     use serde_json::json;
     use windui::core::Tree;
     use windui::geometry::Size;
+
+    #[test]
+    fn completion_add_mail_presets_match_config_and_stay_out_of_personal_pages() {
+        use super::super::state::DOMAIN_COMPLETION;
+        use windui::core::NodeId;
+        fn labels(tree: &Tree, root: NodeId) -> Vec<String> {
+            let node = tree.get(root).unwrap();
+            if !node.effective_visible() {
+                return vec![];
+            }
+            let mut result = node.widget.display_text().into_iter().collect::<Vec<_>>();
+            for child in &node.children {
+                result.extend(labels(tree, *child));
+            }
+            result
+        }
+        let _guard = crate::rpc::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("WIND_RPC_MOCK", "1") };
+        let mgr = DictManagerState::new();
+        mgr.domain.set(DOMAIN_COMPLETION);
+        mgr.sub_tab.set(0);
+        let set_page = |total: usize, domains: &[&str]| {
+            let rows = if total > 0 {
+                vec![json!({"text":"personal.example","count":1})]
+            } else {
+                vec![]
+            };
+            crate::rpc::force_mock_reply(
+                "mailSuffix.listPaged",
+                Some(json!({"total": total, "items": rows, "presets": domains})),
+            );
+        };
+        let domains = ["custom.example", "other.example"];
+        set_page(101, &domains);
+        mgr.on_nav_changed();
+        let mut tree = Tree::new();
+        let root = build_mail_presets(&mgr).width(320).build(&mut tree);
+        tree.root = Some(root);
+        let texts = |tree: &mut Tree| {
+            tree.layout_root(Size::new(320, 180), &mut windui::text::NullTextEngine);
+            labels(tree, root)
+        };
+        let expected = [
+            "预置后缀（2 个）",
+            "custom.example",
+            "other.example",
+            "个人后缀",
+        ];
+        assert_eq!(texts(&mut tree), expected);
+        mgr.next_page();
+        assert_eq!(texts(&mut tree), expected);
+        mgr.request_clear();
+        assert!(mgr.confirm_msg.get().contains("个人后缀"));
+        crate::rpc::take_mock_calls();
+        set_page(0, &domains);
+        mgr.confirm_pending();
+        let calls = crate::rpc::take_mock_calls();
+        assert!(calls.iter().any(|(method, _)| method == "mailSuffix.clear"));
+        assert_eq!(texts(&mut tree), expected);
+        assert_eq!(mgr.page_status.get(), "个人后缀共 0 条");
+        assert!(mgr.empty_msg.get().contains("还没有个人后缀"));
+        set_page(0, &[]);
+        mgr.reload();
+        assert_eq!(
+            texts(&mut tree),
+            ["预置后缀（0 个）", "当前配置没有预置后缀。", "个人后缀"]
+        );
+        mgr.sub_tab.set(1);
+        assert!(texts(&mut tree).is_empty());
+        crate::rpc::force_mock_reply("mailSuffix.listPaged", None);
+        unsafe { std::env::remove_var("WIND_RPC_MOCK") };
+    }
 
     #[test]
     fn completion_add_buttons_open_and_submit_a_single_text_value() {

@@ -76,8 +76,8 @@ impl WordCategory {
         Some(match self {
             Self::MailSuffix => CompletionForm {
                 title: "添加邮箱后缀",
-                example: "例如 example.com",
-                usage: "在「输入规则 → 网址/邮箱输入」开启邮箱输入模式后，输入用户名和 @，再选择后缀。",
+                example: "例如 example.com 或 name@example.com",
+                usage: "在「输入规则 → 网址/邮箱输入」开启邮箱输入模式后，输入用户名和 @ 即可选后缀。",
             },
             Self::UrlHistory => CompletionForm {
                 title: "添加网址",

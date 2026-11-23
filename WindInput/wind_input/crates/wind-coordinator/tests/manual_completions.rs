@@ -114,6 +114,28 @@ fn manual_completions_are_selectable_with_history_recording_disabled() {
 
     let store = Arc::new(Store::open(&dir.join("test.redb")).unwrap());
     let c = Coordinator::new_headless_with_store(cfg, Some(&data), store.clone());
+    let list = c.web_data_rpc("mailSuffix.listPaged", &json!({})).unwrap();
+    assert_eq!(list["total"], 0);
+    let presets = list["presets"].as_array().unwrap();
+    let leading = [
+        "qq.com",
+        "gmail.com",
+        "163.com",
+        "outlook.com",
+        "126.com",
+        "icloud.com",
+    ];
+    assert!(
+        presets
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .take(leading.len())
+            .eq(leading)
+    );
+    type_ascii(&c, "demo@");
+    let candidates: Vec<_> = leading.iter().map(|s| format!("demo@{s}")).collect();
+    assert!(c.debug_all_candidate_texts().starts_with(&candidates));
+    tap(&c, 0x1b, 0);
     store
         .record_completion(CompletionKind::UrlHistory, "https://docs.old.test/history")
         .unwrap();
@@ -122,7 +144,7 @@ fn manual_completions_are_selectable_with_history_recording_disabled() {
         .unwrap();
 
     for (method, raw, normal) in [
-        ("mailSuffix.add", "@Example.ORG", "example.org"),
+        ("mailSuffix.add", "writer+notes@Example.ORG", "example.org"),
         (
             "urlHistory.add",
             "docs.example.org/help",
@@ -138,6 +160,16 @@ fn manual_completions_are_selectable_with_history_recording_disabled() {
             false
         );
     }
+    for alias in ["@EXAMPLE.ORG", "example.org", "another@example.org"] {
+        assert_eq!(
+            c.web_data_rpc("mailSuffix.add", &json!({"text":alias}))
+                .unwrap(),
+            json!({"ok":true,"added":false,"text":"example.org"})
+        );
+    }
+    let stored = c.web_data_rpc("mailSuffix.listPaged", &json!({})).unwrap();
+    assert_eq!(stored["total"], 1);
+    assert_eq!(stored["items"][0]["text"], "example.org");
     type_ascii(&c, "demo@exa");
     select(&c, "demo@example.org");
     type_ascii(&c, "https://docs.");

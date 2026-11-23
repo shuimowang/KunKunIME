@@ -2564,7 +2564,11 @@ pub trait WebDataRpc: WebDataHost {
                 json!({ "text": ui_text(&text), "count": rec.count, "lastUsed": rec.last_used, "manual": rec.manual })
             })
             .collect();
-        Ok(json!({ "items": items, "total": total }))
+        let mut result = json!({ "items": items, "total": total });
+        if kind == CompletionKind::EmailSuffix {
+            result["presets"] = json!(self.email_suffix_presets());
+        }
+        Ok(result)
     }
 
     fn web_completion_add(&self, kind: CompletionKind, params: &Value) -> anyhow::Result<Value> {
