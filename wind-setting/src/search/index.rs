@@ -44,7 +44,7 @@ pub enum JumpTarget {
     /// 方案级：跳到方案页，附指示条路径（「哪个方案」要用户自己选）。
     SchemaLevel { hint_path: Vec<String> },
     /// 切换到管理窗口的词库页，保留可返回的设置页。
-    Dictionary,
+    Dictionary(Option<crate::pages::dict::spec::LogicalTab>),
 }
 
 impl JumpTarget {
@@ -55,7 +55,7 @@ impl JumpTarget {
             Self::SchemaLevel { .. } => page_tab("schema"),
             // 归属上算词库页（`every_page_has_entries` 据此计数），但**不会**被切过去：
             // `jump::request` 对本变体不动 tab。
-            Self::Dictionary => page_tab("dict"),
+            Self::Dictionary(_) => page_tab("dict"),
         }
     }
 }
@@ -475,7 +475,7 @@ fn handwritten_entries(manifest: &Manifest) -> Vec<SearchEntry> {
             path: vec![page_label(h.page).to_string(), h.section.to_string()],
             // 词库页自带方案与分类导航（见 `JumpTarget::Dictionary`）。
             target: if h.page == "dict" {
-                JumpTarget::Dictionary
+                JumpTarget::Dictionary(None)
             } else {
                 JumpTarget::Card {
                     tab: page_tab(h.page),

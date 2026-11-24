@@ -163,6 +163,8 @@ pub struct FieldRegistry {
     /// 就成了挂根节点里的死句柄（ModalScrim 的 `on_update` 一读即崩），必须由根层的
     /// keyed 容器随代重挂（见 `shell::build`）。
     pub dialogs: RefCell<Vec<Element>>,
+    /// 邮箱与网址的扩展设置同时供输入规则的搜索结果和词库页使用。
+    pub completion_rule_dialogs: RefCell<Vec<Element>>,
     /// 外观页**当前代**批内的对话框（[`Self::end_page_batch`] 移交，整批替换）。
     ///
     /// 消费方是 shell 层按 [`AppState::appearance_pinned`] 分叉的 keyed 容器：代次一变
@@ -261,6 +263,7 @@ impl FieldRegistry {
         self.select_indices.borrow_mut().clear();
         self.loaders.borrow_mut().clear();
         self.dialogs.borrow_mut().clear();
+        self.completion_rule_dialogs.borrow_mut().clear();
         self.appearance_dialogs.borrow_mut().clear();
         *self.page_carry.borrow_mut() = None;
         self.appearance_dialogs_gen.set(0);
@@ -2032,6 +2035,7 @@ impl AppState {
     pub fn apply_external_config_change(&mut self, key: &str, value: Value) -> usize {
         self.base_config.set_path(key, value.clone());
         self.current_config.set_path(key, value);
+        self.sync_email_presets(key);
 
         // 同一配置路径可能有多个控件（视图 key 形如 `<路径>#<视图名>`），逐个灌回。
         let cfg = self.base_config.clone();
@@ -3359,12 +3363,20 @@ impl AppState {
             }
             self.base_config.set_path(&item.key, item.value.clone());
             self.current_config.set_path(&item.key, item.value.clone());
+            self.sync_email_presets(&item.key);
             if let Some(baseline) = self.autosave.displayed.get_mut().as_mut() {
                 baseline.set_path(&item.key, item.value.clone());
             }
             applied.push(item.clone());
         }
         applied
+    }
+
+    fn sync_email_presets(&self, changed: &str) {
+        if matches!(changed, "input" | "input.email" | "input.email.suffixes") {
+            self.dict_mgr
+                .update_email_presets(self.current_config.get_path("input.email.suffixes"));
+        }
     }
 }
 

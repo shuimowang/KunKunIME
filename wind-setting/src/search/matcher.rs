@@ -71,7 +71,7 @@ fn score(entry: &SearchEntry, query: &str, words: &[&str]) -> i32 {
     }
     match entry.target {
         super::JumpTarget::SchemaLevel { .. } => raw - P_SCHEMA_LEVEL,
-        super::JumpTarget::Card { .. } | super::JumpTarget::Dictionary => raw + B_NAVIGATION,
+        super::JumpTarget::Card { .. } | super::JumpTarget::Dictionary(_) => raw + B_NAVIGATION,
         _ => raw,
     }
 }

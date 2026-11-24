@@ -67,6 +67,7 @@ pub enum WordCategory {
 /// 手动添加补全时使用的标题、示例以及输入时调用该补全的方式。
 pub(crate) struct CompletionForm {
     pub title: &'static str,
+    pub edit_title: Option<&'static str>,
     pub example: &'static str,
     pub usage: &'static str,
 }
@@ -76,16 +77,19 @@ impl WordCategory {
         Some(match self {
             Self::MailSuffix => CompletionForm {
                 title: "添加邮箱后缀",
+                edit_title: Some("修改邮箱后缀"),
                 example: "例如 example.com 或 name@example.com",
-                usage: "在「输入规则 → 网址/邮箱输入」开启邮箱输入模式后，输入用户名和 @ 即可选后缀。",
+                usage: "拼音中文状态下，连续输入用户名和 @。例如 demo@gm 可选 demo@gmail.com。",
             },
             Self::UrlHistory => CompletionForm {
                 title: "添加网址",
+                edit_title: Some("修改网址"),
                 example: "例如 https://docs.example.com/",
-                usage: "在「输入规则 → 网址/邮箱输入」开启网址输入模式后，输入网址开头（如 https）即可补全。",
+                usage: "拼音中文状态下，打出 www. 或 http 等前缀进入网址模式。开启「记住输入过的网址」后，这里也会显示使用记录。",
             },
             Self::QuickHistory => CompletionForm {
                 title: "添加快捷输入内容",
+                edit_title: None,
                 example: "例如 请查收附件",
                 usage: "先在「输入规则 → 快捷输入」设置触发键。进入后按内容开头或全拼补全，如 qingcha 可选「请查收附件」。",
             },
@@ -125,7 +129,7 @@ impl LogicalTab {
             // 域名是「字符集」，tab 叫「字符分类」，两层各有其名。
             LogicalTab::Charsets => "字符分类",
             LogicalTab::MailSuffix => "邮箱后缀",
-            LogicalTab::UrlHistory => "网址历史",
+            LogicalTab::UrlHistory => "常用网址",
             LogicalTab::QuickHistory => "快捷输入历史",
         }
     }
@@ -1028,7 +1032,7 @@ const SPEC_USERDICT: CategorySpec = CategorySpec {
     client_search: false,
     columns: COLS_USERDICT,
     // 导入/导出不再挂在用户词库类别下：改为方案级统一「导入/导出」对话框（多类型可选），
-    // 入口在右栏标题行（见 view::build_page_for），故此处不设 import/export。
+    // 入口在右栏标题行，故此处不设 import/export。
     ops: OpFlags {
         add: true,
         edit: true,
@@ -1145,12 +1149,12 @@ const COLS_COMPLETION: &[ColumnSpec] = &[
     },
     ColumnSpec {
         header: "次数",
-        weight: 0.8,
+        weight: 1.1,
         field: WordField::Count,
     },
     ColumnSpec {
         header: "最近使用",
-        weight: 1.2,
+        weight: 1.4,
         field: WordField::LastUsed,
     },
 ];
@@ -1172,6 +1176,7 @@ const SPEC_MAIL_SUFFIX: CategorySpec = CategorySpec {
     columns: COLS_COMPLETION,
     ops: OpFlags {
         add: true,
+        edit: true,
         remove: true,
         clear: true,
         ..OpFlags::NONE
@@ -1179,6 +1184,7 @@ const SPEC_MAIL_SUFFIX: CategorySpec = CategorySpec {
     rpc: RpcNames {
         list: "mailSuffix.listPaged",
         add: "mailSuffix.add",
+        update: "mailSuffix.update",
         remove: "mailSuffix.delete",
         clear: "mailSuffix.clear",
         ..RpcNames::EMPTY
@@ -1189,7 +1195,7 @@ const SPEC_MAIL_SUFFIX: CategorySpec = CategorySpec {
 /// core 的同一张表，分开只为让「清空网址历史」不波及邮箱学习。
 const SPEC_URL_HISTORY: CategorySpec = CategorySpec {
     category: WordCategory::UrlHistory,
-    title: "网址历史",
+    title: "常用网址",
     scoped_by_schema: false,
     paged: true,
     searchable: true,
@@ -1197,6 +1203,7 @@ const SPEC_URL_HISTORY: CategorySpec = CategorySpec {
     columns: COLS_COMPLETION,
     ops: OpFlags {
         add: true,
+        edit: true,
         remove: true,
         clear: true,
         ..OpFlags::NONE
@@ -1204,6 +1211,7 @@ const SPEC_URL_HISTORY: CategorySpec = CategorySpec {
     rpc: RpcNames {
         list: "urlHistory.listPaged",
         add: "urlHistory.add",
+        update: "urlHistory.update",
         remove: "urlHistory.delete",
         clear: "urlHistory.clear",
         ..RpcNames::EMPTY
@@ -1779,6 +1787,7 @@ impl CategorySpec {
             // 一枚「加进用户词库」（六个字），与 COLS_SYS_ENTRIES 一组配比：窄表（三列合计 3.6）
             // 在约 350 宽时操作列约 120，按钮刚好完整。
             WordCategory::SysEntries => 2.0,
+            WordCategory::MailSuffix | WordCategory::UrlHistory => 1.65,
             _ => 1.5,
         }
     }

@@ -813,6 +813,13 @@ fn build_completion_dialog(mgr: &DictManagerState) -> Element {
         );
     let visible = mgr.completion_add_visible;
     let add = mgr.clone();
+    let submit_label = mgr.completion_original.map(|old| {
+        if old.is_some() {
+            "保存".to_owned()
+        } else {
+            "添加".to_owned()
+        }
+    });
     let footer = dialog_footer()
         .child(Element::leaf().weight(1.0))
         .child(
@@ -826,7 +833,7 @@ fn build_completion_dialog(mgr: &DictManagerState) -> Element {
                 }),
         )
         .child(
-            Element::button("添加")
+            Element::button(submit_label)
                 .small()
                 .enabled_when(move || text.with(|value| !value.trim().is_empty()))
                 .on_click(move |_| add.submit_completion()),

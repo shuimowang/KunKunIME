@@ -306,16 +306,44 @@ impl Store {
 
     /// 将记录标为手动补全。显式操作需要可靠落盘，失败时不向读者暴露未保存的值。
     pub fn add_manual_completion(&self, kind: CompletionKind, text: &str) -> anyhow::Result<bool> {
+        self.save_manual_completion(kind, None, text)
+    }
+
+    /// 修改已有记录，保留使用次数与时间。已存在的另一个目标不能被覆盖。
+    pub fn update_manual_completion(
+        &self,
+        kind: CompletionKind,
+        old_text: &str,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        self.save_manual_completion(kind, Some(old_text), text)?;
+        Ok(())
+    }
+
+    fn save_manual_completion(
+        &self,
+        kind: CompletionKind,
+        old_text: Option<&str>,
+        text: &str,
+    ) -> anyhow::Result<bool> {
         anyhow::ensure!(
             !text.is_empty() && text.chars().count() <= COMPLETION_TEXT_MAX_CHARS,
             "补全文本须为 1 至 {COMPLETION_TEXT_MAX_CHARS} 个字符"
         );
+        anyhow::ensure!(!self.runtime().data().readonly(), "用户数据处于只读状态");
         let _io = self.completion_io.lock().unwrap_or_else(|e| e.into_inner());
         let mut g = self.completions();
         anyhow::ensure!(!g.unreadable, "补全文件无法读取，请检查文件后重试");
         let key = (kind.as_str(), text.to_owned());
-        let previous = g.map.get(&key).copied();
-        if previous.is_some_and(|rec| rec.manual) {
+        let source = (kind.as_str(), old_text.unwrap_or(text).to_owned());
+        let previous = g.map.get(&source).copied();
+        if old_text.is_some() && previous.is_none() {
+            anyhow::bail!("原补全项已删除或已更名，请刷新后再试");
+        }
+        if source != key {
+            anyhow::ensure!(!g.map.contains_key(&key), "已有相同的补全项，请换一个内容");
+            g.map.remove(&source);
+        } else if previous.is_some_and(|rec| rec.manual) {
             return Ok(false);
         }
         g.map.insert(
@@ -329,13 +357,9 @@ impl Store {
         if let Err(error) =
             wind_userdata::text::fold::commit_text(&self.completion_path(), &bytes, g.fp.as_deref())
         {
-            match previous {
-                Some(rec) => {
-                    g.map.insert(key, rec);
-                }
-                None => {
-                    g.map.remove(&key);
-                }
+            g.map.remove(&key);
+            if let Some(rec) = previous {
+                g.map.insert(source, rec);
             }
             return Err(error);
         }
@@ -710,6 +734,100 @@ mod tests {
             s.completion_candidates(kind, "https://", false, 7)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn manual_completion_edit_preserves_usage_and_rolls_back_on_conflict() {
+        let s = store("manual_rename");
+        let kind = CompletionKind::EmailSuffix;
+        s.record_completion(kind, "old.example").unwrap();
+        let original = s.get_completion(kind, "old.example").unwrap().unwrap();
+        s.add_manual_completion(kind, "taken.example").unwrap();
+        let before = std::fs::read(s.completion_path()).unwrap();
+        assert!(
+            s.update_manual_completion(kind, "old.example", "taken.example")
+                .is_err()
+        );
+        assert!(
+            s.update_manual_completion(kind, "missing.example", "new.example")
+                .is_err()
+        );
+        assert_eq!(std::fs::read(s.completion_path()).unwrap(), before);
+
+        s.update_manual_completion(kind, "old.example", "new.example")
+            .unwrap();
+        s.reload_completions();
+        assert!(!has(&s, kind, "old.example"));
+        let saved = CompletionRecord {
+            manual: true,
+            ..original
+        };
+        assert_eq!(s.get_completion(kind, "new.example").unwrap(), Some(saved));
+        let external = format!(
+            "{}\n# external change\n",
+            std::fs::read_to_string(s.completion_path()).unwrap()
+        );
+        std::fs::write(s.completion_path(), &external).unwrap();
+        assert!(
+            s.update_manual_completion(kind, "new.example", "failed.example")
+                .is_err()
+        );
+        assert_eq!(s.get_completion(kind, "new.example").unwrap(), Some(saved));
+        assert!(!has(&s, kind, "failed.example"));
+        assert_eq!(
+            std::fs::read_to_string(s.completion_path()).unwrap(),
+            external
+        );
+    }
+
+    #[test]
+    fn manual_completion_edit_only_one_concurrent_rename_succeeds() {
+        let s = store("manual_rename_race");
+        let kind = CompletionKind::UrlHistory;
+        s.record_completion(kind, "https://old.test").unwrap();
+        std::thread::scope(|scope| {
+            let a = scope
+                .spawn(|| s.update_manual_completion(kind, "https://old.test", "https://a.test"));
+            let b = scope
+                .spawn(|| s.update_manual_completion(kind, "https://old.test", "https://b.test"));
+            assert_ne!(a.join().unwrap().is_ok(), b.join().unwrap().is_ok());
+        });
+        s.reload_completions();
+        assert_eq!(s.list_completions(kind, "", 0, 0).unwrap().1, 1);
+        assert!(!has(&s, kind, "https://old.test"));
+        assert_ne!(
+            has(&s, kind, "https://a.test"),
+            has(&s, kind, "https://b.test")
+        );
+    }
+
+    #[test]
+    fn manual_completion_edit_refuses_a_second_readonly_store() {
+        let primary = store("readonly_edit");
+        let source = primary.completion_path();
+        let folder = source.parent().unwrap();
+        let kind = CompletionKind::EmailSuffix;
+        primary
+            .add_manual_completion(kind, "original.test")
+            .unwrap();
+        let bytes = std::fs::read(&source).unwrap();
+        let other = Store::open_with_state(
+            folder.with_extension("reader.redb"),
+            crate::store::StateLoc {
+                state_dir: primary.state_dir().to_owned(),
+                text_dir: folder.to_path_buf(),
+                dir_id: "derived".into(),
+                legacy_done: true,
+            },
+        )
+        .unwrap();
+        assert!(other.runtime().data().readonly());
+        assert!(
+            other
+                .update_manual_completion(kind, "original.test", "edited.test")
+                .is_err()
+        );
+        assert_eq!(std::fs::read(source).unwrap(), bytes);
     }
 
     #[test]

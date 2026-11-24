@@ -213,7 +213,7 @@ fn commit(st: &SearchState, tab: Signal<usize>, jmp: Signal<Option<JumpRequest>>
     if !matches!(t, JumpTarget::SchemaLevel { .. }) && !st.hint.get().is_empty() {
         st.hint.set(String::new());
     }
-    if !matches!(t, JumpTarget::Dictionary) && st.dictionary_visible.get() {
+    if !matches!(t, JumpTarget::Dictionary(_)) && st.dictionary_visible.get() {
         st.dictionary_visible.set(false);
     }
     jump::request(tab, jmp, t);
@@ -232,7 +232,7 @@ pub fn build_jump_sink(
     jmp: Signal<Option<JumpRequest>>,
     hint: Signal<String>,
     fields: std::rc::Rc<crate::state::FieldRegistry>,
-    show_dictionary: impl Fn() + 'static,
+    show_dictionary: impl Fn(Option<crate::pages::dict::spec::LogicalTab>) + 'static,
 ) -> Element {
     crate::pages::dict::reactive::reactive_effect(
         move || jmp.version(),
@@ -251,8 +251,8 @@ pub fn build_jump_sink(
                         vis.set(true);
                     }
                 }
-                JumpTarget::Dictionary => {
-                    show_dictionary();
+                JumpTarget::Dictionary(tab) => {
+                    show_dictionary(*tab);
                     jmp.set(None);
                 }
                 _ => {}
@@ -733,11 +733,11 @@ mod tests {
         let st = state();
         let tab = signal(3usize);
         let jmp = signal(None);
-        commit(&st, tab, jmp, JumpTarget::Dictionary);
+        commit(&st, tab, jmp, JumpTarget::Dictionary(None));
         assert_eq!(tab.get(), 3);
         assert!(matches!(
             jmp.get().map(|req| req.target),
-            Some(JumpTarget::Dictionary)
+            Some(JumpTarget::Dictionary(None))
         ));
         assert!(!st.open.get());
     }
@@ -765,7 +765,7 @@ mod tests {
         st.refresh();
         assert!(st.rows.with(|rows| {
             rows.iter()
-                .any(|r| matches!(r.target, JumpTarget::Dictionary))
+                .any(|r| matches!(r.target, JumpTarget::Dictionary(_)))
         }));
     }
 

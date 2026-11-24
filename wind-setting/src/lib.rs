@@ -11,6 +11,7 @@ mod by_layout;
 mod capabilities;
 mod cli;
 mod compat_window;
+mod completion_rules;
 mod config;
 mod correction_ui;
 mod custom_hide;

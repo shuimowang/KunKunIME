@@ -28,7 +28,7 @@ use super::state::{DictManagerState, DomainKind};
 /// 按一份 [`DictManagerState`] 构建词库页主体。
 ///
 /// 事件回调持有同一份管理状态，切回设置后仍可恢复词库的筛选和选中项。
-pub fn build_page_for(mgr: DictManagerState) -> Element {
+pub fn build_page_for_with_controls(mgr: DictManagerState, controls: Element) -> Element {
     // ── 响应式 effect：数据域/子标签变化 → 归零分页 + 重载（搜索词刻意保留）──
     let dom_v = mgr.domain;
     let sub_v = mgr.sub_tab;
@@ -280,6 +280,7 @@ pub fn build_page_for(mgr: DictManagerState) -> Element {
     }
     let main_col = main_col
         .child(title_row)
+        .child(controls)
         .child(help)
         .child(
             Element::label_signal(mgr.storage_notice)
@@ -1680,6 +1681,60 @@ mod tests {
     use serde_json::json;
     use windui::core::Tree;
     use windui::geometry::Size;
+
+    #[test]
+    fn completion_rules_edit_uses_original_key_and_retains_a_failed_draft() {
+        use super::super::state::DOMAIN_COMPLETION;
+        let _guard = crate::rpc::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("WIND_RPC_MOCK", "1") };
+        let mgr = DictManagerState::new();
+        mgr.domain.set(DOMAIN_COMPLETION);
+        for (sub, old, new, method) in [
+            (0, "old.example", "reader@new.example", "mailSuffix.update"),
+            (
+                1,
+                "https://docs.example/a",
+                "https://docs.example/b",
+                "urlHistory.update",
+            ),
+        ] {
+            mgr.sub_tab.set(sub);
+            mgr.on_nav_changed();
+            mgr.apply_rows(&json!({"items":[{"text":old}], "total":1, "presets":[]}));
+            assert!(mgr.current_spec().ops.edit);
+            activate_row(&mgr, 0);
+            assert!(mgr.completion_add_visible.get());
+            assert_eq!(mgr.edit_text.get(), old);
+            mgr.edit_text.set(new.to_string());
+            crate::rpc::force_mock_error(method, Some("修改目标已存在"));
+            mgr.submit_completion();
+            crate::rpc::force_mock_error(method, None);
+            assert!(mgr.completion_add_visible.get());
+            assert_eq!(mgr.edit_text.get(), new);
+            assert_eq!(mgr.completion_original.get().as_deref(), Some(old));
+            crate::rpc::take_mock_calls();
+            mgr.submit_completion();
+            let calls = crate::rpc::take_mock_calls();
+            assert!(
+                calls
+                    .iter()
+                    .any(|(m, p)| m == method && *p == json!({"oldText":old,"text":new}))
+            );
+            assert!(
+                !calls
+                    .iter()
+                    .any(|(m, _)| m.ends_with(".delete") || m.ends_with(".add"))
+            );
+            assert!(!mgr.completion_add_visible.get());
+            mgr.open_add();
+            assert_eq!(mgr.completion_original.get(), None);
+            assert!(mgr.edit_text.get().is_empty());
+            mgr.completion_add_visible.set(false);
+        }
+        unsafe { std::env::remove_var("WIND_RPC_MOCK") };
+    }
 
     #[test]
     fn completion_add_mail_presets_match_config_and_stay_out_of_personal_pages() {

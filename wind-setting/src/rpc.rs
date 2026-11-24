@@ -2493,6 +2493,9 @@ pub(crate) fn mock_reply(method: &str, params: &Value) -> Value {
         "mailSuffix.add" | "urlHistory.add" | "quickHistory.add" => {
             json!({"ok": true, "added": true, "text": params["text"]})
         }
+        "mailSuffix.update" | "urlHistory.update" => {
+            json!({"ok": true, "text": params["text"]})
+        }
         "temp.listPaged" => json!({ "items": [
             { "code": "nihao", "text": "你好", "count": 3, "lastUsed": 1_758_000_000 },
             { "code": "women", "text": "我们", "count": 7, "lastUsed": 1_750_000_000 }

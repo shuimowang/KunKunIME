@@ -306,6 +306,8 @@ pub struct DictManagerState {
     pub edit_visible: Signal<bool>,
     pub(crate) completion_add_visible: Signal<bool>,
     pub(crate) completion_add_target: Signal<WordCategory>,
+    /// 编辑期间固定原文本，它是存储键；None 表示新增。
+    pub(crate) completion_original: Signal<Option<String>>,
     /// 错误对应的输入框版本；用户改动文字后立即隐藏旧提示。
     pub(crate) completion_add_error: Signal<Option<(u64, String)>>,
     pub edit_title: Signal<String>,
@@ -715,6 +717,7 @@ impl DictManagerState {
             edit_visible: signal(false),
             completion_add_visible: signal(false),
             completion_add_target: signal(WordCategory::MailSuffix),
+            completion_original: signal(None),
             completion_add_error: signal(None),
             edit_title: signal(String::new()),
             edit_l_code: signal("编码".to_string()),
@@ -1286,17 +1289,24 @@ impl DictManagerState {
         Value::Object(p)
     }
 
-    /// 把 list RPC 返回应用到 rows/total 并重建列表（纯函数，便于单测）。
+    pub(crate) fn update_email_presets(&self, presets: Option<&Value>) {
+        let parsed = presets.and_then(|v| {
+            v.as_array()?
+                .iter()
+                .map(|entry| entry.as_str().map(str::to_owned))
+                .collect()
+        });
+        if self.email_presets.get() != parsed {
+            self.email_presets.set(parsed);
+        }
+    }
+
+    /// 把 list RPC 返回应用到 rows/total 并重建列表。
     pub fn apply_rows(&self, v: &Value) {
         self.list_load_failed.set(false);
         let spec = self.current_spec();
         if spec.category == WordCategory::MailSuffix {
-            self.email_presets.set(v.get("presets").and_then(|p| {
-                p.as_array()?
-                    .iter()
-                    .map(|entry| entry.as_str().map(str::to_owned))
-                    .collect()
-            }));
+            self.update_email_presets(v.get("presets"));
         }
         let (rows, total) = WordRow::parse_list(spec.category, spec.paged, v);
         *self.rows.borrow_mut() = rows;
@@ -2981,11 +2991,7 @@ impl DictManagerState {
     pub fn open_add(&self) {
         let cat = self.current_category();
         if let Some(form) = cat.completion_form() {
-            self.edit_text.set(String::new());
-            self.completion_add_error.set(None);
-            self.edit_title.set(form.title.to_string());
-            self.completion_add_target.set(cat);
-            self.completion_add_visible.set(true);
+            self.open_completion(cat, form.title, None);
             return;
         }
         let (title, lc, lt) = match cat {
@@ -3008,16 +3014,28 @@ impl DictManagerState {
         self.edit_visible.set(true);
     }
 
-    /// 手动补全以文本本身为键。让 core 校验、归一化并区分新建与重复添加。
+    fn open_completion(&self, cat: WordCategory, title: &str, original: Option<&str>) {
+        self.completion_original.set(original.map(str::to_owned));
+        self.edit_text.set(original.unwrap_or_default().to_owned());
+        self.completion_add_error.set(None);
+        self.edit_title.set(title.to_owned());
+        self.completion_add_target.set(cat);
+        self.completion_add_visible.set(true);
+    }
+
+    /// 手动补全以文本本身为键。修改时把旧键一并交给 core 原子更新。
     pub(crate) fn submit_completion(&self) {
         if !self.completion_add_visible.get() || self.edit_text.get().trim().is_empty() {
             return;
         }
         let cat = self.completion_add_target.get();
-        let reply = rpc::call_core(
-            spec_for(cat).rpc.add,
-            &json!({"text": self.edit_text.get()}),
-        );
+        let rpc = spec_for(cat).rpc;
+        let original = self.completion_original.get();
+        let text = self.edit_text.get();
+        let reply = match &original {
+            Some(old) => rpc::call_core(rpc.update, &json!({"oldText": old, "text": text})),
+            None => rpc::call_core(rpc.add, &json!({"text": text})),
+        };
         match reply {
             Ok(value) if value["ok"] == true => {
                 let text = value["text"].as_str().unwrap_or_default();
@@ -3031,6 +3049,10 @@ impl DictManagerState {
                     }
                     *self.offset.borrow_mut() = 0;
                     self.reload();
+                }
+                if original.is_some() {
+                    self.notify_ok("已保存修改");
+                    return;
                 }
                 match (cat, value["added"] == true) {
                     (WordCategory::MailSuffix, true) => {
@@ -3117,6 +3139,10 @@ impl DictManagerState {
     /// `position` 仅短语用（用户词库无此维度，传 0 即可）。
     pub fn open_edit(&self, code: &str, text: &str, weight: i64, position: i64) {
         let cat = self.current_category();
+        if let Some(title) = cat.completion_form().and_then(|form| form.edit_title) {
+            self.open_completion(cat, title, Some(text));
+            return;
+        }
         let (title, lc, lt) = match cat {
             WordCategory::UserDict | WordCategory::UserLib => ("编辑词条", "编码", "词条"),
             WordCategory::PhraseUser => ("编辑短语", "编码", "短语"),

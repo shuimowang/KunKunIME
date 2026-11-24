@@ -347,7 +347,11 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
         .child(search_scrim)
         .child(search_overlay)
         .child(settings_layer)
-        .child(dictionary_dialogs)
+        .child(dictionary_dialogs);
+    for dialog in app.borrow().fields.completion_rule_dialogs.take() {
+        root = root.child(dialog);
+    }
+    root = root
         .child(config_import_dialog)
         .child(crate::dialogs::schema_manager::build_import_confirm_dialog(
             app,
@@ -371,7 +375,17 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
         app.borrow().fields.clone(),
         {
             let app = app.clone();
-            move || app.borrow().show_dictionary()
+            move |target| {
+                let st = app.borrow();
+                if let Some(tab) = target {
+                    st.route_dict_target(crate::cli::DictTarget {
+                        schema: "completion".into(),
+                        tab: Some(tab),
+                        ..Default::default()
+                    });
+                }
+                st.show_dictionary();
+            }
         },
     ));
     // 按键冲突实时监听：每帧刷新 state.conflict（驱动常驻警告条），并对新出现的

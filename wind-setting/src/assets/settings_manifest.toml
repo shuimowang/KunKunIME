@@ -2255,8 +2255,7 @@ enabled_when = "input.emoji.enabled == true"
 
 # ── 网址/邮箱输入 ──
 # 两个模式合成一个分区：它们共用同一个补全候选源（core 的 mode_completion.rs），
-# 开关、触发条件、候选行为逐条对位，用户学一次即可。历史与后缀的「查看/清空」入口
-# 都在词库页（那里有现成的列表 + 逐条删 + 清空确认），本分区的 hint 里指路过去。
+# 输入规则提供触发说明与入口，模式开关和个人条目在对应的输入补全页统一管理。
 [[items]]
 key = "input.url.enabled"
 group = "input"
@@ -2264,7 +2263,7 @@ section = "网址/邮箱输入"
 opens_dialog = "url"
 type = "toggle"
 label = "网址输入模式"
-hint = "打出完整前缀（如 http、www.）即进入网址输入模式，可自由输入网址，空格或回车上屏"
+hint = "拼音中文状态下，打出 www. 或 http 等前缀进入网址模式。"
 
 [[items]]
 key = "input.url.prefixes"
@@ -2282,7 +2281,7 @@ section = "网址/邮箱输入"
 dialog_group = "url"
 type = "toggle"
 label = "记住输入过的网址"
-hint = "把上屏过的网址记下来，下次打前几个字符即可补全。记录可在「词库 → 网址历史」查看和清空"
+hint = "记住输入过的网址，下次打相同开头即可补全。在网址列表中可以查看和清理记录。"
 enabled_when = "input.url.enabled == true"
 
 [[items]]
@@ -2323,7 +2322,7 @@ section = "网址/邮箱输入"
 opens_dialog = "email"
 type = "toggle"
 label = "邮箱输入模式"
-hint = "打了字之后按 @ 即进入，候选给出常用后缀拼成的完整邮箱。空缓冲按 @ 不触发，照常出标点"
+hint = "拼音中文状态下，连续输入用户名再按 @，可选邮箱后缀。"
 
 [[items]]
 key = "input.email.suffixes"

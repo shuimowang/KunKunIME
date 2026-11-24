@@ -1636,12 +1636,23 @@ fn build_dialog_group_row_with(
     use crate::dialogs::field_dialogs::build_group_dialog;
     // 成员项（按 manifest 顺序；group id 约定全局唯一以免跨 section 误吸）→ field() 行 → 分组对话框。
     let member_keys = state.manifest.dialog_members(key);
+    let completion_rule = crate::completion_rules::for_key(key);
     // 成员全被定制版藏掉：没有可点开的东西，退回普通的一行。
     if member_keys.is_empty() {
+        if let Some(rule) = completion_rule {
+            register_toggle(state, key, cfg);
+            return field_row(state, key, item, rule.link(state), mode);
+        }
         return field_with(state, key, mode);
     }
     // 宿主控件本体（与 field() 共用 build_control，避免分派漂移）。
-    let control = build_control(state, key, item, cfg);
+    let control = match completion_rule {
+        Some(rule) => {
+            register_toggle(state, key, cfg);
+            rule.link(state)
+        }
+        None => build_control(state, key, item, cfg),
+    };
     // 成员里「宿主开着才可用」那半句条件去掉：宿主关着时用户点开对话框却一项也调不了，
     // 只能关框、开宿主、再进来。改为照常可调，顶部提示「宿主未开启，暂不生效」。
     let mut host_clause: Option<String> = None;
@@ -1695,6 +1706,10 @@ fn build_dialog_group_row_with(
         .borrow_mut()
         .insert(key.to_string(), visible);
     let dlg = build_group_dialog(visible, &format!("{} · 扩展设置", item.label), rows, None);
+    if completion_rule.is_some() {
+        state.fields.completion_rule_dialogs.borrow_mut().push(dlg);
+        return field_row(state, key, item, control, mode);
+    }
     register_dialog(state, dlg);
 
     let btn = Element::button("扩展设置")
@@ -6728,6 +6743,27 @@ fn enabled_when_closure(state: &AppState, expr: &str) -> Option<Box<dyn Fn() -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_rules_modes_use_independent_registered_fields_and_shared_dialogs() {
+        let state = AppState::empty();
+        let email = "input.email.enabled";
+        let url = "input.url.enabled";
+        for key in [email, url] {
+            let item = state.manifest.get(key).unwrap();
+            assert!(item.hint.as_deref().unwrap().contains("拼音中文状态"));
+            let _row = build_dialog_group_row(&state, key, item, &state.current_config);
+        }
+        assert_eq!(state.fields.completion_rule_dialogs.borrow().len(), 2);
+        let fields = state.fields.bool_signals.borrow();
+        fields[email].set(true);
+        fields[url].set(false);
+        let draft = state.draft_config();
+        assert_eq!(draft.get_bool(email), Some(true));
+        assert_eq!(draft.get_bool(url), Some(false));
+        assert!(state.fields.dialog_opens.borrow().contains_key(email));
+        assert!(state.fields.dialog_opens.borrow().contains_key(url));
+    }
 
     /// 定制版藏光 `input.correction.*` 后，同分区没有配置键的「误读表」按钮跟着藏；
     /// 没藏光时它照常在，没有任何定制隐藏时也不动它。

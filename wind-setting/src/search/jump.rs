@@ -44,7 +44,7 @@ impl JumpRequest {
             } else {
                 host_anchor // 第一跳：先滚到卡片上的入口行
             }),
-            JumpTarget::SchemaLevel { .. } | JumpTarget::Dictionary => None,
+            JumpTarget::SchemaLevel { .. } | JumpTarget::Dictionary(_) => None,
         }
     }
 }
@@ -73,7 +73,7 @@ fn send(tab: Signal<usize>, jump: Signal<Option<JumpRequest>>, target: JumpTarge
         n
     });
     // 词库使用自己的导航；保留设置页索引，以便返回时回到原位置。
-    if !matches!(target, JumpTarget::Dictionary) {
+    if !matches!(target, JumpTarget::Dictionary(_)) {
         tab.set(target.tab());
     }
     jump.set(Some(JumpRequest {

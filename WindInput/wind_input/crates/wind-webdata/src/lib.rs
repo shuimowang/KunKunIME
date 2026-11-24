@@ -579,10 +579,12 @@ fn web_data_dispatch<H: WebDataRpc + ?Sized>(
         // 命名空间分开是给设置端用的——「清空网址历史」不该顺带抹掉邮箱学习。
         "mailSuffix.listPaged" => h.web_completion_list_paged(CompletionKind::EmailSuffix, params),
         "mailSuffix.add" => h.web_completion_add(CompletionKind::EmailSuffix, params),
+        "mailSuffix.update" => h.web_completion_update(CompletionKind::EmailSuffix, params),
         "mailSuffix.delete" => h.web_completion_delete(CompletionKind::EmailSuffix, params),
         "mailSuffix.clear" => h.web_completion_clear(CompletionKind::EmailSuffix),
         "urlHistory.listPaged" => h.web_completion_list_paged(CompletionKind::UrlHistory, params),
         "urlHistory.add" => h.web_completion_add(CompletionKind::UrlHistory, params),
+        "urlHistory.update" => h.web_completion_update(CompletionKind::UrlHistory, params),
         "urlHistory.delete" => h.web_completion_delete(CompletionKind::UrlHistory, params),
         "urlHistory.clear" => h.web_completion_clear(CompletionKind::UrlHistory),
         // 快捷输入历史（成员 `quick_input.history`），同一张表的第三个分区。
@@ -2589,19 +2591,34 @@ pub trait WebDataRpc: WebDataHost {
                 "请以能输入的英文、数字、符号或有拼音的汉字开头"
             );
         }
+        let store = self.writable_completion_store()?;
+        let added = store.add_manual_completion(kind, &text)?;
+        Ok(json!({ "ok": true, "added": added, "text": text }))
+    }
+
+    fn web_completion_update(&self, kind: CompletionKind, params: &Value) -> anyhow::Result<Value> {
+        let text = completion_input::normalize(kind, str_param(params, "text")?)?;
+        let old = store_text(str_param(params, "oldText")?);
+        self.writable_completion_store()?
+            .update_manual_completion(kind, &old, &text)?;
+        Ok(json!({ "ok": true, "text": text }))
+    }
+
+    fn writable_completion_store(&self) -> anyhow::Result<&wind_store::Store> {
+        if let Some(reason) = self.storage_readonly_reason() {
+            anyhow::bail!("{reason}");
+        }
         let store = self
             .user_store()
             .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
-        let added = store.add_manual_completion(kind, &text)?;
-        Ok(json!({ "ok": true, "added": added, "text": text }))
+        anyhow::ensure!(!store.runtime().data().readonly(), "用户数据处于只读状态");
+        Ok(store)
     }
 
     /// 删一条补全学习数据。返回它本来在不在。
     fn web_completion_delete(&self, kind: CompletionKind, params: &Value) -> anyhow::Result<Value> {
         let text = str_param(params, "text")?;
-        let store = self
-            .user_store()
-            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let store = self.writable_completion_store()?;
         Ok(json!(store.remove_completion(kind, &store_text(text))?))
     }
 
@@ -2610,9 +2627,7 @@ pub trait WebDataRpc: WebDataHost {
     /// 无内存镜像要一并清（不像 `stats.clear` 那样还要 `stat_collector().reset()`）：
     /// 补全候选每次刷新都现查库，没有缓存层。
     fn web_completion_clear(&self, kind: CompletionKind) -> anyhow::Result<Value> {
-        let store = self
-            .user_store()
-            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let store = self.writable_completion_store()?;
         Ok(json!(store.clear_completions(kind)?))
     }
 

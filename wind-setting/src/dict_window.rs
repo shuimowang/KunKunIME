@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use windui::prelude::*;
 
-use crate::pages::dict::{category_nav::build_category_nav, view::build_page_for};
+use crate::pages::dict::{category_nav::build_category_nav, view::build_page_for_with_controls};
 use crate::state::AppState;
 
 /// 在固定主导航右侧显示当前范围的分类与词表。
@@ -31,7 +31,13 @@ pub fn build_content(app: Rc<RefCell<AppState>>) -> Element {
                 .height_match()
                 .bg_role(Role::Divider),
         )
-        .child(build_page_for(mgr.clone()).weight(1.0));
+        .child(
+            build_page_for_with_controls(
+                mgr.clone(),
+                crate::completion_rules::controls(&app.borrow()),
+            )
+            .weight(1.0),
+        );
 
     let current = app.clone();
     let body = body.visible_when(move || !current.borrow().awaiting_dict_target());

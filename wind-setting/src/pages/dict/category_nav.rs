@@ -3,7 +3,7 @@
 //! 取代原先横在表格上方的子标签行与分库切换器（分段 / 下拉两种形态）和「管理…」对话框：
 //! 类别、分库、分库开关都在这一栏，每个节点右键给出它能做的事，「用户词库」组旁的按钮新建或导入分库。
 //!
-//! 点击只写 `sub_tab`（和分库的选择记忆），重载交给 `view::build_page_for` 里监听
+//! 点击只写 `sub_tab`（和分库的选择记忆），重载交给词库页里监听
 //! `sub_tab` 的 effect，同左栏只写 `domain`。
 //!
 //! 整栏挂在 `nav_epoch` 上整体重建：切数据域、方案集变化、分库列表变化（含开关与条目数）
@@ -367,6 +367,13 @@ pub fn build_category_nav(mgr: &DictManagerState, back: Element) -> Element {
     let list =
         Element::host_signal(mgr.nav_epoch, move |_| build_list(&m_list)).padding_xy(SIDE_PAD, 0);
     let domain_menu = mgr.clone();
+    let scope_items = mgr.domain_rich_items.map(|items| {
+        let mut choices = items.clone();
+        for global in choices.iter_mut().take(super::state::GLOBAL_DOMAINS) {
+            global.badge = None;
+        }
+        choices
+    });
     let selector = Element::col()
         .width_match()
         .spacing(5)
@@ -378,7 +385,7 @@ pub fn build_category_nav(mgr: &DictManagerState, back: Element) -> Element {
                 .fg_role(Role::TextMuted),
         )
         .child(
-            Element::dropdown_items_signal(mgr.domain_rich_items, mgr.domain)
+            Element::dropdown_items_signal(scope_items, mgr.domain)
                 .width_match()
                 .tooltip("切换输入方案或全局词库"),
         )

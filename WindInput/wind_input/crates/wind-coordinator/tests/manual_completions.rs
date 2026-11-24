@@ -179,6 +179,43 @@ fn manual_completions_are_selectable_with_history_recording_disabled() {
             .any(|w| w == "https://docs.old.test/history")
     );
     select(&c, "https://docs.example.org/help");
+    assert!(
+        c.web_data_rpc(
+            "mailSuffix.update",
+            &json!({"oldText": "example.org", "text": "not a domain"})
+        )
+        .is_err()
+    );
+    assert_eq!(
+        c.web_data_rpc(
+            "mailSuffix.update",
+            &json!({"oldText": "example.org", "text": "user@Example.NET"})
+        )
+        .unwrap(),
+        json!({"ok": true, "text": "example.net"})
+    );
+    type_ascii(&c, "demo@exa");
+    assert!(
+        !c.debug_all_candidate_texts()
+            .iter()
+            .any(|v| v == "demo@example.org")
+    );
+    select(&c, "demo@example.net");
+    assert_eq!(
+        c.web_data_rpc(
+            "urlHistory.update",
+            &json!({"oldText": "https://docs.example.org/help", "text": "docs.example.org/HelpV2"})
+        )
+        .unwrap(),
+        json!({"ok": true, "text": "https://docs.example.org/HelpV2"})
+    );
+    type_ascii(&c, "https://docs.");
+    assert!(
+        !c.debug_all_candidate_texts()
+            .iter()
+            .any(|v| v == "https://docs.example.org/help")
+    );
+    select(&c, "https://docs.example.org/HelpV2");
     type_ascii(&c, "https://private.test");
     tap(&c, 0x0d, 0);
     assert!(
