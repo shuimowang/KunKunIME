@@ -58,7 +58,7 @@ fn print_root_usage() {
          restart   重启输入法服务（未运行则直接启动）\n  \
          ui        桌面提示：ui toast <文案>（需 core 在线）\n  \
          ime       输入状态：中英/全半角/简繁/工具栏的查看与切换（需 core 在线）\n  \
-         system    系统集成：Dota 2 兼容等（写 HKLM，需管理员权限）\n  \
+         system    Windows 系统集成：当前账户的默认输入法、输入法注册等（系统注册需管理员权限）\n  \
          help      显示本帮助；--version 显示版本\n\
          \n\
          各子命令详细用法: KunKunIME <子命令> help",

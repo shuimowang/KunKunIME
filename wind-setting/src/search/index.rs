@@ -406,6 +406,8 @@ struct Handwritten {
 /// 七行，22 条变成 150 多行，反倒看不出它是张表。
 #[rustfmt::skip]
 const HANDWRITTEN: &[Handwritten] = &[
+    #[cfg(windows)]
+    Handwritten { id: "input:windows-default-ime", anchor: "input:windows-default-ime", page: "input", title: "Windows 登录默认输入法", section: "默认状态", keywords: "默认输入法 登录 开机 重启 微软拼音 恢复自动选择 设置为默认 设为默认输入法", feature: "" },
     // ── 方案页：五条都落在「输入方案」卡上 ──
     Handwritten { id: "schema:list", anchor: "schema:list", page: "schema", title: "方案列表", section: "输入方案", keywords: "切换 启用 排序 拖动", feature: "" },
     Handwritten { id: "schema:shuangpin-layout", anchor: "schema:shuangpin-layout", page: "schema", title: "双拼布局", section: "双拼", keywords: "小鹤 自然码 搜狗 微软 智能abc 声母 韵母 键位 shuangpin", feature: "shuangpin_layout" },
@@ -744,6 +746,21 @@ mod tests {
                 idx.iter().any(|e| e.target.tab() == tab),
                 "「{page}」页没有任何可搜索条目"
             );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_default_ime_search_opens_the_windows_setting() {
+        use crate::search::matcher::{DEFAULT_LIMIT, search};
+        let entries = build_index(&manifest());
+        let target = JumpTarget::Card {
+            tab: page_tab("input"),
+            anchor: "input:windows-default-ime".into(),
+        };
+        for query in ["默认输入法", "重启", "开机", "微软拼音", "Windows 登录"] {
+            let hits = search(&entries, query, DEFAULT_LIMIT);
+            assert!(hits.iter().any(|hit| entries[hit.index].target == target), "{query}");
         }
     }
 

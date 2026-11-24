@@ -124,6 +124,19 @@ fn manifest_sections(state: &AppState, group: &str, nav: &SubNav) -> Vec<Element
         .into_iter()
         .map(|(sec, keys)| {
             let (rows, head) = crate::manifest::section_rows_split(state, &keys);
+            #[cfg(windows)]
+            let rows = if group == "general" && sec == "默认状态" {
+                let row = crate::search::anchor::wrap(
+                    state.dict_mgr.registration.default_row(),
+                    "input:windows-default-ime",
+                    state.jump,
+                );
+                let mut rows = rows;
+                rows.insert(0, crate::manifest::RowSpec { el: row, vis: None });
+                rows
+            } else {
+                rows
+            };
             let card = section_vis_with_menu(
                 &sec,
                 rows.into_iter().map(|r| (r.el, r.vis)).collect(),

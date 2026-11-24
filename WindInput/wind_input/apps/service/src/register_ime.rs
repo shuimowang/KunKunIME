@@ -37,8 +37,19 @@ pub fn run(args: &[String]) -> i32 {
                 println!("{}", serde_json::to_string(&dev.status()?)?);
                 Ok(())
             }),
+        [command, format]
+            if format == "--json"
+                && matches!(
+                    command.as_str(),
+                    "default-status" | "set-default" | "reset-default"
+                ) =>
+        {
+            Deployment::discover().and_then(|dev| dev.default_input_method(command))
+        }
         _ => {
-            eprintln!("用法: KunKunIME.exe system register-ime [enable | status --json]");
+            eprintln!(
+                "用法: KunKunIME.exe system register-ime [enable | status --json | default-status --json | set-default --json | reset-default --json]"
+            );
             return 2;
         }
     };
@@ -153,6 +164,26 @@ impl Deployment {
             registered,
             enabled,
         })
+    }
+
+    fn default_input_method(&self, command: &str) -> Result<()> {
+        let registered = self.registered()?;
+        let script = default_script(command, registered);
+        let output = Command::new(self.system.join(r"WindowsPowerShell\v1.0\powershell.exe"))
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .context("无法启动 Windows PowerShell 以访问当前账户的默认输入法")?;
+        ensure!(
+            output.status.success(),
+            "Windows 默认输入法操作失败（{}）：{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        let status: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .context("无法读取 Windows 返回的默认输入法状态")?;
+        println!("{status}");
+        Ok(())
     }
 
     fn register(&self) -> Result<()> {
@@ -328,6 +359,16 @@ fn tip_string(win32: bool) -> String {
     format!("{prefix}{SIMPLIFIED_CHINESE:04X}:{clsid}{profile}")
 }
 
+fn default_script(command: &str, registered: bool) -> String {
+    // 此处三个参数均为程序自身生成的值，命令名在 run 中限定。
+    format!(
+        "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); \
+         $operation='{command}'; $ourTip='{}'; $registered=${registered};\n{}",
+        tip_string(false),
+        include_str!("default_ime.ps1")
+    )
+}
+
 fn same_path(first: &Path, second: &Path) -> bool {
     let first = fs::canonicalize(first).unwrap_or_else(|_| first.to_path_buf());
     let second = fs::canonicalize(second).unwrap_or_else(|_| second.to_path_buf());
@@ -370,6 +411,112 @@ fn write_dll(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn exercise_default(
+        operation: &str,
+        initial: &str,
+        registered: bool,
+        enabled: bool,
+        ignores_set: bool,
+    ) -> (bool, String, String) {
+        let our_tip = tip_string(false);
+        let initial = match initial {
+            "auto" => "$null".to_owned(),
+            "kunkun" => format!("'{our_tip}'"),
+            "other" => "'0409:00000409'".to_owned(),
+            _ => unreachable!(),
+        };
+        // Use the production PowerShell body with in-memory fake cmdlets. Disabling module
+        // autoload also prevents a missing fake from falling back to International.
+        let script = format!(
+            r#"
+Import-Module Microsoft.PowerShell.Utility
+$PSModuleAutoLoadingPreference='None'
+$script:current={initial}; $script:writes=0
+function Get-WinDefaultInputMethodOverride {{
+    if ($null -ne $script:current) {{
+        [pscustomobject]@{{InputMethodTip=$script:current; Description='测试输入法'}}
+    }}
+}}
+function Get-WinUserLanguageList {{
+    [pscustomobject]@{{InputMethodTips=@('0409:00000409')}}
+    if (${enabled}) {{ [pscustomobject]@{{InputMethodTips=@($ourTip)}} }}
+}}
+function Set-WinDefaultInputMethodOverride {{
+    param([string]$InputTip)
+    $script:writes++
+    $supplied=$PSBoundParameters.ContainsKey('InputTip')
+    if ($supplied -and $InputTip -cne $ourTip) {{ throw '测试失败：写入了意外的 TIP' }}
+    if (!${ignores_set}) {{
+        $script:current=if ($supplied) {{ $InputTip }} else {{ $null }}
+    }}
+}}
+try {{ {} }} finally {{ [Console]::Error.Write("calls=$script:writes") }}
+"#,
+            default_script(operation, registered)
+        );
+        let ps = system_directory(|buf| unsafe { GetSystemDirectoryW(Some(buf)) })
+            .unwrap()
+            .join(r"WindowsPowerShell\v1.0\powershell.exe");
+        let output = Command::new(ps)
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .unwrap();
+        (
+            output.status.success(),
+            String::from_utf8(output.stdout).unwrap(),
+            String::from_utf8(output.stderr).unwrap(),
+        )
+    }
+
+    #[test]
+    fn default_ime_reads_without_writing_and_changes_only_on_request() {
+        for (operation, initial, expected, calls) in [
+            ("default-status", "auto", "auto", 0),
+            ("default-status", "other", "other", 0),
+            ("set-default", "other", "kunkun", 1),
+            ("set-default", "kunkun", "kunkun", 0),
+            ("reset-default", "kunkun", "auto", 1),
+            ("reset-default", "auto", "auto", 0),
+        ] {
+            let (ok, json, err) = exercise_default(operation, initial, true, true, false);
+            assert!(ok, "{operation}: {err}");
+            let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(value["mode"], expected);
+            assert_eq!(value["registered"], true);
+            assert_eq!(value["enabled"], true);
+            if expected == "auto" {
+                assert!(value["inputTip"].is_null() && value["name"].is_null());
+            } else {
+                assert_eq!(value["name"], "测试输入法");
+            }
+            assert_eq!(err, format!("calls={calls}"));
+        }
+    }
+
+    #[test]
+    fn default_ime_checks_registration_and_detects_unacknowledged_changes() {
+        for (registered, enabled) in [(false, false), (true, false)] {
+            let (ok, _, err) = exercise_default("set-default", "other", registered, enabled, false);
+            assert!(
+                !ok && err.contains("请先注册") && err.contains("calls=0"),
+                "{err}"
+            );
+        }
+        let (ok, _, err) = exercise_default("reset-default", "other", true, true, false);
+        assert!(
+            !ok && err.contains("其他输入法") && err.contains("calls=0"),
+            "{err}"
+        );
+        for (op, initial) in [("set-default", "auto"), ("reset-default", "kunkun")] {
+            let (ok, _, err) = exercise_default(op, initial, true, true, true);
+            assert!(
+                !ok && err.contains("未确认") && err.contains("calls=1"),
+                "{err}"
+            );
+        }
+    }
 
     #[test]
     fn malformed_or_executable_pe_is_not_a_tsf_dll() {

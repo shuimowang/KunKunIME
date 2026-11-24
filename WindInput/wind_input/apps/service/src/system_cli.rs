@@ -16,9 +16,12 @@ const USAGE: &str = "\
   dota2-compat on [--name <名称>]   开启兼容（改本输入法在系统里登记的显示名）
   dota2-compat off                 关闭，还原为真实名称
   dota2-compat status [--json]     显示当前登记的名称（--json 供程序读）
-  register-ime                     注册开发版 TSF 组件（需管理员权限）
-  register-ime enable              把开发版加入当前用户的输入法列表
+  register-ime                     注册困困输入法 TSF 组件（需管理员权限）
+  register-ime enable              把困困加入当前用户的输入法列表
   register-ime status --json       检查当前构建的注册和启用状态
+  register-ime default-status --json   查看当前用户的 Windows 登录默认输入法
+  register-ime set-default --json      将已注册并启用的困困设为登录默认
+  register-ime reset-default --json    恢复按语言列表自动选择
   help                             显示本帮助
 
 说明: Dota 2 按输入法名称查一张内置白名单决定要不要由游戏绘制候选，

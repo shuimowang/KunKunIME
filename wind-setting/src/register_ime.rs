@@ -1,4 +1,4 @@
-//! 从词库管理窗注册当前程序的 Windows 输入法。
+//! Windows 输入法注册与当前账户的默认输入法。
 
 use std::cell::RefCell;
 use std::os::windows::ffi::OsStrExt;
@@ -30,7 +30,11 @@ use windui::prelude::*;
 pub type RegistrationResult = Result<(), String>;
 
 pub enum Reply {
-    Status(Result<RegistrationStatus, String>),
+    Default(
+        DefaultCommand,
+        Result<DefaultStatus, String>,
+        Option<RegistrationStatus>,
+    ),
     Submitted(RegistrationResult),
 }
 
@@ -38,6 +42,7 @@ pub enum Reply {
 pub struct Registration {
     busy: Signal<bool>,
     complete: Signal<Option<bool>>,
+    default: Signal<Result<Option<DefaultStatus>, String>>,
     tx: Rc<RefCell<Option<Sender<Reply>>>>,
 }
 
@@ -46,6 +51,7 @@ impl Registration {
         Self {
             busy: signal(false),
             complete: signal(None),
+            default: signal(Ok(None)),
             tx: Rc::new(RefCell::new(None)),
         }
     }
@@ -54,13 +60,46 @@ impl Registration {
         *self.tx.borrow_mut() = Some(tx);
     }
 
-    /// 在窗口打开、重新获得焦点或手动刷新时读取系统状态。并发请求合并。
+    /// 窗口打开、重新获得焦点和手动刷新只查询系统，共用一个进行中的请求。
     pub fn refresh(&self) {
-        if crate::rpc::is_mock() {
-            self.complete.set(Some(true));
+        self.request(DefaultCommand::Read);
+    }
+
+    // 状态读取、注册和显式更改串行，旧读取不会覆盖刚写入的结果。
+    fn request(&self, command: DefaultCommand) {
+        if self.busy.get() {
             return;
         }
-        if self.busy.get() {
+        if command != DefaultCommand::Read
+            && !self.default.with(|last| {
+                last.as_ref()
+                    .ok()
+                    .and_then(Option::as_ref)
+                    .is_some_and(|status| status.action() == Some(command))
+            })
+        {
+            return;
+        }
+        if crate::rpc::is_mock() {
+            if command == DefaultCommand::Read && self.default.get() != Ok(None) {
+                return;
+            }
+            let mode = if command == DefaultCommand::Set {
+                DefaultMode::Kunkun
+            } else {
+                DefaultMode::Auto
+            };
+            self.on_reply(Reply::Default(
+                command,
+                Ok(DefaultStatus {
+                    registered: true,
+                    enabled: true,
+                    mode,
+                    name: None,
+                    input_tip: None,
+                }),
+                None,
+            ));
             return;
         }
         let Some(tx) = self.tx.borrow().clone() else {
@@ -68,36 +107,108 @@ impl Registration {
         };
         self.busy.set(true);
         if let Err(error) = std::thread::Builder::new().spawn(move || {
-            let status = crate::mode::core_exe()
+            let exe = crate::mode::core_exe();
+            let result = exe
+                .as_deref()
                 .ok_or_else(|| "找不到困困输入法核心程序".to_string())
-                .and_then(|exe| query_status(&exe));
-            let _ = tx.send(Reply::Status(status));
+                .and_then(|exe| query_default(exe, command));
+            // 默认项不可读时仍单独检查注册，保留原注册按钮的判断。
+            let registration = if command == DefaultCommand::Read && result.is_err() {
+                exe.as_deref().and_then(|exe| query_status(exe).ok())
+            } else {
+                None
+            };
+            let _ = tx.send(Reply::Default(command, result, registration));
         }) {
-            let _ = self.on_reply(Reply::Status(Err(error.to_string())));
+            self.on_reply(Reply::Default(command, Err(error.to_string()), None));
         }
     }
 
-    pub fn on_reply(&self, reply: Reply) -> Option<RegistrationResult> {
+    pub fn on_reply(&self, reply: Reply) -> Option<Result<&'static str, String>> {
         self.busy.set(false);
         match reply {
-            Reply::Status(Ok(status)) => {
-                self.complete.set(Some(status.registered && status.enabled));
-                None
-            }
-            Reply::Status(Err(error)) => {
-                tracing::debug!("无法读取 Windows 输入法注册状态：{error}");
-                if self.complete.get().is_none() {
-                    self.complete.set(Some(false));
+            Reply::Default(command, result, fallback) => {
+                match &result {
+                    Ok(status) => self.complete.set(Some(status.registered && status.enabled)),
+                    Err(_) => {
+                        if let Some(status) = fallback {
+                            self.complete.set(Some(status.registered && status.enabled));
+                        }
+                    }
                 }
-                None
+                self.default.set(result.clone().map(Some));
+                match command {
+                    DefaultCommand::Read => None,
+                    DefaultCommand::Set => {
+                        Some(result.map(|_| "已将困困输入法设为当前 Windows 账户的默认输入法"))
+                    }
+                    DefaultCommand::Reset => {
+                        Some(result.map(|_| "已恢复由 Windows 自动选择默认输入法"))
+                    }
+                }
             }
             Reply::Submitted(result) => {
                 if result.is_ok() {
                     self.complete.set(Some(true));
+                    self.refresh();
                 }
-                Some(result)
+                Some(result.map(|_| "已注册为 Windows 输入法。按 Win + 空格切换。"))
             }
         }
+    }
+
+    pub fn default_row(&self) -> Element {
+        let last = self.default;
+        let busy = self.busy;
+        let summary = last.map(|v| match v {
+            Ok(None) => "正在读取当前账户的设置…".to_owned(),
+            Ok(Some(s)) => s.summary(),
+            Err(e) => format!("无法读取或确认当前设置：{e}"),
+        });
+        let action = |text: &'static str, command| {
+            let this = self.clone();
+            Element::button(text)
+                .small()
+                .outline_soft()
+                .visible_when(move || {
+                    last.with(|v| {
+                        v.as_ref()
+                            .ok()
+                            .and_then(Option::as_ref)
+                            .is_some_and(|s| s.action() == Some(command))
+                    })
+                })
+                .enabled_when(move || !busy.get())
+                .on_click(move |_| this.request(command))
+        };
+        let this = self.clone();
+        let buttons = Element::row()
+            .spacing(8)
+            .cross(Align::Center)
+            .child(action("设为默认输入法", DefaultCommand::Set))
+            .child(action("恢复自动选择", DefaultCommand::Reset))
+            .child(
+                Element::button("刷新状态")
+                    .small()
+                    .outline_soft()
+                    .enabled_when(move || !busy.get())
+                    .on_click(move |_| this.refresh()),
+            );
+        Element::col()
+            .width_match()
+            .padding_xy(16, 10)
+            .spacing(5)
+            .child(Element::label("Windows 登录默认输入法").font_size(14.0))
+            .child(Element::label_signal(summary).width_match().font_size(13.0))
+            .child(
+                Element::label(
+                    "决定当前 Windows 账户登录后优先使用的输入法。仍可按 Win + 空格临时切换。",
+                )
+                .width_match()
+                .font_size(12.0)
+                .fg_role(Role::TextMuted),
+            )
+            .child(buttons)
     }
 
     pub fn button(&self) -> Element {
@@ -161,15 +272,181 @@ pub struct RegistrationStatus {
     enabled: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefaultCommand {
+    Read,
+    Set,
+    Reset,
+}
+
+impl DefaultCommand {
+    fn argument(self) -> &'static str {
+        match self {
+            Self::Read => "default-status",
+            Self::Set => "set-default",
+            Self::Reset => "reset-default",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum DefaultMode {
+    Auto,
+    Kunkun,
+    Other,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct DefaultStatus {
+    registered: bool,
+    enabled: bool,
+    mode: DefaultMode,
+    name: Option<String>,
+    #[serde(rename = "inputTip")]
+    input_tip: Option<String>,
+}
+
+impl DefaultStatus {
+    fn action(&self) -> Option<DefaultCommand> {
+        match self.mode {
+            DefaultMode::Kunkun => Some(DefaultCommand::Reset),
+            _ if self.registered && self.enabled => Some(DefaultCommand::Set),
+            _ => None,
+        }
+    }
+
+    fn summary(&self) -> String {
+        let mut s = match self.mode {
+            DefaultMode::Auto => "当前：Windows 自动选择".to_owned(),
+            DefaultMode::Kunkun => "当前：困困输入法".to_owned(),
+            DefaultMode::Other => format!(
+                "当前：{}",
+                self.name
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .or(self.input_tip.as_deref())
+                    .unwrap_or("其他输入法")
+            ),
+        };
+        if !(self.registered && self.enabled) {
+            s.push_str("。要使用困困输入法，请先点击左下角的「注册输入法」。");
+        }
+        s
+    }
+}
+
+fn query_default(exe: &Path, command: DefaultCommand) -> Result<DefaultStatus, String> {
+    let output = run_core(exe, &[command.argument(), "--json"]).map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(failure_detail(&output));
+    }
+    let status: DefaultStatus = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("无法识别 Windows 默认输入法状态。{e}"))?;
+    if (command == DefaultCommand::Set && status.mode != DefaultMode::Kunkun)
+        || (command == DefaultCommand::Reset && status.mode != DefaultMode::Auto)
+    {
+        return Err("Windows 回读的默认输入法与操作不一致，请刷新状态。".to_owned());
+    }
+    Ok(status)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn status(registered: bool, enabled: bool) -> Reply {
-        Reply::Status(Ok(RegistrationStatus {
-            registered,
-            enabled,
-        }))
+        Reply::Default(
+            DefaultCommand::Read,
+            Ok(DefaultStatus {
+                registered,
+                enabled,
+                mode: DefaultMode::Auto,
+                name: None,
+                input_tip: None,
+            }),
+            None,
+        )
+    }
+
+    #[test]
+    fn windows_default_ime_clicks_change_only_the_requested_default() {
+        use windui::core::Tree;
+        use windui::event::{MouseButton, PointerEvent, PointerKind};
+        use windui::geometry::{Point, Size};
+        let _guard = crate::rpc::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // The mock backend only changes the in-memory status used by this test.
+        unsafe { std::env::set_var("WIND_RPC_MOCK", "1") };
+        let reg = Registration::new();
+        reg.refresh();
+        let mut tree = Tree::new();
+        let root = reg.default_row().build(&mut tree);
+        tree.root = Some(root);
+        let layout = |tree: &mut Tree| {
+            tree.layout_root(Size::new(402, 200), &mut windui::text::NullTextEngine)
+        };
+        layout(&mut tree);
+        let bar = *tree.get(root).unwrap().children.last().unwrap();
+        let buttons = tree.get(bar).unwrap().children.clone();
+        let visible = |tree: &Tree, i: usize| tree.get(buttons[i]).unwrap().effective_visible();
+        let click = |i: usize, tree: &mut Tree| {
+            let b = tree.abs_bounds(buttons[i]);
+            let p = Point::new(b.x + b.w / 2, b.y + b.h / 2);
+            let (mut hover, mut capture) = (None, None);
+            for kind in [PointerKind::Down, PointerKind::Up] {
+                tree.dispatch_pointer(
+                    PointerEvent::single(kind, p, MouseButton::Left),
+                    &mut hover,
+                    &mut capture,
+                );
+            }
+            layout(tree);
+        };
+        assert!(visible(&tree, 0) && !visible(&tree, 1));
+        click(2, &mut tree); // refresh
+        assert_eq!(reg.default.get().unwrap().unwrap().mode, DefaultMode::Auto);
+        click(0, &mut tree); // set
+        assert!(!visible(&tree, 0) && visible(&tree, 1));
+        assert_eq!(
+            reg.default.get().unwrap().unwrap().mode,
+            DefaultMode::Kunkun
+        );
+        click(2, &mut tree);
+        assert_eq!(
+            reg.default.get().unwrap().unwrap().mode,
+            DefaultMode::Kunkun
+        );
+        click(1, &mut tree); // reset
+        assert_eq!(reg.default.get().unwrap().unwrap().mode, DefaultMode::Auto);
+        assert!(visible(&tree, 0) && !visible(&tree, 1));
+        unsafe { std::env::remove_var("WIND_RPC_MOCK") };
+    }
+
+    #[test]
+    fn windows_default_ime_renders_other_unregistered_and_failed_reads() {
+        let reg = Registration::new();
+        let mut status: DefaultStatus = serde_json::from_str(r#"{"registered":true,"enabled":true,"mode":"other","name":"微软拼音","inputTip":"0804:other"}"#).unwrap();
+        assert_eq!(status.action(), Some(DefaultCommand::Set));
+        assert!(status.summary().contains("微软拼音"));
+        status.enabled = false;
+        assert_eq!(status.action(), None);
+        assert!(status.summary().contains("注册输入法"));
+        reg.on_reply(Reply::Default(
+            DefaultCommand::Read,
+            Ok(status.clone()),
+            None,
+        ));
+        assert_eq!(reg.complete.get(), Some(false));
+        let error = "系统读取失败".to_string();
+        reg.on_reply(Reply::Default(
+            DefaultCommand::Read,
+            Err(error.clone()),
+            None,
+        ));
+        assert_eq!(reg.default.get(), Err(error));
+        assert_eq!(reg.complete.get(), Some(false));
     }
 
     #[test]
@@ -180,7 +457,11 @@ mod tests {
         assert_eq!(state.complete.get(), Some(true));
         assert!(
             state
-                .on_reply(Reply::Status(Err("temporary".into())))
+                .on_reply(Reply::Default(
+                    DefaultCommand::Read,
+                    Err("temporary".into()),
+                    None
+                ))
                 .is_none()
         );
         assert_eq!(state.complete.get(), Some(true));
@@ -197,7 +478,14 @@ mod tests {
         let state = Registration::new();
         assert!(
             state
-                .on_reply(Reply::Status(Err("failed".into())))
+                .on_reply(Reply::Default(
+                    DefaultCommand::Read,
+                    Err("failed".into()),
+                    Some(RegistrationStatus {
+                        registered: false,
+                        enabled: false
+                    })
+                ))
                 .is_none()
         );
         assert_eq!(state.complete.get(), Some(false));

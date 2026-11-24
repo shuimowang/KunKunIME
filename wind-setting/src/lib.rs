@@ -177,9 +177,18 @@ pub(crate) fn open_main_window(ctx: &mut EventCtx, app: &Rc<RefCell<state::AppSt
     let autosave = app.clone();
     let tick = app.clone();
     app.borrow().main_window_closed.set(false);
+    let window = Window::new(MAIN_TITLE, MAIN_W, MAIN_H);
+    #[cfg(windows)]
+    let window = {
+        let registration = app.borrow().dict_mgr.registration.clone();
+        window.on_window_activated(move |_, active| {
+            if active {
+                registration.refresh();
+            }
+        })
+    };
     ctx.open_window(
-        Window::new(MAIN_TITLE, MAIN_W, MAIN_H)
-            .single(MAIN_SINGLE_KEY)
+        window.single(MAIN_SINGLE_KEY)
             .frameless(true)
             .centered(true)
             .min_size(MAIN_MIN_W, MAIN_MIN_H)
@@ -471,7 +480,7 @@ pub fn run() {
         let registration = dict.registration.clone();
         let registration_tx = app.channel::<register_ime::Reply>(move |ctx, reply| {
             match dict.registration.on_reply(reply) {
-                Some(Ok(())) => ctx.toast_ok("已注册为 Windows 输入法。按 Win + 空格切换。"),
+                Some(Ok(message)) => ctx.toast_ok(message),
                 Some(Err(message)) => ctx.toast_err(message),
                 None => {}
             }
