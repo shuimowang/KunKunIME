@@ -30,6 +30,10 @@
 
 个人设置和词库默认存储在 `%APPDATA%\KunKunIME`，缓存和日志在 `%LOCALAPPDATA%\KunKunIME`。发行目录里的两个 TSF DLL 分别服务 64 位和 32 位 Windows 应用。注册后请保持程序目录稳定。需要撤销系统注册时，见[卸载说明](scripts/卸载Windows输入法注册.md)。
 
+## 用 Agent 管理词库和设置
+
+从 v0.1.7 起，Codex 等支持本机 MCP 的客户端可以通过 `KunKunIME.exe mcp` 搜索个人词库、批量加词、按候选精确删除，以及查询和更改常用设置。例如可以让 Agent 给一本小说建分库，或把每页候选数改成 8 个。[接入配置与工具清单](docs/MCP.md)
+
 ## 从源码构建
 
 使用 Windows x64、PowerShell 7、Python 3.11 或更新版本、Rust stable（MSVC 工具链）和 Visual Studio C++ 桌面开发工具（含 CMake、x86 与 x64 工具）。Python 用于随包收集第三方许可。在仓库根目录执行：

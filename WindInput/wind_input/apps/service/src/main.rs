@@ -27,6 +27,7 @@ mod dict_cli;
 mod extensions;
 mod ime_cli;
 mod log_rotate;
+mod mcp;
 mod phrase_cli;
 mod restart_cli;
 mod schema_cli;
@@ -51,6 +52,7 @@ fn print_root_usage() {
          schema    方案配置 / 分类词库开关 / 词库缓存重建（需 core 在线）\n  \
          theme     主题列表 / 主题包 .wtheme 预览、导入与导出（需 core 在线）\n  \
          dict      用户词库按方案导入导出（需 core 在线）\n  \
+         mcp       通过标准输入输出供本机 Agent 管理个人词库和设置\n  \
          phrase    用户短语导入导出 / 系统短语恢复（需 core 在线）\n  \
          backup    整机备份创建/查看/还原（需 core 在线）\n  \
          restart   重启输入法服务（未运行则直接启动）\n  \
@@ -124,6 +126,33 @@ fn main() {
     // 开机首启/CLI 离线启动——service-ready 后据此决定是否弹「服务已重启」提示。
     let restarted = cli_args.iter().any(|a| a == "--restarted");
     let sub = cli_args.get(1).map(String::as_str);
+    // MCP 使用客户端传入的管道。附着控制台会替换这些句柄，破坏协议。
+    if sub == Some("mcp") {
+        if cli_args.len() != 2 {
+            eprintln!("用法: KunKunIME.exe mcp");
+            std::process::exit(2);
+        }
+        let mut ready = false;
+        let result = mcp::run(&mut |method, params| {
+            if !ready {
+                ensure_input_service()?;
+                ready = true;
+            }
+            match cli_util::rpc(method, params) {
+                Ok(value) => Ok(value),
+                Err(cli_util::RpcFailure::Remote(error)) => Err(error),
+                Err(cli_util::RpcFailure::Offline) => {
+                    ready = false;
+                    anyhow::bail!("输入服务连接中断。若刚才是写入操作，请先查询结果再决定是否重试。")
+                }
+            }
+        });
+        if let Err(error) = result {
+            eprintln!("MCP: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     // `system` 单拎出来用 `cfg!` 判断而不是并进 `matches!` 里：宏参数里的模式加不了
     // `#[cfg]`，而下面的 match 又必须把该分支 cfg 掉（模块本身仅 Windows 存在）。
     // 两处判据必须同真同假，否则非 Windows 上 `wind_input system` 会穿到 `unreachable!()`。
@@ -218,7 +247,7 @@ fn main() {
     }
     if sub != Some("--service") && sub != Some("--restarted") {
         if !cli_args.iter().any(|arg| arg == "--screenshot") {
-            if let Err(error) = ensure_service_for_settings() {
+            if let Err(error) = ensure_input_service() {
                 eprintln!("困困输入法后台启动失败：{error}");
             }
         }
@@ -735,9 +764,9 @@ fn spawn_detached_self(restarted: bool) -> std::io::Result<()> {
     cmd.spawn().map(|_| ())
 }
 
-/// 双击或打开词库时先确保后台与同一套个人数据已就绪。
+/// 管理界面与 MCP 都通过已运行的输入服务读写用户数据。
 /// 同时打开的两个窗口可同时发起启动；服务单例负责最终裁决。
-fn ensure_service_for_settings() -> std::io::Result<()> {
+fn ensure_input_service() -> std::io::Result<()> {
     let online = || wind_rpc::client::call("", "system.info", serde_json::json!({})).is_ok();
     if online() {
         return Ok(());

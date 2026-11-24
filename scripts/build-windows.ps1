@@ -63,6 +63,7 @@ if($Offline){$noticeArgs+='--offline'}
 & $python @noticeArgs
 if($LASTEXITCODE -ne 0){throw 'Rust 第三方声明收集失败。'}
 Copy-Item -LiteralPath (Join-Path $project 'docs\使用说明.md') -Destination (Join-Path $outputPath '使用说明.md') -Force
+Copy-Item -LiteralPath (Join-Path $project 'docs\MCP.md') -Destination (Join-Path $outputPath 'MCP.md') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '卸载Windows输入法注册.md') -Destination $outputPath -Force
 Write-Host "困困输入法 $version 已输出至 $outputPath"
 
