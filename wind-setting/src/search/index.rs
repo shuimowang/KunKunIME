@@ -751,16 +751,14 @@ mod tests {
     fn mcp_guide_is_discoverable_by_protocol_client_and_dictionary_terms() {
         use crate::search::matcher::{DEFAULT_LIMIT, search};
         let entries = build_index(&manifest());
-        let mcp = page_tab("mcp");
-        for query in ["MCP", "AI", "Agent", "Codex", "词库管理", "管理词库"] {
+        let expected = JumpTarget::Card {
+            tab: page_tab("mcp"),
+            anchor: "mcp:main".into(),
+        };
+        for query in ["MCP", "AI", "Agent", "Codex", "词库管理", "管理词库", "zsjr"] {
             let results = search(&entries, query, DEFAULT_LIMIT);
             assert!(
-                results.iter().any(|hit| {
-                    entries[hit.index].target == (JumpTarget::Card {
-                        tab: mcp,
-                        anchor: "mcp:main".into(),
-                    })
-                }),
+                results.iter().any(|hit| entries[hit.index].target == expected),
                 "搜索 {query} 应可直接进入 AI 助手接入页",
             );
         }
