@@ -3,7 +3,7 @@
 
 use crate::pages::dict::spec::LogicalTab;
 
-/// 规范页 id，**顺序即侧栏顺序**：方案 / 输入 / 按键 / 主题 / 外观 / 统计 / 词库 / 高级 / 关于，
+/// 规范页 id，**顺序即侧栏顺序**：方案 / 输入 / 按键 / 主题 / 外观 / 统计 / 词库 / 高级 / 关于 / AI 助手，
 /// `pages::all_tabs` 必须逐格对齐。
 ///
 /// 词库页有自己的方案与分类导航；返回设置时恢复上次的设置页。
@@ -17,6 +17,7 @@ const PAGES: &[(&str, &str, u8)] = &[
     ("dict", "词库管理", 2),
     ("advanced", "高级设置", 3),
     ("about", "关于", 3),
+    ("mcp", "AI 助手 MCP", 3),
 ];
 
 /// 主窗导航和搜索面包屑共用显示名。数字分组只控制可见页面间的分隔线。
@@ -268,6 +269,7 @@ mod tests {
         assert_eq!(page_to_index("dict"), Some(6));
         assert_eq!(page_to_index("advanced"), Some(7));
         assert_eq!(page_to_index("about"), Some(8));
+        assert_eq!(page_to_index("mcp"), Some(9));
         assert_eq!(page_to_index("nope"), None);
         assert_eq!(page_to_index("general"), None); // 旧别名不再支持
     }
@@ -276,6 +278,7 @@ mod tests {
     fn parse_target_forms() {
         assert_eq!(parse_target(&a(&["exe", "--page", "input"])), Some(1));
         assert_eq!(parse_target(&a(&["exe", "--page=about"])), Some(8));
+        assert_eq!(parse_target(&a(&["exe", "--page", "mcp"])), Some(9));
         assert_eq!(parse_target(&a(&["exe", "--about"])), Some(8));
         assert_eq!(parse_target(&a(&["exe", "--tab", "5"])), Some(5));
         assert_eq!(parse_target(&a(&["exe", "--tab", "99"])), None);

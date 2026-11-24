@@ -1035,6 +1035,8 @@ fn build_footer(
     };
     let stats_tab = crate::cli::page_to_index("stats");
     let dictionary_visible = app.borrow().dictionary_visible;
+    let mcp_tab = crate::cli::page_to_index("mcp");
+    let show_page_actions = move || !dictionary_visible.get() && Some(tab_sig.get()) != mcp_tab;
     let refresh_btn = Element::button("刷新数据")
         .small()
         .outline_soft()
@@ -1125,8 +1127,8 @@ fn build_footer(
         .child(autosave_note)
         .child(retry_btn)
         .child(refresh_btn)
-        .child(reset_btn.visible_when(move || !dictionary_visible.get()))
-        .child(reload_btn.visible_when(move || !dictionary_visible.get()))
+        .child(reset_btn.visible_when(show_page_actions))
+        .child(reload_btn.visible_when(show_page_actions))
         .child(
             Element::button("关闭")
                 .small()

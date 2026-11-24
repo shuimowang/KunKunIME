@@ -448,8 +448,9 @@ const HANDWRITTEN: &[Handwritten] = &[
     // 两条都落在「内存占用」那一行（「诊断信息…」按钮所在行）；锚点即 `pages::memory::ANCHOR`。
     Handwritten { id: "advanced:memory", anchor: "advanced:memory", page: "advanced", title: "内存占用", section: "性能与诊断", keywords: "内存 诊断 复制 反馈 占用 方案 memory", feature: "memory" },
     Handwritten { id: "advanced:diagnostics", anchor: "advanced:memory", page: "advanced", title: "诊断信息", section: "性能与诊断", keywords: "内存 复制 反馈 自动刷新 排查 diagnostics", feature: "memory" },
-    // ── 关于（内容不多，三条共用整页锚点）──
+    // ── 关于 / AI 助手 ──
     Handwritten { id: "about:version", anchor: "about:main", page: "about", title: "版本信息", section: "关于", keywords: "版本号 内部版本 构建", feature: "" },
+    Handwritten { id: "mcp:main", anchor: "mcp:main", page: "mcp", title: "AI 助手接入（MCP）", section: "接入指南", keywords: "Codex Agent 智能体 客户端 配置 命令 stdio 词库管理 管理词库 更改设置", feature: "" },
 ];
 
 /// 手写页面名（面包屑首段）。
@@ -736,12 +737,31 @@ mod tests {
         let m = manifest();
         let idx = build_index(&m);
         for page in [
-            "schema", "input", "keys", "theme", "ui", "dict", "stats", "advanced", "about",
+            "schema", "input", "keys", "theme", "ui", "dict", "stats", "advanced", "about", "mcp",
         ] {
             let tab = crate::cli::page_to_index(page).expect("页 id 应在 PAGES 里");
             assert!(
                 idx.iter().any(|e| e.target.tab() == tab),
                 "「{page}」页没有任何可搜索条目"
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_guide_is_discoverable_by_protocol_client_and_dictionary_terms() {
+        use crate::search::matcher::{DEFAULT_LIMIT, search};
+        let entries = build_index(&manifest());
+        let mcp = page_tab("mcp");
+        for query in ["MCP", "AI", "Agent", "Codex", "词库管理", "管理词库"] {
+            let results = search(&entries, query, DEFAULT_LIMIT);
+            assert!(
+                results.iter().any(|hit| {
+                    entries[hit.index].target == (JumpTarget::Card {
+                        tab: mcp,
+                        anchor: "mcp:main".into(),
+                    })
+                }),
+                "搜索 {query} 应可直接进入 AI 助手接入页",
             );
         }
     }

@@ -73,3 +73,5 @@ jobs:
           cargo test --locked --manifest-path wind-setting/Cargo.toml --lib unified_window -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked --manifest-path wind-setting/Cargo.toml --lib completion_rules_ -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --manifest-path wind-setting/Cargo.toml --lib mcp_guide_ -- --test-threads=1

@@ -27,6 +27,7 @@ const PALETTE: &str = include_str!("../res/icons/ui/palette.svg");
 const LAYERS: &str = include_str!("../res/icons/ui/layers.svg");
 const SLIDERS: &str = include_str!("../res/icons/ui/sliders.svg");
 const APPS: &str = include_str!("../res/icons/ui/apps.svg");
+const PLUG: &str = include_str!("../res/icons/ui/plug.svg");
 /// 信息角标。侧栏「关于」按 [`ICON_PX`] 整尺寸渲染，遵守上面的 2px 网格约定。
 pub const INFO: &str = include_str!("../res/icons/ui/info.svg");
 /// [`INFO`] 的细描边版（1.4px），**专供缩小渲染的角标**
@@ -61,6 +62,7 @@ pub fn nav_icon(tab: &str) -> &'static str {
         "词库" => LAYERS,
         "高级" => SLIDERS,
         "关于" => INFO,
+        "AI 助手" => PLUG,
         _ => SLIDERS,
     }
 }

@@ -15,6 +15,7 @@ pub mod config_import;
 pub mod dict;
 pub mod extensions;
 pub mod integration;
+pub(crate) mod mcp;
 pub mod memory;
 pub mod phrase_import;
 pub mod stats;
@@ -63,7 +64,12 @@ pub fn all_tabs(app: &Rc<RefCell<AppState>>, state: &AppState) -> Vec<TabDef> {
         // 词库页由主内容区按需挂载，这里保留导航条目和稳定的深链下标。
         tab_def("词库", Element::leaf(), dict),
         tab_def("高级", advanced_page(app, state, &advanced), advanced),
-        tab_def("关于", about_page(app, state), about),
+        tab_def("关于", about_page(state), about),
+        tab_def(
+            "AI 助手",
+            crate::search::anchor::wrap(mcp::build(), "mcp:main", state.jump).fill(),
+            tab("mcp"),
+        ),
     ]
 }
 
@@ -1223,7 +1229,7 @@ pub(crate) fn custom_edition_badge(system_info: &serde_json::Value) -> Option<St
 }
 
 /// 关于页 — 复刻品牌关于卡（对齐截图 / Vue AboutPage）：
-fn about_page(_app: &Rc<RefCell<AppState>>, state: &AppState) -> Element {
+fn about_page(state: &AppState) -> Element {
     let header = Element::row()
         .width_match()
         .cross(Align::Center)
@@ -1245,7 +1251,27 @@ fn about_page(_app: &Rc<RefCell<AppState>>, state: &AppState) -> Element {
         .child(Element::label("基于 WindInput、wind-setting 和 WindUI 开源项目开发。").fg_role(Role::Text))
         .child(Element::label("软件采用 GPL-3.0-or-later 许可。词库和第三方组件许可随程序提供。").fg_role(Role::TextMuted))
         .child(Element::row().child(source));
-    crate::widgets::page(crate::search::anchor::wrap(panel, "about:main", state.jump))
+    let tab = state.tab;
+    let mcp_tab = crate::cli::page_to_index("mcp").expect("MCP page is registered");
+    let connect = Element::button("查看 MCP 接入指南")
+        .small()
+        .outline_soft()
+        .on_click(move |_| tab.set(mcp_tab));
+    let guide = section(
+        "AI 助手接入",
+        vec![setting_row(
+            "本机 MCP 服务",
+            Some("让 Codex 等 AI 助手管理个人词库、查询和更改设置。"),
+            connect,
+        )],
+    );
+    crate::widgets::page(
+        Element::col()
+            .width_match()
+            .spacing(18)
+            .child(crate::search::anchor::wrap(panel, "about:main", state.jump))
+            .child(guide),
+    )
 }
 
 /// 手写卡的二级导航条目：卡片被用户藏掉时，导航里那一条跟着消失（否则点它只会滚到一片空白）。
@@ -1264,6 +1290,35 @@ fn nav_feature(
 mod about_tests {
     use super::custom_edition_badge;
     use serde_json::json;
+
+    #[test]
+    fn mcp_guide_about_entry_navigates_in_place() {
+        use crate::state::AppState;
+        use windui::core::Tree;
+        use windui::event::{MouseButton, PointerEvent, PointerKind};
+        use windui::geometry::{Point, Size};
+
+        let state = AppState::empty();
+        state.tab.set(crate::cli::page_to_index("about").unwrap());
+        let mut tree = Tree::new();
+        let root = super::about_page(&state).width(760).height(490).build(&mut tree);
+        tree.root = Some(root);
+        tree.layout_root(Size::new(760, 490), &mut windui::text::NullTextEngine);
+        // The guide button follows the project link in keyboard navigation order.
+        let button = *tree.focusable_order().last().expect("about actions");
+        let bounds = tree.abs_bounds(button);
+        let point = Point::new(bounds.x + bounds.w / 2, bounds.y + bounds.h / 2);
+        let (mut hover, mut capture) = (None, None);
+        for kind in [PointerKind::Down, PointerKind::Up] {
+            let result = tree.dispatch_pointer(
+                PointerEvent::single(kind, point, MouseButton::Left),
+                &mut hover,
+                &mut capture,
+            );
+            assert!(result.open_windows.is_empty());
+        }
+        assert_eq!(Some(state.tab.get()), crate::cli::page_to_index("mcp"));
+    }
 
     /// 「不是定制版」的两种形态都不出徽章：core 明确回答的 `null`，与老版本 core
     /// 根本没有这个字段。跨仓契约里这两者对 UI 的结论一致。
