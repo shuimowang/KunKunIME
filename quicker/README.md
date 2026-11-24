@@ -8,19 +8,21 @@
 
 [查看 GitHub 源码](https://github.com/shuimowang/KunKunIME) · [从源码构建](https://github.com/shuimowang/KunKunIME#%E4%BB%8E%E6%BA%90%E7%A0%81%E6%9E%84%E5%BB%BA) · [组件与词库的来源和许可](https://github.com/shuimowang/KunKunIME/blob/main/ORIGINS.md)
 
-[在 Quicker 安装动作](https://getquicker.net/Sharedaction?code=97a34a52-d2fd-4505-ab9b-0961e7718c53) · [手动下载动作 JSON](https://111.229.149.25/public/share/5KrzfvBkWjZPTnTEFXtodg) · [下载 Windows x64 程序包](https://111.229.149.25/public/share/82K7DlFUYVQveuGn3TZsQQ)
+[在 Quicker 安装动作](https://getquicker.net/Sharedaction?code=97a34a52-d2fd-4505-ab9b-0961e7718c53) · [手动下载动作 JSON](https://111.229.149.25/public/share/5KrzfvBkWjZPTnTEFXtodg) · [下载 Windows x64 程序包](https://111.229.149.25/public/share/aX2Qg1tRyKCB2-dsmLii_A)
 
 ## 用 AI 助手管理词库
 
-在困困输入法 v0.1.8 的设置左栏打开 **AI 助手 MCP**，可以复制 Codex 接入命令或其他客户端需要的 JSON。“关于”页和设置搜索也有入口。连好后可以先问“用困困输入法查看每页有几个候选词”，再按需管理词库和设置。[可用工具与示例](../docs/MCP.md)
+在困困输入法的设置左栏打开 **AI 助手 MCP**，可以复制 Codex 接入命令或其他客户端需要的 JSON。“关于”页和设置搜索也有入口。连好后可以先问“用困困输入法查看每页有几个候选词”，再按需管理词库和设置。[可用工具与示例](../docs/MCP.md)
 
 ## 第一次使用
 
 在 Windows x64 上使用 Quicker 2.3.19 或更新版本。点击上方「在 Quicker 安装动作」。如果手动下载了动作 JSON，在 Quicker 面板右键目标场景标签，选「导入动作到此场景」，再选中该文件。
 
-点面板里的「困困输入法」。电脑上已经注册困困输入法时，动作会直接打开主词库。首次使用可点**「下载并打开」**，也可点**「选择已有程序」**并选中解压目录里的 `KunKunIME.exe`。
+点面板里的「困困输入法」。电脑上已经注册困困输入法时，动作会直接打开主词库。首次使用可点 **「下载并打开」** 获取 v0.1.9，也可点**「选择已有程序」**并选中解压目录里的 `KunKunIME.exe`。
 
 要在记事本、聊天框等应用里输入自己的词，先在软件中点「注册输入法」，按 Windows 提示确认，再按 **Win + 空格** 选择「困困输入法」。
+
+希望登录 Windows 后优先使用困困时，打开 **输入规则 → 默认状态**，点击 **设为默认输入法**。
 
 ## 把小说里的地名加入词库
 
