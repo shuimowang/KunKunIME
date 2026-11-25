@@ -94,8 +94,8 @@ pub const DEFAULT_EMOJI_FAMILY: &str = "Segoe UI Emoji";
 /// 本帧上屏要做什么：返回 `(推像素, 摆位)`。`prev` 为窗口当前在屏上的几何，None = 不在屏上。
 ///
 /// 光标在组合内右移会触发协调器 reshow，同一键常连发 2–3 帧内容与位置都不变的刷新；远程桌面下
-/// 每次 `UpdateLayeredWindow` 都要把整窗位图传给客户端，故像素没变就不推。摆位会
-/// `SetWindowPos(HWND_TOPMOST)` 重新置顶，几何没变也省掉（同 `popup_menu::plan_render`）。
+/// 每次 `UpdateLayeredWindow` 都要把整窗位图传给客户端，故像素没变就不推，几何没变也不重摆。
+/// z 序不能用几何缓存判断：普通刷新仍需恢复置顶，动画和打开菜单时则保留原层级。
 #[cfg_attr(not(windows), allow(dead_code))]
 fn plan_present(
     prev: Option<(i32, i32, u32, u32)>,
@@ -1365,13 +1365,29 @@ impl CandidateWindow {
                 let t_blit = t_blit0.elapsed();
                 // render_frame() 已设 visible=true；screen_x/y 为窗口左上（含阴影偏移）。
                 let t_pos0 = Instant::now();
+                let keep_z_order = self.anim_repaint || crate::popup_menu::menu_visible();
                 if reposition {
-                    self.window.show(frame.screen_x, frame.screen_y);
+                    let z = if keep_z_order {
+                        crate::window::ShowZOrder::Keep
+                    } else {
+                        crate::window::ShowZOrder::Topmost
+                    };
+                    self.window.show_z(frame.screen_x, frame.screen_y, z);
+                } else if !keep_z_order {
+                    // 置顶宿主可能在几何/像素均未变化时升到候选窗上方。
+                    // 仅恢复层级，焦点继续留在输入应用，也不重传位图。
+                    self.window.raise_topmost();
                 }
-                self.present_pass_layer(frame.screen_x, frame.screen_y, frame.width, frame.height);
+                self.present_pass_layer(
+                    frame.screen_x,
+                    frame.screen_y,
+                    frame.width,
+                    frame.height,
+                    keep_z_order,
+                );
                 let t_pos = t_pos0.elapsed();
                 self.presented = ok.then_some(want);
-                if self.anim_repaint {
+                if keep_z_order {
                     return;
                 }
                 self.update_tooltip(frame.screen_x, frame.screen_y);
@@ -2432,9 +2448,10 @@ impl CandidateWindow {
     /// 把本帧拆出的穿透装饰推到穿透窗口：与主窗口同位置同尺寸；装饰全在窗体下时插到主窗口
     /// 下面，否则置于其上。本帧没有穿透装饰则收起。
     #[cfg(windows)]
-    fn present_pass_layer(&mut self, x: i32, y: i32, w: u32, h: u32) {
+    fn present_pass_layer(&mut self, x: i32, y: i32, w: u32, h: u32, keep_z_order: bool) {
         use windows::Win32::UI::WindowsAndMessaging::{
-            HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetWindowPos,
+            GW_HWNDPREV, GetWindow, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOZORDER,
+            SWP_SHOWWINDOW, SetWindowPos,
         };
         let Some((pixels, below)) = self.pass_layer.take() else {
             self.hide_pass_window();
@@ -2477,11 +2494,10 @@ impl CandidateWindow {
             }
         }
         let want = (x, y, w, h);
-        // 换帧重绘不动 z 序（否则每帧置顶会压住气泡 / 菜单）；位置尺寸没变就不调。
-        match (self.anim_repaint, self.pass_presented) {
+        // 动画及菜单打开期间与主层一起保留 z 序，避免装饰盖住气泡 / 菜单。
+        match (keep_z_order, self.pass_presented) {
             (true, Some(cur)) if cur == want => {}
             (true, Some(_)) => unsafe {
-                use windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER;
                 let _ = SetWindowPos(
                     pw.hwnd(),
                     HWND_TOPMOST,
@@ -2493,7 +2509,22 @@ impl CandidateWindow {
                 );
             },
             _ => unsafe {
-                let insert_after = if below { main } else { HWND_TOPMOST };
+                let mut flags = SWP_NOACTIVATE | SWP_SHOWWINDOW;
+                let insert_after = if below {
+                    main
+                } else if keep_z_order {
+                    // 新出现的装饰也贴在主层旁边，不能跳过已经在上的菜单 / 气泡。
+                    match GetWindow(main, GW_HWNDPREV) {
+                        Ok(prev) if prev == pw.hwnd() => {
+                            flags |= SWP_NOZORDER;
+                            HWND_TOP
+                        }
+                        Ok(prev) => prev,
+                        Err(_) => HWND_TOP,
+                    }
+                } else {
+                    HWND_TOPMOST
+                };
                 let _ = SetWindowPos(
                     pw.hwnd(),
                     insert_after,
@@ -2501,7 +2532,7 @@ impl CandidateWindow {
                     y,
                     w as i32,
                     h as i32,
-                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                    flags,
                 );
             },
         }
@@ -5945,6 +5976,9 @@ mod font_plan_build_tests {
         );
     }
 }
+
+#[cfg(all(test, windows))]
+mod topmost_tests;
 
 #[cfg(test)]
 mod tests {

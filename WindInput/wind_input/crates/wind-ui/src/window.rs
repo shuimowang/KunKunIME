@@ -406,6 +406,24 @@ mod platform {
             self.show_z(x, y, super::ShowZOrder::Topmost)
         }
 
+        /// 恢复置顶组内的前后关系，不移动、缩放或激活窗口。
+        /// 几何未变不代表 z 序未变：其他置顶窗口可以在两次候选刷新之间升到前面。
+        pub fn raise_topmost(&self) {
+            unsafe {
+                if let Err(e) = SetWindowPos(
+                    self.hwnd,
+                    HWND_TOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                ) {
+                    tracing::warn!("{}: restoring topmost z-order failed: {}", self.class_name, e);
+                }
+            }
+        }
+
         /// 带 z 序意图的显示。语义见 [`super::ShowZOrder`]。
         pub fn show_z(&self, x: i32, y: i32, z: super::ShowZOrder) {
             use super::ShowZOrder;
