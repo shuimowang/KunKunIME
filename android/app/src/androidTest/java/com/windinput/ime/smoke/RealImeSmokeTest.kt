@@ -127,6 +127,7 @@ class RealImeSmokeTest {
                 description.startsWith("你好，编码 ")
         }
         recordInputState("AFTER STARTUP HANDOFF")
+        assertKeysAvoidSystemNavigation("pinyin", keyboardAnchor = "中英切换")
         capture("pinyin-candidates.png")
         tap(hello)
         awaitText("abc你好")
@@ -162,6 +163,7 @@ class RealImeSmokeTest {
         clearEditor()
         typeKeys("123")
         awaitText("123")
+        assertKeysAvoidSystemNavigation("numbers", keyboardAnchor = "0")
         capture("number-pad.png")
         assertEquals("KunKunIME remains the active IME", imeId,
             deviceShell("settings get secure default_input_method").trim())
@@ -307,6 +309,69 @@ class RealImeSmokeTest {
         } finally {
             screenshot.recycle()
         }
+    }
+
+    private data class HitRegion(val label: String, val bounds: Rect)
+
+    /** Check live touch regions only at screenshot checkpoints, never between typed keys. */
+    private fun assertKeysAvoidSystemNavigation(layout: String, keyboardAnchor: String) {
+        instrumentation.waitForIdleSync()
+        // Virtual keyboard buttons share this host; candidate buttons belong
+        // to a different host and must not be mistaken for keyboard keys.
+        val keyboard = requireNotNull(awaitKey(keyboardAnchor).parent) { "Keyboard host unavailable" }
+        val keys = collectHitRegions(keyboard) {
+            it.packageName?.toString() == appId && it.className?.toString() == "android.widget.Button"
+        }
+        assertTrue("$layout keyboard exposes its key touch regions", keys.isNotEmpty())
+
+        // These are the actual framework navigation controls observed on the
+        // dedicated English-language emulator. Their window can span the IME,
+        // so compare the controls themselves, not an enclosing window's top.
+        val navigationLabels = setOf("Back", "Switch input method")
+        val navigation = imeWindows().flatMap { window ->
+            collectHitRegions(window.root) {
+                it.className?.toString() == "android.widget.ImageView" &&
+                    it.contentDescription?.toString().orEmpty() in navigationLabels
+            }
+        }
+        assertEquals("Both system navigation touch regions must be visible for $layout",
+            navigationLabels, navigation.map { it.label }.toSet())
+
+        val lastRowBottom = keys.maxOf { it.bounds.bottom }
+        val lastRow = keys.filter { it.bounds.bottom == lastRowBottom }
+        fun regionsText(regions: List<HitRegion>) = regions.joinToString(" | ") {
+            "<${it.label}> ${it.bounds.toShortString()}"
+        }
+        pendingTrace.append("${SystemClock.uptimeMillis()} GEOMETRY <$layout>: ")
+            .append("checkedKeys=${keys.size}; lastRow=[${regionsText(lastRow)}]; ")
+            .append("systemNavigation=[${regionsText(navigation)}]\n")
+        flushTrace()
+        for (key in keys) {
+            for (systemControl in navigation) {
+                assertTrue("$layout key <${key.label}> ${key.bounds.toShortString()} overlaps " +
+                    "system <${systemControl.label}> ${systemControl.bounds.toShortString()}",
+                    !Rect.intersects(key.bounds, systemControl.bounds))
+            }
+        }
+    }
+
+    private fun collectHitRegions(
+        root: AccessibilityNodeInfo?,
+        matches: (AccessibilityNodeInfo) -> Boolean,
+    ): List<HitRegion> {
+        val regions = mutableListOf<HitRegion>()
+        fun collect(node: AccessibilityNodeInfo?, depth: Int) {
+            if (node == null || depth > 40) return
+            if (node.isVisibleToUser && matches(node)) {
+                val bounds = Rect().also(node::getBoundsInScreen)
+                assertTrue("Visible touch region has nonempty bounds", !bounds.isEmpty)
+                val label = node.contentDescription?.toString() ?: node.text?.toString().orEmpty()
+                regions += HitRegion(label, bounds)
+            }
+            for (index in 0 until node.childCount) collect(node.getChild(index), depth + 1)
+        }
+        collect(root, 0)
+        return regions
     }
 
     private fun captureFailure(failure: Throwable) {

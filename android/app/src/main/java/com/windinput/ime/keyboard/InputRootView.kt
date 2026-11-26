@@ -97,10 +97,11 @@ class InputRootView(context: Context) : LinearLayout(context) {
     override fun onApplyWindowInsets(insets: WindowInsets): WindowInsets {
         val bottom = if (Build.VERSION.SDK_INT >= 30) {
             val nav = insets.getInsets(WindowInsets.Type.navigationBars()).bottom
+            val caption = insets.getInsets(WindowInsets.Type.captionBar()).bottom
             val gesture = insets.getInsets(WindowInsets.Type.systemGestures()).bottom
             val density = resources.displayMetrics.density
-            chooseBottomAvoidance(nav, gesture, density).also {
-                UiTrace.add(UiTrace.INSETS, "避让取值 " + describeAvoidance(nav, gesture, density, it))
+            chooseBottomAvoidance(nav, gesture, density, caption).also {
+                UiTrace.add(UiTrace.INSETS, "避让取值 " + describeAvoidance(nav, gesture, density, it, caption))
             }
         } else {
             @Suppress("DEPRECATION")
@@ -136,6 +137,7 @@ class InputRootView(context: Context) : LinearLayout(context) {
                     it.getInsets(WindowInsets.Type.navigationBars()).bottom,
                     it.getInsets(WindowInsets.Type.systemGestures()).bottom,
                     resources.displayMetrics.density,
+                    it.getInsets(WindowInsets.Type.captionBar()).bottom,
                 )
             } ?: 0
         } else {
@@ -173,18 +175,24 @@ class InputRootView(context: Context) : LinearLayout(context) {
          * （40dp@560dpi），垫下去就是「键盘下方空白」的用户反馈；小米报 56px（约 13dp），
          * 空白不明显所以之前没暴露。手势条本身浮在键盘上，远低于识别区高度，
          * 垫到手势条典型高度 16dp 为止。（tappableElement 荣耀报 0，不作依据。）
+         *
+         * IME 的系统返回/输入法切换按钮另以 captionBar 发布，可能高于 navigationBars。
+         * 这是真实按钮区域，不能按手势条钳制。
+         * 两种区域都从底边起算，取较大值，不累加；getInsets 只取当前可见区域。
          */
-        internal fun chooseBottomAvoidance(nav: Int, gesture: Int, density: Float): Int =
-            if (nav > 0) nav else minOf(gesture, (GESTURE_BAR_CAP_DP * density).toInt())
+        internal fun chooseBottomAvoidance(nav: Int, gesture: Int, density: Float, caption: Int = 0): Int =
+            maxOf(caption, if (nav > 0) nav else minOf(gesture, (GESTURE_BAR_CAP_DP * density).toInt()))
 
         /**
          * 一次避让取值是怎么算出来的（纯函数，单测见 InputRootViewDiagnosticsTest）：走了 nav 分支
          * 还是手势分支、16dp 钳制有没有生效。用户导出诊断包时，据此就能看出荣耀那类机型的空白是
          * 钳制之后仍留下的，还是系统给的窗口本身更高。
          */
-        internal fun describeAvoidance(nav: Int, gesture: Int, density: Float, result: Int): String {
+        internal fun describeAvoidance(nav: Int, gesture: Int, density: Float, result: Int, caption: Int = 0): String {
             val cap = (GESTURE_BAR_CAP_DP * density).toInt()
-            return if (nav > 0) {
+            return if (caption > 0) {
+                "nav=$nav caption=$caption gesture=$gesture → 分支=IME导航区(与原避让取较大值) 结果=$result"
+            } else if (nav > 0) {
                 "nav=$nav gesture=$gesture → 分支=导航栏(取nav) 结果=$result"
             } else {
                 "nav=0 gesture=$gesture cap=${cap}px(${GESTURE_BAR_CAP_DP}dp) → 分支=纯手势 " +
@@ -224,6 +232,7 @@ class InputRootView(context: Context) : LinearLayout(context) {
                         insets.getInsets(WindowInsets.Type.navigationBars()).bottom,
                         insets.getInsets(WindowInsets.Type.systemGestures()).bottom,
                         context.resources.displayMetrics.density,
+                        insets.getInsets(WindowInsets.Type.captionBar()).bottom,
                     )
                 }.getOrDefault(0)
             }

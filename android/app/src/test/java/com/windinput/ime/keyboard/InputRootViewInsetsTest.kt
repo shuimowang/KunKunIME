@@ -24,6 +24,19 @@ class InputRootViewInsetsTest {
     }
 
     @Test
+    fun `IME系统按钮完整区域优先于更矮的手势导航条`() {
+        // API 36 Pixel 6：Back/切换按钮区域为 126px，普通导航栏仅 63px。
+        // 必须完整避让按钮区域，既不能钳到 16dp，也不能把两个重叠区域相加。
+        assertEquals(126, InputRootView.chooseBottomAvoidance(nav = 63, gesture = 63, density = 2.625f, caption = 126))
+    }
+
+    @Test
+    fun `IME系统按钮隐藏时仍按原纯手势规则避让`() {
+        // caption 由 getInsets 读取，隐藏后为 0；不能保留系统按钮高度或垫满手势识别区。
+        assertEquals(56, InputRootView.chooseBottomAvoidance(nav = 0, gesture = 140, density = 3.5f, caption = 0))
+    }
+
+    @Test
     fun `手势导航垫到手势条上限为止`() {
         // 荣耀 MagicOS：gesture 报 140px（40dp），只垫 16dp 上限
         assertEquals(px(16, 3.5f), InputRootView.chooseBottomAvoidance(nav = 0, gesture = 140, density = 3.5f))
