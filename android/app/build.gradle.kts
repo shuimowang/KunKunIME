@@ -197,4 +197,7 @@ dependencies {
     testImplementation(libs.org.json)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
+    // AndroidX Test's Checks/Tracer reference these class-retained annotations.
+    // Supply them to the test APK's R8 input instead of suppressing missing classes.
+    androidTestImplementation(libs.error.prone.annotations)
 }

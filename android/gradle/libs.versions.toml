@@ -14,6 +14,7 @@ orgJson = "20240303"
 customview = "1.1.0"
 androidxTestRunner = "1.6.2"
 androidxTestJunit = "1.2.1"
+errorProneAnnotations = "2.46.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -35,6 +36,7 @@ org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 androidx-customview = { group = "androidx.customview", name = "customview", version.ref = "customview" }
 androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestJunit" }
+error-prone-annotations = { group = "com.google.errorprone", name = "error_prone_annotations", version.ref = "errorProneAnnotations" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
