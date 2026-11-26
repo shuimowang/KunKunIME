@@ -100,9 +100,9 @@ class VoiceSetupActivity : ComponentActivity() {
                     if (!available.onDevice && !available.system) {
                         Text("这台手机没有提供可用的系统语音识别服务。请先在系统设置中安装或启用语音识别服务，再返回这里；仅安装另一个输入法不一定会提供该服务。", fontSize = 15.sp)
                     }
-                    if (VoicePreferences.configured(this)) {
+                    if (VoicePreferences.configured(this@VoiceSetupActivity)) {
                         Text(
-                            "当前选择：" + if (VoicePreferences.allowSystemFallback(this)) "设备端优先，允许系统语音服务" else "仅设备端识别",
+                            "当前选择：" + if (VoicePreferences.allowSystemFallback(this@VoiceSetupActivity)) "设备端优先，允许系统语音服务" else "仅设备端识别",
                             fontSize = 14.sp,
                         )
                     }
