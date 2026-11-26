@@ -16,6 +16,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.windinput.ime.core.RustCoreLoader
 import com.windinput.ime.settings.TestPadActivity
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -38,6 +40,19 @@ class RealImeSmokeTest {
 
     @Test(timeout = 180_000)
     fun installedImeTypesPinyinEnglishPasswordAndNumbers() {
+        try {
+            File(requireNotNull(context.getExternalFilesDir("smoke")), "press-trace.txt")
+                .writeText("Smoke started at uptime ${SystemClock.uptimeMillis()}\n")
+            exerciseInstalledIme()
+        } catch (failure: Throwable) {
+            // AndroidJUnitRunner closes the activity after the test returns.
+            // Capture the failing IME now, before shell cleanup sees Launcher.
+            captureFailure(failure)
+            throw failure
+        }
+    }
+
+    private fun exerciseInstalledIme() {
         assertEquals("Smoke test must target KunKunIME", appId, context.packageName)
         assertTrue("The packaged Rust engine must load", RustCoreLoader.available)
         automation.serviceInfo = automation.serviceInfo.apply {
@@ -139,9 +154,12 @@ class RealImeSmokeTest {
     private fun typeKeys(text: String) = text.forEach { tapImeKey(it.toString()) }
 
     private fun tapImeKey(label: String) {
-        tap(awaitKey(label))
+        val key = awaitKey(label)
+        traceKey("PRESS <$label>: ${describeNode(key)}; parent=${key.parent?.let(::describeNode)}")
+        tap(key)
         instrumentation.waitForIdleSync()
         SystemClock.sleep(80)
+        traceKey("AFTER <$label>: ${inputStateSummary()}")
     }
 
     private fun awaitKey(label: String) = awaitImeNode("IME key $label") {
@@ -236,6 +254,89 @@ class RealImeSmokeTest {
         } finally {
             screenshot.recycle()
         }
+    }
+
+    private fun captureFailure(failure: Throwable) {
+        runCatching { capture("failure.png") }
+            .onFailure { Log.e(TAG, "Could not capture failure screenshot", it) }
+        runCatching {
+            val windows = JSONArray()
+            for (window in automation.windows) {
+                val bounds = Rect().also(window::getBoundsInScreen)
+                windows.put(JSONObject().apply {
+                    put("id", window.id)
+                    put("type", window.type)
+                    put("title", window.title?.toString().orEmpty())
+                    put("bounds", bounds.toShortString())
+                    put("root", window.root?.let { nodeJson(it, 0) } ?: JSONObject.NULL)
+                })
+            }
+            val snapshot = JSONObject().apply {
+                put("failure", failure.toString())
+                put("uptimeMs", SystemClock.uptimeMillis())
+                put("expectedIme", imeId)
+                put("inputState", inputStateSummary())
+                put("windows", windows)
+            }
+            File(requireNotNull(context.getExternalFilesDir("smoke")), "failure-ui.json")
+                .writeText(snapshot.toString(2))
+        }.onFailure { Log.e(TAG, "Could not capture failure accessibility tree", it) }
+        runCatching {
+            File(requireNotNull(context.getExternalFilesDir("smoke")), "failure-input-method.txt")
+                .writeText(deviceShell("dumpsys input_method"))
+        }.onFailure { Log.e(TAG, "Could not capture failure input connection", it) }
+    }
+
+    private fun nodeJson(node: AccessibilityNodeInfo, depth: Int): JSONObject = JSONObject().apply {
+        val bounds = Rect().also(node::getBoundsInScreen)
+        put("class", node.className?.toString().orEmpty())
+        put("package", node.packageName?.toString().orEmpty())
+        put("resourceId", node.viewIdResourceName.orEmpty())
+        put("text", node.text?.toString().orEmpty())
+        put("description", node.contentDescription?.toString().orEmpty())
+        put("bounds", bounds.toShortString())
+        put("visible", node.isVisibleToUser)
+        put("focused", node.isFocused)
+        put("editable", node.isEditable)
+        put("clickable", node.isClickable)
+        put("childCount", node.childCount)
+        if (depth < 40) {
+            val children = JSONArray()
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let { children.put(nodeJson(it, depth + 1)) }
+            }
+            put("children", children)
+        }
+    }
+
+    private fun describeNode(node: AccessibilityNodeInfo): String {
+        val bounds = Rect().also(node::getBoundsInScreen)
+        return "class=${node.className} text=<${node.text}> desc=<${node.contentDescription}> " +
+            "bounds=${bounds.toShortString()} visible=${node.isVisibleToUser}"
+    }
+
+    private fun traceKey(message: String) {
+        Log.i(TAG, message)
+        // The complete node list can exceed logcat's per-message length limit.
+        File(requireNotNull(context.getExternalFilesDir("smoke")), "press-trace.txt")
+            .appendText("${SystemClock.uptimeMillis()} $message\n")
+    }
+
+    private fun inputStateSummary(): String {
+        val editor = findAppNode {
+            it.contentDescription?.toString() == TestPadActivity.TEST_PAD_DESC &&
+                it.className?.toString() == "android.widget.EditText"
+        }
+        val nodes = mutableListOf<String>()
+        fun collect(node: AccessibilityNodeInfo?, depth: Int) {
+            if (node == null || depth > 40 || nodes.size >= 100) return
+            if (!node.text.isNullOrEmpty() || !node.contentDescription.isNullOrEmpty()) {
+                nodes += describeNode(node)
+            }
+            for (index in 0 until node.childCount) collect(node.getChild(index), depth + 1)
+        }
+        imeWindows().forEach { collect(it.root, 0) }
+        return "editor=${editor?.let(::describeNode)}; ime=[${nodes.joinToString(" | ")}]"
     }
 
     private fun eventually(description: String, timeoutMs: Long = 12_000, check: () -> Boolean) {
