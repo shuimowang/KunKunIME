@@ -21,16 +21,17 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * # 未就绪期间的行为
  *
- * `keyPressed` 返回 `false`，宿主执行默认行为——字母直接上屏。这比「吞掉按键」或
- * 「卡住等待」都好：用户至多是头一两秒打出的字没经过中文引擎，而不是键盘假死。
- * 就绪后自动切换到真会话，无需重启输入法。
+ * 按键有界暂存，就绪后在主线程逐键重放，避免一串拼音的前半段直接上屏、后半段才进引擎。
+ * 换输入框、失焦或取消组合会作废暂存；密码和数字框由宿主直输，根本不进入此队列。
+ * 队列满时明确提示等待，不把新键绕过旧键写进正文。初始化失败则明确报错并按原顺序直输。
  *
  * # 切方案同样异步
  *
  * 第一次切到某个方案时核心要现编它的词库：白霜拼音约 60 万条，模拟器上主线程卡 4.75 秒
  * （283 帧），真机再慢一点就是 ANR。所以可能现编词库的命令（切方案、切英文、重载配置、
- * 换双拼布局）一律丢到 [worker] 上跑；跑的期间与核心未就绪同样处理——按键交还宿主、
- * 候选给空、提示「词库准备中」。其余不取返回值的调用（焦点、复位、无痕…）在忙时也排进
+ * 换双拼布局）一律丢到 [worker] 上跑；跑的期间按键同样暂存、候选给空、提示「词库准备中」。
+ * 暂存按键之间的方案命令也保序，不能把切换前的字母用切换后的方案解释。
+ * 其余不取返回值的调用（焦点、复位、无痕…）在忙时也排进
  * 同一条线程：顺序不乱，主线程也不会去抢那把被现编词库占着的锁。
  */
 class DeferredSession(
@@ -51,10 +52,15 @@ class DeferredSession(
     private val onBusyChanged: (Boolean) -> Unit = {},
     /** 初始化失败（主线程）；宿主展示明确错误，不能回退演示候选。 */
     private val onFailure: (String) -> Unit = {},
+    /** 暂存键重放后核心仍不消费，交回宿主的普通按键默认行为（主线程）。 */
+    private val onUnhandledKey: (KeyAction, Boolean, KeySource) -> Unit,
+    /** 暂存按键数变化（主线程），供准备提示显示已收下的输入。 */
+    private val onBufferedInputChanged: (Int) -> Unit = {},
 ) : ImeSession {
 
     private companion object {
         const val TAG = "DeferredSession"
+        const val REPLAY_INTERVAL_MS = 16L
     }
 
     override var listener: ((UiEvent) -> Unit)? = null
@@ -68,11 +74,19 @@ class DeferredSession(
 
     private val started = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var closed = false
+    private val inputBuffer = DeferredInputBuffer()
+    private var replayPosted = false
+    private var deliveringBufferedInput = false
+    private var overflowReported = false
+    private val replayInput = Runnable { replayOneInput() }
+
+    val bufferedInputCount: Int get() = inputBuffer.keyCount
 
     /** 是否已就绪（UI 据此显示准备中提示） */
     val ready: Boolean get() = delegate != null
 
-    /** null 表示尚未失败；失败后保持直输，候选栏显示这条错误。 */
+    /** null 表示尚未失败；失败后原顺序直输，候选栏显示这条错误。 */
     @Volatile
     var failureMessage: String? = null
         private set
@@ -91,6 +105,7 @@ class DeferredSession(
     private var lastSchemas: List<SchemaEntry> = emptyList()
 
     private fun enqueue(what: String, work: (ImeSession) -> Unit) {
+        if (closed) return
         val d = delegate ?: return
         if (pending++ == 0) onBusyChanged(true)
         worker.execute {
@@ -99,13 +114,20 @@ class DeferredSession(
             } catch (e: Throwable) {
                 Log.e(TAG, "后台执行 $what 失败", e)
             } finally {
-                mainHandler.post { if (--pending == 0) onBusyChanged(false) }
+                mainHandler.post {
+                    if (closed) return@post
+                    if (--pending == 0) {
+                        onBusyChanged(false)
+                        scheduleReplay()
+                    }
+                }
             }
         }
     }
 
     /** 不取返回值的调用：忙时排队（保序），不忙直接做 */
     private fun call(what: String, work: (ImeSession) -> Unit) {
+        if (closed) return
         val d = delegate ?: return
         if (busy) enqueue(what, work) else work(d)
     }
@@ -137,7 +159,15 @@ class DeferredSession(
                 fail("中文输入核心初始化失败，请查看诊断信息。")
                 return@Thread
             }
+            try {
+                CoreStartupGate.awaitHandoff()
+            } catch (e: Exception) {
+                Log.e(TAG, "核心交接失败", e)
+                fail("中文输入核心初始化未完成，请重新打开输入法。")
+                return@Thread
+            }
             mainHandler.post {
+                if (closed) return@post
                 session.listener = listener
                 session.setLearningSuspended(learningSuspended)
                 session.setAutoSpace(autoSpace)
@@ -146,20 +176,88 @@ class DeferredSession(
                 delegate = session
                 Log.i(TAG, "核心就绪，耗时 ${cost}ms")
                 onReady(session)
+                scheduleReplay()
             }
         }, "wind-core-init").start()
     }
 
     private fun fail(message: String) {
         mainHandler.post {
+            if (closed) return@post
             failureMessage = message
             onFailure(message)
+            scheduleReplay()
         }
     }
 
-    override fun focusGained() = call("focusGained") { it.focusGained() }
+    override fun focusGained() {
+        cancelBufferedInput()
+        call("focusGained") { it.focusGained() }
+    }
 
-    override fun focusLost() = call("focusLost") { it.focusLost() }
+    override fun focusLost() {
+        cancelBufferedInput()
+        call("focusLost") { it.focusLost() }
+    }
+
+    /** Prevent a late constructor/callback from reviving a destroyed service or its old editor. */
+    fun close() {
+        closed = true
+        cancelBufferedInput()
+        listener = null
+        worker.shutdown()
+    }
+
+    private fun cancelBufferedInput() {
+        mainHandler.removeCallbacks(replayInput)
+        replayPosted = false
+        overflowReported = false
+        inputBuffer.clear()
+        onBufferedInputChanged(0)
+    }
+
+    private fun buffer(input: DeferredInput) {
+        if (inputBuffer.offer(input)) {
+            onBufferedInputChanged(inputBuffer.keyCount)
+            scheduleReplay()
+        } else if (!overflowReported) {
+            overflowReported = true
+            listener?.invoke(UiEvent.Toast("输入暂存已满，请等词库准备完毕后继续输入。"))
+        }
+    }
+
+    private fun scheduleReplay() {
+        if (closed || busy || replayPosted || inputBuffer.isEmpty) return
+        if (delegate == null && failureMessage == null) return
+        replayPosted = true
+        // One key per turn lets drawing, editor changes and cancellation run between native calls.
+        mainHandler.postDelayed(replayInput, REPLAY_INTERVAL_MS)
+    }
+
+    private fun replayOneInput() {
+        replayPosted = false
+        if (closed || busy) return
+        val d = delegate
+        if (d == null && failureMessage == null) return
+        val entry = inputBuffer.take() ?: return
+        deliveringBufferedInput = true
+        try {
+            when (val input = entry.input) {
+                is DeferredInput.Key -> {
+                    val consumed = d?.keyPressed(input.action, input.shifted, input.source) ?: false
+                    if (!consumed && !closed && inputBuffer.isCurrent(entry)) {
+                        onUnhandledKey(input.action, input.shifted, input.source)
+                    }
+                }
+                is DeferredInput.Command -> if (d != null) dispatchCommand(input.command)
+            }
+        } finally {
+            deliveringBufferedInput = false
+        }
+        onBufferedInputChanged(inputBuffer.keyCount)
+        if (inputBuffer.isEmpty) overflowReported = false
+        scheduleReplay()
+    }
 
     /**
      * 核心没起来时也要记下：首次弹键盘往往就落在无痕框里（核心构造要一两秒），
@@ -177,25 +275,24 @@ class DeferredSession(
 
     override fun assocHold(hold: Boolean) = call("assocHold") { it.assocHold(hold) }
 
-    /** 未就绪 / 切方案中 → 交还宿主（字母直接上屏），绝不吞键、绝不等锁 */
+    /** 暂存期间的新键也排到队尾，不能超过还没重放的旧键。 */
     override fun keyPressed(action: KeyAction, shifted: Boolean, source: KeySource): Boolean {
+        if (closed) return false
+        if (action !is KeyAction.Text && action !is KeyAction.Commit &&
+            action != KeyAction.Space && action != KeyAction.Backspace && action != KeyAction.Enter
+        ) return false
         val d = delegate
-        if (busy || d == null) {
-            // 字母没进引擎、由宿主直接上屏：同一串输入里一部分在引擎、一部分在文本框，
-            // 用户看到的就是「拼音不完整」（B4）。这里只记一笔供诊断；不缓冲重放——引擎的
-            // 提交经 listener 回到主线程，放到 worker 上执行会让上屏落在后台线程，且「切方案
-            // 期间交还宿主」本就是上面写明的取舍
-            KeyDropStats.global.record(
-                KeyDropStats.Reason.CORE_BUSY_BYPASS,
-                if (d == null) "核心未就绪" else "后台命令进行中",
-            )
-            return false
+        if (d == null && failureMessage != null && inputBuffer.isEmpty) return false
+        if (busy || d == null || (!inputBuffer.isEmpty && !deliveringBufferedInput)) {
+            buffer(DeferredInput.Key(action, shifted, source))
+            return true
         }
         return d.keyPressed(action, shifted, source)
     }
 
     override fun candidateSelected(index: Int, autoSpace: Boolean): Boolean =
-        if (busy) false else delegate?.candidateSelected(index, autoSpace) ?: false
+        if (busy || (!inputBuffer.isEmpty && !deliveringBufferedInput)) false
+        else delegate?.candidateSelected(index, autoSpace) ?: false
 
     /** 未就绪时先记下，核心就绪后补设（同 [learningSuspended]） */
     override var candidateComments: Boolean = false
@@ -212,7 +309,7 @@ class DeferredSession(
         if (busy) emptyList() else delegate?.leadingReadings().orEmpty()
 
     override fun setLeadingReading(reading: LeadingReading): Boolean =
-        if (busy) false else delegate?.setLeadingReading(reading) ?: false
+        if (busy || !inputBuffer.isEmpty) false else delegate?.setLeadingReading(reading) ?: false
 
     override fun candidateMenu(index: Int): List<CandidateMenuEntry> =
         if (busy) emptyList() else delegate?.candidateMenu(index).orEmpty()
@@ -221,9 +318,12 @@ class DeferredSession(
         if (busy) emptyList() else delegate?.candidateTooltip(index).orEmpty()
 
     override fun candidateMenuRun(index: Int, action: String): Boolean =
-        if (busy) false else delegate?.candidateMenuRun(index, action) ?: false
+        if (busy || !inputBuffer.isEmpty) false else delegate?.candidateMenuRun(index, action) ?: false
 
-    override fun reset() = call("reset") { it.reset() }
+    override fun reset() {
+        cancelBufferedInput()
+        call("reset") { it.reset() }
+    }
 
     override fun schemas(): List<SchemaEntry> {
         if (busy) return lastSchemas
@@ -236,6 +336,15 @@ class DeferredSession(
         if (busy) emptyList() else delegate?.shuangpinLayouts().orEmpty()
 
     override fun runCommand(cmd: EngineCmd) {
+        if (closed || failureMessage != null) return
+        if (delegate == null || !inputBuffer.isEmpty) {
+            buffer(DeferredInput.Command(cmd))
+        } else {
+            dispatchCommand(cmd)
+        }
+    }
+
+    private fun dispatchCommand(cmd: EngineCmd) {
         if (mayBuildDict(cmd)) enqueue(cmd.toString()) { it.runCommand(cmd) } else call(cmd.toString()) { it.runCommand(cmd) }
     }
 

@@ -54,7 +54,7 @@ try {
     cargo ndk @ndkArgs
     if ($LASTEXITCODE -ne 0) { throw "cargo ndk 失败（exit $LASTEXITCODE）" }
     # redb 声明了 cdylib，cargo-ndk 会一并拷出，APK 不需要
-    Remove-Item -Force -ErrorAction SilentlyContinue "$jniLibs\*\libredb-*.so"
+    Remove-Item -Force -ErrorAction SilentlyContinue "$jniLibs\*\libredb.so", "$jniLibs\*\libredb-*.so"
 
     # 2. host 构建 + 生成 Kotlin 绑定（从 host dll 读元数据）
     cargo build --locked -p wind-android

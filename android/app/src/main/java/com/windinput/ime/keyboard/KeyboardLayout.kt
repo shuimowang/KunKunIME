@@ -196,7 +196,7 @@ object KeyboardLayouts {
         KeyDef("空格", KeyAction.Space, widthWeight = 2.95f),
         KeyDef(".", KeyAction.Text('.'), longPress = ".?!^"),
         KeyDef("中英", KeyAction.SwitchLang, widthWeight = 1.15f, isSpecial = true),
-        KeyDef("换行", KeyAction.Enter, widthWeight = 1.4f, isSpecial = true),
+        KeyDef("换行", KeyAction.Enter, widthWeight = 1.4f, isSpecial = true, isAccent = true),
     )
 
     /** 内置 qwerty 主布局（26 键，上滑/长按副字符） */
@@ -239,7 +239,7 @@ object KeyboardLayouts {
             KeyDef("返回", KeyAction.SwitchSymbols, widthWeight = 1.15f, isSpecial = true, isAccent = true),
             KeyDef("☺", KeyAction.Emoji, isSpecial = true),
             KeyDef("空格", KeyAction.Space, widthWeight = 5.1f),
-            KeyDef("换行", KeyAction.Enter, widthWeight = 1.4f, isSpecial = true),
+            KeyDef("换行", KeyAction.Enter, widthWeight = 1.4f, isSpecial = true, isAccent = true),
         ),
     ))
 
@@ -257,7 +257,7 @@ object KeyboardLayouts {
         listOf(sideSpacer, digit('4'), digit('5'), digit('6'),
             KeyDef("空格", KeyAction.Space, isSpecial = true)),
         listOf(sideSpacer, digit('7'), digit('8'), digit('9'),
-            KeyDef("换行", KeyAction.Enter, isSpecial = true, rowSpan = 2)),
+            KeyDef("换行", KeyAction.Enter, isSpecial = true, isAccent = true, rowSpan = 2)),
         listOf(
             KeyDef("符号", KeyAction.SymbolPage, isSpecial = true),
             KeyDef("返回", KeyAction.SwitchSymbols, widthWeight = 1.4f, isSpecial = true, isAccent = true),

@@ -122,18 +122,8 @@ jobs:
       - name: Test Kotlin and build the app plus instrumentation APK
         run: ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
 
-      - name: Verify both real native libraries are packaged
-        run: |
-          python3 - <<'PY'
-          from zipfile import ZipFile
-          with ZipFile("app/build/outputs/apk/debug/app-debug.apk") as apk:
-              for abi in ("arm64-v8a", "x86_64"):
-                  name = f"lib/{abi}/libwind_android.so"
-                  info = apk.getinfo(name)
-                  if info.file_size == 0 or apk.read(name)[:4] != b"\x7fELF":
-                      raise SystemExit(f"Missing or invalid native engine: {name}")
-                  print(f"Packaged {name}: {info.file_size} bytes")
-          PY
+      - name: Verify phone and emulator APK architectures and shared app code
+        run: python3 scripts/verify-apks.py
 
       - name: Enable emulator acceleration
         run: |
@@ -166,10 +156,18 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Upload the verified Android debug APK
+      - name: Upload the verified ARM64 phone APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: KunKunIME-Android-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: KunKunIME-Android-arm64-debug
+          path: android/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload the verified x86_64 emulator APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: KunKunIME-Android-x86_64-debug
+          path: android/app/build/outputs/apk/debug/app-x86_64-debug.apk
           if-no-files-found: error
           retention-days: 14

@@ -6,7 +6,7 @@ set -euo pipefail
 
 smoke_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app_id="io.github.shuimowang.kunkunime"
-smoke_apk="$smoke_root/app/build/outputs/apk/debug/app-debug.apk"
+smoke_apk="$smoke_root/app/build/outputs/apk/debug/app-x86_64-debug.apk"
 smoke_test_apk="$smoke_root/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
 smoke_results="$smoke_root/app/build/smoke-results"
 smoke_adb="${ADB:-adb}"
@@ -17,6 +17,10 @@ test -s "$smoke_apk"
 test -s "$smoke_test_apk"
 test "$(adb_device shell getprop ro.kernel.qemu | tr -d '\r')" = '1' || {
     echo 'This test changes the active input method; use a dedicated Android emulator.' >&2
+    exit 1
+}
+test "$(adb_device shell getprop ro.product.cpu.abi | tr -d '\r')" = 'x86_64' || {
+    echo 'This smoke test installs the x86_64 APK; use the matching dedicated emulator.' >&2
     exit 1
 }
 mkdir -p "$smoke_results"
@@ -66,9 +70,9 @@ if any(marker in result for marker in ("FAILURES!!!", "INSTRUMENTATION_FAILED", 
     raise SystemExit("Android reported an instrumentation failure")
 PY
 
-for screenshot in pinyin-candidates.png number-pad.png; do
+for screenshot in cold-start-queued.png pinyin-candidates.png number-pad.png; do
     adb_device pull "/sdcard/Android/data/$app_id/files/smoke/$screenshot" "$smoke_results/$screenshot"
     test -s "$smoke_results/$screenshot"
 done
 
-echo 'KunKunIME device smoke passed: native Pinyin, English, password, numbers, hide/show.'
+echo 'KunKunIME device smoke passed: queued startup Pinyin, editor changes, English, password, numbers, hide/show.'

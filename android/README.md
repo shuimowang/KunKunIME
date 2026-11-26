@@ -2,9 +2,9 @@
 
 Android 手机键盘与 Windows 版放在同一个仓库，使用同一份 Rust 拼音、双拼、英语核心和词库。Android 界面与系统输入接口独立位于本目录，电脑版的 TSF、候选窗口和设置程序保持原来的工程边界。
 
-这是 `0.1.0-preview.1` 试用版，尚未发布稳定版。最低 Android 8.0（API 26）；手机包面向 ARM64，CI 同时构建 x86_64 用于模拟器验证。
+这是 `0.1.0-preview.2` 试用版，尚未发布稳定版。最低 Android 8.0（API 26）；手机包面向 ARM64，CI 另行构建 x86_64 用于模拟器验证。两个架构分别打包，手机无需下载模拟器的原生库。
 
-## 首版范围
+## 当前范围
 
 - 离线全拼、小鹤等双拼方案、英语补全；共享仓库现有词库，包括产品自己的英语主词表。
 - 26 键字母布局、九宫数字键盘、符号与表情、剪贴板、候选横滑及展开。
@@ -12,14 +12,26 @@ Android 手机键盘与 Windows 版放在同一个仓库，使用同一份 Rust 
 - 按输入框类型处理密码、数字、回车动作和禁止个性化学习。
 - 字母页默认采用「123 · 逗句号合一 · 宽空格 · 中英 · 回车」底行，字母角标默认隐藏；候选与键盘共用浅灰背景、白色圆角键、蓝色强调色。
 
+### preview.2 的改进
+
+- 词库准备期间暂存中文按键，准备完成后按顺序处理；候选栏显示暂存数量。离开当前输入框时清掉未完成的输入，避免送进另一个应用或密码框。
+- 密码、PIN、数字、电话和日期字段直接输入，不等待中文核心。
+- 首次启用按「启用 → 选择 → 试用」逐步引导；未完成前一步时会显示对应说明。
+- 浅色键盘使用深色系统导航图标，回车、确定和数字页完成键使用蓝色；按下时保留清楚的文字对比。
+- ARM64 手机包与 x86_64 模拟器包分开；构建检查原生库架构及两包的代码、资源、词库一致性。
+- 分发包开始使用固定的私有签名，公开仓库只保存证书。具体迁移和构建方式见下文。
+
 布局方向参考[豆包输入法官方界面图](https://play.google.com/store/apps/details?id=com.bytedance.android.doubaoime&hl=zh-CN)，使用困困自己的图标和源码。未包含豆包的程序、图标、语音模型或服务。此版没有九键拼音、内置语音识别或桌面手机自动同步；九宫数字页只输入数字。
 
 ## 安装与试用
 
-1. 下载 Android 工作流产生的预览 APK，在手机上安装。
+1. 下载维护者分发的 ARM64 已签名预览 APK，在手机上安装。普通 ARM64 手机不使用 x86_64 模拟器包。
 2. 打开「困困输入法」，按引导在系统中启用并选择它。
-3. 首次启动需要在本机准备词库，候选栏会显示准备状态，完成后输入 `nihao` 并选「你好」。
-4. 调试包使用当前构建环境生成的测试证书，只用于预览。不同云端构建的证书可能不同，不能保证互相覆盖安装；更换前先导出个人词库。正式版签名需要另行管理，密钥不存入源码仓库。
+3. 首次启动需要在本机准备词库，候选栏会显示准备状态及暂存按键。可输入 `nihao`，待出现候选后选「你好」。
+
+**从 preview.1 迁移：** 首版使用临时 CI 证书，与 preview.2 的固定签名不同，因此不能直接覆盖。已安装首版时，先在设置中导出个人词库，再卸载旧版并安装新版，之后导回词库。卸载会清除应用设置和未导出的本机数据。
+
+从本次已签名分发包开始，后续分发包继续使用同一把私有密钥并递增 Android `versionCode`，即可覆盖更新。GitHub Actions 的原始 `debug` 产物仍用临时测试证书，与已签名分发包不能混装更新；原始产物主要用于开发和复核。固定签名不改变此版仍为调试预览包的性质。
 
 本应用不申请网络权限。设置中的项目主页、反馈和版本下载由用户点击后交给浏览器打开。拼音候选、输入记录和学习数据在本机处理；其他系统输入法和应用的行为各自独立。
 
@@ -41,6 +53,13 @@ APK 的应用标识是 `io.github.shuimowang.kunkunime`，版本号与 Windows �
 
 GitHub 工作流位于 [`../.github/workflows/android.yml`](../.github/workflows/android.yml)，使用同一提交中的核心，不自动拉取上游的最新版。它验证真实拼音/英语核心、双架构编译、Kotlin 单测以及 Android 模拟器输入流程，并提供 APK 和诊断产物。
 
+| 架构 | Gradle 输出 | Actions 产物 |
+|---|---|---|
+| ARM64 手机 | `app/build/outputs/apk/debug/app-arm64-v8a-debug.apk` | `KunKunIME-Android-arm64-debug` |
+| x86_64 模拟器 | `app/build/outputs/apk/debug/app-x86_64-debug.apk` | `KunKunIME-Android-x86_64-debug` |
+
+设备测试安装真实 x86_64 核心，通过触屏按键和候选验证中文上屏、英语空格、密码及数字输入。冷启动测试在 debug 进程中短暂暂停真实核心的交接，验证早输、退格和切换输入框的顺序；它不替换核心，不依赖设备恰好足够慢。门闩默认不启用，没有外部触发入口，release 实现不等待。
+
 本地构建需要 Python 3.11+、JDK 21、Android SDK `platforms;android-37.0` / `build-tools;37.0.0`、NDK `28.2.13676358`、Rust 和 cargo-ndk。依赖版本固定在 Gradle 与 Cargo 锁文件中。
 
 ```bash
@@ -55,6 +74,29 @@ scripts/build-rust.sh release
 Windows 开发机可用 `scripts/build-rust.ps1`，并配置 `ANDROID_NDK_HOME`。缺少 ARM64 Rust 核心时 Gradle 会拒绝打包，避免产生只有模拟候选的安装包。运行时初始化失败也会明确提示。
 
 当前核心的私有路径为 `files/rust/config/KunKunIME`（核心设置）、`files/rust/data/KunKunIME`（缓存/日志），用户词库留在 `files/rust` 下，手机键盘配置在 `files/mobile`。它们均位于 Android 应用沙箱中。词库导入导出需通过应用界面；共享文件格式不代表已实现跨设备同步。
+
+## 分发签名
+
+公开证书为 [`signing/kunkun-android-cert.pem`](signing/kunkun-android-cert.pem)，证书 SHA-256：
+
+```text
+63ca51b0c3bfedd52814768dc758e56e549355038cd52d3c350b06b1f6ceb935
+```
+
+私钥和恢复密码单独备份，均不存入仓库或 Actions 产物。CI 验证通过后，对已下载并核对产物摘要的手机包执行：
+
+```bash
+python3 scripts/sign-apk.py \
+  --input /path/to/app-arm64-v8a-debug.apk \
+  --output /path/to/KunKunIME-Android-0.1.0-preview.2-arm64.apk \
+  --build-tools /path/to/android-sdk/build-tools/37.0.0 \
+  --keystore /private/kunkun-android.p12 \
+  --password-file /private/keystore-password.txt
+```
+
+脚本使用 Android 官方 `zipalign` 和 `apksigner`，保留 16 KiB 原生库对齐，验证签名与公开证书一致，并逐项核对代码、清单、资源和词库没有变化。密码由工具从私有文件读取，不写进命令行或输出；现有输入 APK 不会被覆盖。PKCS12 的密钥密码与密钥库密码保持一致。
+
+也可按 Gradle 中的 `signing.*` 配置在私有构建环境直接签名；密钥来源与保管要求相同。遗失签名密钥会影响后续覆盖更新，生成另一把同名密钥无法替代原密钥。
 
 ## 开源来源
 

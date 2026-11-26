@@ -28,7 +28,7 @@ key = [
 key = [
   { spacer = 1 },
   { commit = "7", width = 1.4 }, { commit = "8", width = 1.4 }, { commit = "9", width = 1.4 },
-  { label = "换行", action = "enter", row_span = 2 },
+  { label = "换行", action = "enter", row_span = 2, accent = true },
 ]
 
 [[rows]]

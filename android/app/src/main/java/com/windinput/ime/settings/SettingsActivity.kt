@@ -544,8 +544,8 @@ private fun HomeScreen(
             runCatching { CoreAccess.obtainCore(context)?.statsSummary()?.todayChars }.getOrNull()
         }
     }
-    // 开始使用：三行常在——装好了也要能再跳（换了系统设置、想在别的框里试打）。
-    // 没完成的那一步用强调色写「下一步」，新用户不用猜自己卡在哪
+    // 三行常在，首次按「启用 → 切换 → 试打」逐步开放。
+    // 没选中困困就打开试打页会弹出其它输入法，让新用户误以为安装没有生效。
     SmallTitle("开始使用")
     Card(modifier = Modifier.fillMaxWidth()) {
         val enabled = setup != ImeSetup.ENABLE
@@ -561,17 +561,22 @@ private fun HomeScreen(
             summary = when (setup) {
                 ImeSetup.READY -> "当前正在使用困困输入法 ✓"
                 ImeSetup.SWITCH -> "下一步：在弹出的选择框里选「困困输入法」"
-                ImeSetup.ENABLE -> "启用后再切换"
+                ImeSetup.ENABLE -> "先完成上一步，再选择困困输入法"
             },
             icon = SettingsIcons.switchIme,
             highlight = setup == ImeSetup.SWITCH,
-            onClick = actions.switchIme,
+            onClick = if (enabled) actions.switchIme else null,
         )
         NavRow(
             title = "试一试",
-            summary = "普通 / 搜索 / 数字 / 密码 / 句子五种场景的输入框",
+            summary = if (setup == ImeSetup.READY) {
+                "设置完成，可以试打拼音、英语和数字"
+            } else {
+                "完成上面两步后，在这里试打拼音和英语"
+            },
             icon = SettingsIcons.tryIt,
-            onClick = actions.openTestPad,
+            highlight = setup == ImeSetup.READY,
+            onClick = if (setup == ImeSetup.READY) actions.openTestPad else null,
         )
     }
     for ((segment, title) in SEGMENT_TITLES) {

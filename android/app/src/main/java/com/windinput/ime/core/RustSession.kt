@@ -122,7 +122,11 @@ class RustSession(
                         }
 
                         override fun onToast(text: String) {
-                            sessionRef?.post(UiEvent.Toast(text))
+                            if (isBackgroundIndexNotice(text)) {
+                                Log.i(TAG, "Optional dictionary index is being prepared in the background")
+                            } else {
+                                sessionRef?.post(UiEvent.Toast(text))
+                            }
                         }
                     },
                 )

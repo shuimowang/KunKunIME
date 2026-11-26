@@ -40,5 +40,5 @@ key = [
   { label = "返回", action = "switch_symbols", width = 1.15, accent = true },
   { label = "☺", action = "emoji" },
   { label = "空格", action = "space", width = 5.1 },
-  { label = "换行", action = "enter", width = 1.4 },
+  { label = "换行", action = "enter", width = 1.4, accent = true },
 ]

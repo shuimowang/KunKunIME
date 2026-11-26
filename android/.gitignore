@@ -28,6 +28,10 @@ docs/superpowers/
 keystore/*.keystore
 keystore/*.jks
 keystore/release*
+*.p12
+*.keystore
+*.jks
+keystore-password.txt
 
 # 本机生成物（图片生成等中间产物）
 output/

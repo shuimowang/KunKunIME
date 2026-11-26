@@ -43,7 +43,7 @@ ndk_args=(--platform 26 -t x86_64 -t arm64-v8a -o "$jni_libs" build --locked -p 
 cargo ndk "${ndk_args[@]}"
 
 # redb 声明了 cdylib，cargo-ndk 会一并拷出，APK 不需要
-rm -f "$jni_libs"/*/libredb-*.so
+rm -f "$jni_libs"/*/libredb.so "$jni_libs"/*/libredb-*.so
 
 # 2. host 构建 + 生成 Kotlin 绑定（从 host .so 读元数据）
 #    --no-format：本机装了 ktlint 时 bindgen 会自动格式化，CI 上没有 ktlint，

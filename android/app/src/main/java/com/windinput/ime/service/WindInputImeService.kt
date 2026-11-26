@@ -29,6 +29,7 @@ import com.windinput.ime.core.UiEvent
 import com.windinput.ime.core.UiTrace
 import com.windinput.ime.core.UserConfig
 import com.windinput.ime.core.suspendsLearning
+import com.windinput.ime.core.usesDirectInput
 import com.windinput.ime.keyboard.BackspaceGesture
 import com.windinput.ime.keyboard.HardwareKeys
 import com.windinput.ime.keyboard.ToolbarItem
@@ -41,6 +42,7 @@ import com.windinput.ime.keyboard.OneHandStrip
 import com.windinput.ime.keyboard.InputWindowManager
 import com.windinput.ime.keyboard.KeyAction
 import com.windinput.ime.keyboard.KeyboardDimens
+import com.windinput.ime.keyboard.KeyboardSystemBars
 import com.windinput.ime.keyboard.LayoutTweaks
 import com.windinput.ime.keyboard.KeyboardLayer
 import com.windinput.ime.keyboard.IconSet
@@ -166,8 +168,7 @@ class WindInputImeService :
             SymbolPages.load(dirs)
         }, "wind-prewarm-ui").start()
         // 核心**异步构造**：它要加载三层配置、开 redb、把词库 yaml 编译成 wdat，
-        // 放在主线程会突破系统的输入分发超时（实测直接 ANR）。未就绪期间 keyPressed
-        // 返回 false，字母直接上屏——头一两秒不过中文引擎，好过键盘假死。
+        // 放在主线程会突破系统的输入分发超时。准备期间按键暂存，就绪后保序重放。
         session = run {
             val installer = AssetsInstaller(this, dirs)
             DeferredSession(
@@ -184,14 +185,26 @@ class WindInputImeService :
                     barView?.setFailure("中文核心未就绪")
                     showToast(message)
                 },
+                onUnhandledKey = { action, shifted, _ -> performDefaultKeyAction(action, shifted) },
+                onBufferedInputChanged = { count ->
+                    barView?.setPendingInputCount(count)
+                    val deferred = session as? DeferredSession
+                    barView?.setPreparing(deferred != null && deferred.failureMessage == null &&
+                        (!deferred.ready || deferred.busy || count > 0))
+                },
                 onReady = { ready ->
                     // 就绪时若已在输入，补一次焦点，否则引擎收不到当前会话
-                    if (currentInputConnection != null) ready.focusGained()
+                    if (currentInputConnection != null) {
+                        ready.focusGained()
+                        reportPrecedingText()
+                    }
                     barView?.setFailure(null)
-                    barView?.setPreparing(false)
+                    barView?.setPreparing(hasBufferedInput)
                     refreshSchemaKeys()
                     // 第一次弹键盘时核心多半还没起来，方案卡片等到这里再弹
-                    if (isInputViewShown) maybeShowFirstRunPicker()
+                    if (isInputViewShown && (session as? DeferredSession)?.bufferedInputCount == 0) {
+                        maybeShowFirstRunPicker()
+                    }
                 },
                 // 切方案时核心可能在现编词库（首次切到拼音模拟器上近 5 秒）：期间与未就绪同样提示，
                 // 做完重读方案（空格键上的方案名、中英键的去向）
@@ -201,7 +214,7 @@ class WindInputImeService :
                         switchHandler.postDelayed(showSwitching, SWITCH_HINT_DELAY_MS)
                     } else {
                         switchHandler.removeCallbacks(showSwitching)
-                        barView?.setPreparing(false)
+                        barView?.setPreparing(hasBufferedInput)
                         refreshSchemaKeys()
                         // 切方案期间推来的状态读到的是旧方案列表，切完补刷一次
                         quickPanelWindow?.refresh()
@@ -220,6 +233,8 @@ class WindInputImeService :
     }
 
     override fun onDestroy() {
+        (session as? DeferredSession)?.close()
+        switchHandler.removeCallbacks(showSwitching)
         clipboardStore.stop()
         super.onDestroy()
     }
@@ -241,6 +256,7 @@ class WindInputImeService :
         applyKeyboardDimens()
         // 深浅色：uiMode 变化会让系统重跑本方法，下面所有视图都按新调色板构造
         Palette.apply(this, userConfig.getString("ui.android.theme", "system"))
+        window.window?.let { KeyboardSystemBars.apply(it, Palette.current) }
         // 根视图自理手势条/导航栏避让（IME 窗口不吃系统自动 padding）
         val root = InputRootView(this)
         inputRoot = root
@@ -311,7 +327,8 @@ class WindInputImeService :
             it.attachInitial()
         }
         val deferred = session as? DeferredSession
-        bar.setPreparing(deferred?.ready == false && deferred.failureMessage == null)
+        bar.setPreparing(deferred != null && (!deferred.ready || deferred.busy || hasBufferedInput) && deferred.failureMessage == null)
+        bar.setPendingInputCount(deferred?.bufferedInputCount ?: 0)
         bar.setFailure(deferred?.failureMessage?.let { "中文核心未就绪" })
         root.post {
             android.util.Log.i(
@@ -324,6 +341,13 @@ class WindInputImeService :
             )
         }
         return root
+    }
+
+    override fun onWindowShown() {
+        super.onWindowShown()
+        // Apply again after the IME window attaches so the system-owned navigation buttons
+        // use the same light/dark appearance as the keyboard, including subsequent shows.
+        window.window?.let { KeyboardSystemBars.apply(it, Palette.current) }
     }
 
     private companion object {
@@ -476,7 +500,7 @@ class WindInputImeService :
         // 按键原样给应用，好过敲出一串看不见的编码
         if (!hardKeyboardOnly && !isInputViewShown) return false
         if (keyCode == KeyEvent.KEYCODE_ESCAPE) {
-            if (!composing) return false
+            if (!composing && !hasBufferedInput) return false
             abandonComposition()
             return true
         }
@@ -529,7 +553,7 @@ class WindInputImeService :
         applyLearningSuspended()
         // 密码框直输在这里就要定：接物理键盘时窗口可能根本不弹，onStartInputView 不来，
         // 只在那里判的话会沿用上一个输入框的结论
-        directInput = isPasswordField(attribute)
+        directInput = usesDirectInput(attribute?.inputType ?: 0)
         consumedHardKeys.clear()
         refreshHardKeyboardOnly()
         session.focusGained()
@@ -766,22 +790,12 @@ class WindInputImeService :
         super.onFinishInput()
     }
 
-    private fun isPasswordField(info: EditorInfo?): Boolean {
-        val inputType = info?.inputType ?: 0
-        return (inputType and InputType.TYPE_MASK_CLASS) == InputType.TYPE_CLASS_TEXT &&
-            (inputType and InputType.TYPE_MASK_VARIATION) in setOf(
-                InputType.TYPE_TEXT_VARIATION_PASSWORD,
-                InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
-                InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD,
-            )
-    }
-
-    /** EditorInfo 场景感知：密码框直输、数字/电话框初始切符号层 */
+    /** EditorInfo 场景感知：密码、数字、电话和日期框直输；数字类初始切符号层。 */
     private fun applyEditorScene(info: EditorInfo?) {
         val inputType = info?.inputType ?: 0
         val clazz = inputType and InputType.TYPE_MASK_CLASS
 
-        directInput = isPasswordField(info)
+        directInput = usesDirectInput(inputType)
         if (directInput) {
             session.reset()
         }
@@ -1001,6 +1015,9 @@ class WindInputImeService :
         return session.keyPressed(action, shifted, source)
     }
 
+    private val hasBufferedInput: Boolean
+        get() = ((session as? DeferredSession)?.bufferedInputCount ?: 0) > 0
+
     override fun onKeyAction(action: KeyAction, shifted: Boolean) {
         when (action) {
             KeyAction.Backspace -> recordBackwardDelete { performKeyAction(action, shifted) }
@@ -1033,10 +1050,19 @@ class WindInputImeService :
         if (action is KeyAction.Commit) {
             // 快捷输入等文本缓冲模式下数字页的数字、算符要进缓冲（`;12+3`），由核心判定；
             // 其余情况核心不收，照旧原样上屏（中文下句点不变「。」，有编码时数字不选词）
-            if (!engineKey(action, shifted)) commitDirect(action.text)
+            commitDirect(action.text)
             return
         }
         if (engineKey(action, shifted)) return
+        performDefaultKeyAction(action, shifted)
+    }
+
+    /** Normal host fallback, also used for a deferred key the engine declines after replay. */
+    private fun performDefaultKeyAction(action: KeyAction, shifted: Boolean) {
+        if (action is KeyAction.Commit) {
+            commitDirectNow(action.text)
+            return
+        }
         val ic = currentInputConnection
         if (ic == null) {
             android.util.Log.w(TAG, "默认行为无法执行：currentInputConnection 为 null action=$action")
@@ -1271,7 +1297,9 @@ class WindInputImeService :
     private fun toggleLanguage() {
         // 有编码时先把字母原文上屏再切（两家相同）：用户在中文里打了半截想改打英文，
         // 码不该被吞掉。有编码时回车就是「上屏原文」（见回车键「确定」），直接复用。
-        if (composing && !directInput) session.keyPressed(KeyAction.Enter, false)
+        if ((composing || hasBufferedInput) && !directInput) {
+            session.keyPressed(KeyAction.Enter, false)
+        }
         val schemas = session.schemas()
         val active = schemas.firstOrNull { it.active }
         if (latinInput) {
@@ -1458,7 +1486,9 @@ class WindInputImeService :
                 ?.let { statePrefs.edit().putString(KEY_LAST_CHINESE, it.id).apply() }
         }
         // 与单击中英键一致：有编码先上屏字母原文再切，打了半截的码不吞掉
-        if (composing && !directInput) session.keyPressed(KeyAction.Enter, false)
+        if ((composing || hasBufferedInput) && !directInput) {
+            session.keyPressed(KeyAction.Enter, false)
+        }
         session.runCommand(EngineCmd.SelectSchema(target.index))
     }
 
@@ -1495,6 +1525,7 @@ class WindInputImeService :
     /** 空格滑动移光标 */
     override fun onCursorMove(delta: Int) {
         if (delta == 0) return
+        if (hasBufferedInput) abandonComposition()
         val keyCode =
             if (delta > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT
         repeat(kotlin.math.abs(delta)) { sendDownUpKeyEvents(keyCode) }
@@ -1508,7 +1539,7 @@ class WindInputImeService :
      * 有编码时整个手势等价于清空编码（抬手时做，见 [onBackspaceSwipeDelete]）。
      */
     override fun onBackspaceSelect(count: Int) {
-        if (composing) return
+        if (composing || hasBufferedInput) return
         val ic = currentInputConnection ?: return
         val extracted = ic.getExtractedText(ExtractedTextRequest(), 0) ?: return
         val end = extracted.startOffset + extracted.selectionEnd
@@ -1518,7 +1549,7 @@ class WindInputImeService :
 
     /** 退格滑动抬手：有编码 → 清空编码；否则删除选区 */
     override fun onBackspaceSwipeDelete() {
-        if (composing) {
+        if (composing || hasBufferedInput) {
             abandonComposition()
             return
         }
@@ -1535,7 +1566,7 @@ class WindInputImeService :
      * 有选区先删选区。同样包在批处理里，文本框撤销栈可整体找回
      */
     override fun onBackspaceDeleteBeforeCursor() {
-        if (composing) {
+        if (composing || hasBufferedInput) {
             abandonComposition()
             return
         }
@@ -1553,7 +1584,7 @@ class WindInputImeService :
     private fun panelBackspace(delete: () -> Unit) = object : BackspaceGesture.Listener {
         // 有编码（符号页保留条区，编码仍可见）时先交引擎退格，和键盘退格键一致；引擎不接再走面板自己的删除
         override fun onDelete() {
-            if (composing && engineKey(KeyAction.Backspace, false)) return
+            if ((composing || hasBufferedInput) && engineKey(KeyAction.Backspace, false)) return
             recordBackwardDelete(delete)
         }
         override fun longPressDelayMs() = longPressDelayMs.toLong()
@@ -1577,7 +1608,7 @@ class WindInputImeService :
      * 误清了可以在编辑面板「撤销」找回（文本框自带的撤销栈）
      */
     override fun onBackspaceClearAll() {
-        if (composing) {
+        if (composing || hasBufferedInput) {
             abandonComposition()
             return
         }
@@ -1600,7 +1631,7 @@ class WindInputImeService :
      */
     private fun recordBackwardDelete(delete: () -> Unit) {
         val ic = currentInputConnection
-        val old = if (composing || directInput || ic == null) null else selectionOf(ic)
+        val old = if (composing || hasBufferedInput || directInput || ic == null) null else selectionOf(ic)
         if (ic == null || old == null) {
             delete()
             return
@@ -1907,6 +1938,9 @@ class WindInputImeService :
      */
     override fun onEditAction(action: TextEditingWindow.EditAction) {
         val ic = currentInputConnection ?: return
+        if (hasBufferedInput && action != TextEditingWindow.EditAction.COPY &&
+            action != TextEditingWindow.EditAction.TOGGLE_SELECT
+        ) abandonComposition()
         when (action) {
             TextEditingWindow.EditAction.TOGGLE_SELECT -> {
                 selecting = !selecting
@@ -2073,6 +2107,10 @@ class WindInputImeService :
      * 字符却已插到了它前面。选词是同步回调，上屏顺序有保证。
      */
     private fun commitDirect(text: String) {
+        if (!engineKey(KeyAction.Commit(text), shifted = false)) commitDirectNow(text)
+    }
+
+    private fun commitDirectNow(text: String) {
         deleteUndo.invalidate()
         if (composing && !directInput) {
             if (loadedCandidates.isNotEmpty()) {

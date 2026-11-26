@@ -171,6 +171,7 @@ class BarView(
 
     /** 核心构造期 / 切方案现编词库时的提示（显示在工具栏中间，见 [refreshCenterNote]） */
     private var preparing = false
+    private var pendingInputCount = 0
     private var failure: String? = null
 
     /** 当前编码（展开态下候选行让位给工具栏，编码改在工具栏中间显示） */
@@ -287,6 +288,7 @@ class BarView(
     private fun refreshCenterNote() {
         val text = when {
             failure != null -> failure!!
+            preparing && pendingInputCount > 0 -> "准备词库，已暂存 $pendingInputCount 次输入"
             preparing -> PREPARING_TEXT
             expanded && currentPreedit.isNotEmpty() -> currentPreedit
             incognito -> "无痕"
@@ -296,6 +298,9 @@ class BarView(
         incognitoLabel.setTextColor(if (preparing) Palette.current.preedit else Palette.current.hint)
         incognitoIcon.visibility = if (text == "无痕" && !preparing) VISIBLE else GONE
         centerNote.visibility = if (text.isEmpty()) INVISIBLE else VISIBLE
+        // Give the transient setup/error message the center of the bar rather than squeezing
+        // it between pinned shortcuts. The quick-panel and dismiss buttons remain available.
+        pinnedRow.visibility = if (preparing || failure != null) GONE else VISIBLE
     }
 
     private val trailingIcon = PanelIcon(context).apply {
@@ -407,7 +412,7 @@ class BarView(
         hasCandidates = items.isNotEmpty()
 
         currentPreedit = preedit
-        if (preedit.isNotEmpty()) preparing = false
+        if (preedit.isNotEmpty() && pendingInputCount == 0) preparing = false
         preeditText.text = preedit
         this.modeLabel.text = modeLabel
         this.modeLabel.visibility = if (modeLabel.isEmpty() || preedit.isEmpty()) GONE else VISIBLE
@@ -469,11 +474,12 @@ class BarView(
     /**
      * 核心尚在后台构造 / 切方案现编词库：工具栏中间写一行提示。
      *
-     * 不弹 Toast、不禁用键盘——用户此时按键会直接上屏英文（宿主默认行为），
-     * 键盘照常可用，只是没有中文候选。给一行静态提示即可，别打断输入。
+     * 不弹 Toast、不禁用键盘——首次初始化期间会暂存按键，就绪后继续生成中文候选。
+     * 已暂存的数量由 [setPendingInputCount] 更新，让用户知道刚才的按键已经接收。
      */
     fun setPreparing(preparing: Boolean) {
         this.preparing = preparing
+        if (!preparing) pendingInputCount = 0
         refreshCenterNote()
         // 准备中的提示在工具栏上：联想候选还挂着时也得让出来，否则提示画在被藏住的工具栏里
         if (!expanded && state != State.CLIP_SUGGESTION) {
@@ -481,10 +487,18 @@ class BarView(
         }
     }
 
+    fun setPendingInputCount(count: Int) {
+        pendingInputCount = count.coerceAtLeast(0)
+        refreshCenterNote()
+    }
+
     /** A missing or failed native core must never look like a working Chinese IME. */
     fun setFailure(message: String?) {
         failure = message
-        if (message != null) preparing = false
+        if (message != null) {
+            preparing = false
+            pendingInputCount = 0
+        }
         refreshCenterNote()
         if (message != null) applyState(State.TOOLBAR)
     }

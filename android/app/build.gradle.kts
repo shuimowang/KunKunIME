@@ -23,10 +23,22 @@ android {
         applicationId = "io.github.shuimowang.kunkunime"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0-preview.1"
+        versionCode = 2
+        versionName = "0.1.0-preview.2"
         // 仪器测试（androidTest）：自绘控件的无障碍动作等要在真实 Android 运行时里验
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // Each APK contains one supported native core. In particular, dependency
+    // AARs must not make the app appear installable on unsupported 32-bit ABIs.
+    // Both APKs use the same debug/release code and resources.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = false
+        }
     }
 
     // ── 签名 ─────────────────────────────────────────────────────────
@@ -59,8 +71,6 @@ android {
             // R8：dex 由约 25MB 缩到约 4MB，类少了冷启动也少加载；JNA / UniFFI 的反射入口在 proguard-rules.pro
             isMinifyEnabled = true
             isShrinkResources = true
-            // 正式包只给真机：x86_64 核心 .so 有 21MB，只有模拟器用（模拟器测试走 debug 包）
-            ndk { abiFilters += "arm64-v8a" }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -79,14 +89,16 @@ android {
         compose = true
     }
 
-    // release 包直接带版本号命名（KunKunIME-Android-0.1.0-preview.N.apk），发出去的文件一眼可辨、
-    // 多个版本放一起不互相覆盖；与发版工作流 dist/ 里的命名一致。debug 包名不动，测试脚本照用
+    // Release names include both version and ABI so split outputs never replace
+    // each other. Debug keeps Gradle's app-<abi>-debug.apk names for the scripts.
     applicationVariants.all {
         val variant = this
         if (variant.buildType.name == "release") {
             outputs.all {
-                (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
-                    "KunKunIME-Android-${variant.versionName}.apk"
+                val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+                val abi = requireNotNull(output.getFilter(com.android.build.OutputFile.ABI))
+                output.outputFileName =
+                    "KunKunIME-Android-${variant.versionName}-$abi.apk"
             }
         }
     }
@@ -116,11 +128,15 @@ val prepareCoreAssets by tasks.registering(Exec::class) {
 }
 
 val verifyNativeCore by tasks.registering {
-    val nativeCore = file("src/main/jniLibs/arm64-v8a/libwind_android.so")
-    inputs.file(nativeCore).optional()
+    val nativeCores = listOf("arm64-v8a", "x86_64").map { abi ->
+        file("src/main/jniLibs/$abi/libwind_android.so")
+    }
+    inputs.files(nativeCores).optional()
     doLast {
-        check(nativeCore.isFile && nativeCore.length() > 0) {
-            "Missing ARM64 Chinese input core. Run android/scripts/build-rust.sh release before building the APK."
+        for (nativeCore in nativeCores) {
+            check(nativeCore.isFile && nativeCore.length() > 0) {
+                "Missing Chinese input core: $nativeCore. Run android/scripts/build-rust.sh release before building the APKs."
+            }
         }
     }
 }

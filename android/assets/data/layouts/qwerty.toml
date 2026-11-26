@@ -15,7 +15,7 @@
 #       action     功能键：shift | backspace | enter | space | switch_symbols | switch_lang
 #                  switch_lang 键面同时写「中」「英」，当前模式高亮；长按弹方案选择
 #                  emoji 打开表情面板；symbol_page 分类符号页；number_pad 九宫格数字键盘
-#       accent     true = 强调色键面（123 层、数字键盘的返回键）
+#       accent     true = 强调色键面（确认/换行键、数字键盘的返回键）
 #       special    功能键灰底（缺省：功能键灰、空格白；九宫格里的小空格写 special = true）
 #       row_span   纵向占几行（缺省 1）；下一行同一位置放等宽 spacer
 #       width      相对宽度权重，缺省 1.0
@@ -82,5 +82,5 @@ key = [
   { text = ".", long_press = ".?!^" },
   # 中英切换固定在回车左侧（主流输入法的位置约定，肌肉记忆在这）
   { label = "中英", action = "switch_lang", width = 1.15 },
-  { label = "换行", action = "enter", width = 1.4 },
+  { label = "换行", action = "enter", width = 1.4, accent = true },
 ]

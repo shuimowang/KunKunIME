@@ -2,6 +2,7 @@ package com.windinput.ime.keyboard
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.os.Handler
@@ -11,6 +12,7 @@ import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.View
 import android.widget.OverScroller
+import androidx.core.graphics.ColorUtils
 import com.windinput.ime.core.KeyDropStats
 
 /**
@@ -249,6 +251,9 @@ class KeyboardView(context: Context) : View(context) {
     private val keyColor = palette.key
     private val keySpecialColor = palette.keySpecial
     private val keyPressedColor = palette.keyPressed
+    // An accent key keeps its white label while pressed: darken its own fill rather than
+    // switching to the pale ordinary-key highlight, which would make the label disappear.
+    private val accentPressedColor = ColorUtils.blendARGB(palette.accent, Color.BLACK, 0.16f)
     private val textColor = palette.text
     private val hintColor = palette.hint
 
@@ -685,6 +690,7 @@ class KeyboardView(context: Context) : View(context) {
         if (highlightKey != null) highlightFrames++
         for ((key, rect) in keyBounds) {
             keyPaint.color = when {
+                key === highlightKey && key.isAccent -> accentPressedColor
                 key === highlightKey -> keyPressedColor
                 key.isAccent -> palette.accent
                 key.action == KeyAction.Shift && (shifted || shiftLocked) -> keyPressedColor

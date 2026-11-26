@@ -14,6 +14,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.windinput.ime.core.CoreStartupGate
 import com.windinput.ime.core.RustCoreLoader
 import com.windinput.ime.settings.TestPadActivity
 import org.json.JSONArray
@@ -41,20 +42,23 @@ class RealImeSmokeTest {
 
     @Test(timeout = 180_000)
     fun installedImeTypesPinyinEnglishPasswordAndNumbers() {
+        val startupHold = CoreStartupGate.holdForTest()
         try {
             File(requireNotNull(context.getExternalFilesDir("smoke")), "press-trace.txt")
                 .writeText("Smoke started at uptime ${SystemClock.uptimeMillis()}\n")
-            exerciseInstalledIme()
+            exerciseInstalledIme(startupHold)
             flushTrace()
         } catch (failure: Throwable) {
             // AndroidJUnitRunner closes the activity after the test returns.
             // Capture the failing IME now, before shell cleanup sees Launcher.
             captureFailure(failure)
             throw failure
+        } finally {
+            startupHold.close()
         }
     }
 
-    private fun exerciseInstalledIme() {
+    private fun exerciseInstalledIme(startupHold: CoreStartupGate.Hold) {
         assertEquals("Smoke test must target KunKunIME", appId, context.packageName)
         assertTrue("The packaged Rust engine must load", RustCoreLoader.available)
         automation.serviceInfo = automation.serviceInfo.apply {
@@ -77,30 +81,62 @@ class RealImeSmokeTest {
         )
         instrumentation.waitForIdleSync()
         tapEditor()
+        // Hold only delivery of the real, successfully constructed Rust engine.
+        // This covers initialization deterministically without a fake session
+        // or a sleep that depends on how fast this emulator builds dictionaries.
+        assertTrue("Real Rust startup reached its handoff", startupHold.awaitBlocked(90_000))
+        awaitKey("n")
+        typeKeys("ni")
+        assertEquals("Early Pinyin must stay buffered, not commit Latin letters", "", editorText())
+
+        selectScene("密码")
+        assertEquals("Changing input type must not commit the abandoned Pinyin", "", editorText())
+        typeKeys("abc")
+        awaitText("abc")
+        selectScene("普通")
+        // Keep the existing text: manually clearing the editor here could mask
+        // a failure to discard the old queue when the input connection changed.
+        assertEquals("Password text survives the scene change", "abc", editorText())
+        typeKeys("nihaox", trailingKey = "删除")
+        assertEquals("Queued Pinyin and backspace must not edit the existing text", "abc", editorText())
+        awaitImeNode("seven startup keys buffered after abandoning the old input") {
+            it.text?.toString()?.contains("已暂存 7 次输入") == true
+        }
+        capture("cold-start-queued.png")
+        startupHold.close()
         eventually("real Rust session becomes ready", timeoutMs = 90_000) {
             val logs = deviceShell("logcat -d -v brief -s DeferredSession:I RustSession:I")
             "Rust core ready:" in logs && "核心就绪" in logs
         }
-        awaitKey("n")
+        eventually("all startup keys replayed before candidate selection") {
+            findImeNode { node ->
+                val label = "${node.text?.toString().orEmpty()} ${node.contentDescription?.toString().orEmpty()}"
+                "已暂存" in label || "词库准备中" in label
+            } == null
+        }
 
         // A Latin-only fallback can never provide and commit this Hanzi
-        // candidate, even if it draws a keyboard and passes an APK build.
-        typeKeys("nihao")
+        // candidate. No new key is sent after releasing the startup hold:
+        // nihaox + backspace must have been replayed in order, without old ni.
+        awaitImeNode("queued Pinyin preedit ni'hao after backspace") {
+            it.className?.toString() == "android.widget.TextView" && it.text?.toString() == "ni'hao"
+        }
         val hello = awaitImeNode("Pinyin candidate 你好") { node ->
             val description = node.contentDescription?.toString().orEmpty()
             node.text?.toString() == "你好" || description == "你好" ||
                 description.startsWith("你好，编码 ")
         }
+        recordInputState("AFTER STARTUP HANDOFF")
         capture("pinyin-candidates.png")
         tap(hello)
-        awaitText("你好")
-        Log.i(TAG, "PASS: real Pinyin candidate selected and committed")
+        awaitText("abc你好")
+        Log.i(TAG, "PASS: queued real Pinyin and backspace, old input discarded across password scene")
 
         deviceShell("input keyevent KEYCODE_BACK")
         eventually("keyboard hides") { imeWindows().isEmpty() }
         tapEditor()
         awaitKey("n")
-        assertEquals("Committed text survives closing the keyboard", "你好", editorText())
+        assertEquals("Committed text survives closing the keyboard", "abc你好", editorText())
         Log.i(TAG, "PASS: keyboard closes and reopens")
 
         clearEditor()
@@ -153,11 +189,16 @@ class RealImeSmokeTest {
         instrumentation.waitForIdleSync()
     }
 
-    private fun typeKeys(text: String) {
+    private fun typeKeys(text: String, trailingKey: String? = null) {
         text.forEach { tapImeKey(it.toString()) }
+        trailingKey?.let(::tapImeKey)
         // Inspect the resulting state only after the whole sequence. Reading
         // every accessibility node between keys changes the input pace.
-        pendingTrace.append("${SystemClock.uptimeMillis()} AFTER TEXT <$text>: ")
+        recordInputState("AFTER TEXT <$text>${trailingKey?.let { " then <$it>" }.orEmpty()}")
+    }
+
+    private fun recordInputState(label: String) {
+        pendingTrace.append("${SystemClock.uptimeMillis()} $label: ")
             .append(inputStateSummary()).append('\n')
         flushTrace()
     }
