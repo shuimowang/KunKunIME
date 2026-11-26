@@ -1,0 +1,25 @@
+# Phone-specific defaults, applied after shared data/config.toml and the
+# KunKunIME product defaults in WindInput/data_custom/config.toml.
+# This file never changes the Windows configuration.
+[schema]
+active = "pinyin"
+available = ["pinyin", "shuangpin", "english"]
+dict_cache_policy = "preload"
+
+[debug]
+log_level = "warn"
+
+[input]
+buffer_symbol_chars = ""
+
+[input.auto_pair]
+chinese = true
+english = true
+chinese_pairs = ["“”", "‘’", "（）", "【】", "《》"]
+english_pairs = ["()", "[]", "{}"]
+
+[input.scope_relax]
+always_append = true
+
+[keys]
+page_keys = ["pageupdown"]

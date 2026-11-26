@@ -1,0 +1,19 @@
+<!-- @license lucide-static v0.468.0 - ISC -->
+<!-- 改动：路径以 (12,12) 为中心缩到 0.8 倍（纵向 4–20，与 keyboard 同高）：原图顶满 2–22，
+     细长的 I 形在工具栏里比笑脸、剪贴板显得高。线宽仍是 2，与其它图标一致 -->
+<svg
+  class="lucide lucide-text-cursor"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M16 20h-0.8a3.2 3.2 0 0 1-3.2-3.2V7.2a3.2 3.2 0 0 1 3.2-3.2h0.8" />
+  <path d="M8 20h0.8a3.2 3.2 0 0 0 3.2-3.2v-0.8" />
+  <path d="M8 4h0.8a3.2 3.2 0 0 1 3.2 3.2v0.8" />
+</svg>

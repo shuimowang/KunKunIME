@@ -1,0 +1,17 @@
+<!-- @license lucide-static (zap) - ISC -->
+<!-- 改动：取 lucide 早期 zap 的折线形（6 点 polygon），以 (12,12) 为中心缩到 0.8 倍
+     （纵向 4–20，与 text_edit / keyboard 同高）。线宽仍是 2，与其它图标一致 -->
+<svg
+  class="lucide lucide-zap"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <polygon points="12.8 4 4.8 13.6 12 13.6 11.2 20 19.2 10.4 12 10.4 12.8 4" />
+</svg>

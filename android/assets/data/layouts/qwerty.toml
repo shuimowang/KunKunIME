@@ -1,0 +1,86 @@
+# 键盘布局定义（TOML，与配置文件家族格式统一）
+#
+# 语法：
+#   [meta]           id/name
+#   [[rows]]         每行一个；二选一：
+#     keys = "..."   简写：每字符展开为一个字符键
+#     swipe = "..."  简写行可选：位置对齐的上滑副字符（非字母键兼作长按气泡；
+#                    字母键的长按气泡固定是「大写 | 上滑符号 | 小写」，不读 long_press）
+#     key  = [ {..} ] 显式键位数组，字段：
+#       spacer     占位空白的宽度权重（不绘制，触点归最近的键），如 { spacer = 0.5 }
+#       label      显示文本（text/chars 键可省略，缺省用字符本身）
+#       text       字符键的输出字符（经引擎：中文模式下标点转中文形态、有编码时数字选词）
+#       commit     原样上屏的文本，不经引擎（数字键盘、123 层的半角句点）
+#       chars      简写：连续字符批量展开
+#       action     功能键：shift | backspace | enter | space | switch_symbols | switch_lang
+#                  switch_lang 键面同时写「中」「英」，当前模式高亮；长按弹方案选择
+#                  emoji 打开表情面板；symbol_page 分类符号页；number_pad 九宫格数字键盘
+#       accent     true = 强调色键面（123 层、数字键盘的返回键）
+#       special    功能键灰底（缺省：功能键灰、空格白；九宫格里的小空格写 special = true）
+#       row_span   纵向占几行（缺省 1）；下一行同一位置放等宽 spacer
+#       width      相对宽度权重，缺省 1.0
+#       swipe_up   上滑输出的副字符
+#       long_press 长按气泡字符集（每字符一项，横移选择）
+#       en_text    英文模式下改输出的字符（如逗号句号合一键：中文逗号、英文句点）
+#       en_swipe_up 英文模式下的上滑字符
+#
+# 覆盖解析：filesDir/user/layouts/qwerty.toml > filesDir/data/layouts/qwerty.toml > 内置。
+
+[meta]
+id = "qwerty"
+name = "26 键"
+
+# 默认符号照小米输入法（真机截图，2026-10-24）：首行上滑出数字，其余字母上滑出常用标点，
+# 角标默认显示；逗号、句号各占一键。
+# 标点写 ASCII，中英形态由模式决定：\ → 、  ^ → …  _ → ——  < → 《  > → 》  " → “”  ( → （
+# 例外：j 在中文模式上滑出单个右引号 ”（小米的 h“ j” 成对分居两键），它不是 ASCII，
+# 写字面字符，按键盘视图的规则绕过引擎直接上屏（先顶首选）；英文模式 j 是 &。
+# 英文模式只有三处与中文不同：h 为 '（不能是引号，英文配对表不含引号，否则 don't 会坏）、j 为 &、m 为 /。
+# 上滑符号同时是长按气泡中间那一项，所以字母键写成显式键位数组而不是 swipe 简写。
+
+[[rows]]
+keys = "qwertyuiop"
+swipe = "1234567890"
+
+[[rows]]
+# 第 2 行两侧各缩进半个键，键宽与第 1 行相同（大众布局）
+key = [
+  { spacer = 0.5 },
+  { text = "a", swipe_up = "~" },
+  { text = "s", swipe_up = "!" },
+  { text = "d", swipe_up = "@" },
+  { text = "f", swipe_up = "#" },
+  { text = "g", swipe_up = "%" },
+  { text = "h", swipe_up = "\"", en_swipe_up = "'" },
+  { text = "j", swipe_up = "”", en_swipe_up = "&" },
+  { text = "k", swipe_up = "*" },
+  { text = "l", swipe_up = "?" },
+  { spacer = 0.5 },
+]
+
+[[rows]]
+key = [
+  { label = "⇧", action = "shift", width = 1.5 },
+  { text = "z", swipe_up = "(" },
+  { text = "x", swipe_up = ")" },
+  { text = "c", swipe_up = "-" },
+  { text = "v", swipe_up = "_" },
+  { text = "b", swipe_up = ":" },
+  { text = "n", swipe_up = ";" },
+  { text = "m", swipe_up = "\\", en_swipe_up = "/" },
+  { label = "⌫", action = "backspace", width = 1.5 },
+]
+
+[[rows]]
+# 符号 · 123 · 逗号 · 空格 · 句号 · 中英 · 回车，宽度按豆包实测比例，总权重 10 与字母行对齐。
+# 回车的文字随输入框变（发送 / 搜索…），这里的 label 是多行框的缺省「换行」。
+key = [
+  { label = "符号", action = "symbol_page", width = 1.35 },
+  { label = "123", action = "switch_symbols", width = 1.15 },
+  { text = ",", long_press = ",;:\"'\\" },
+  { label = "空格", action = "space", width = 2.95 },
+  { text = ".", long_press = ".?!^" },
+  # 中英切换固定在回车左侧（主流输入法的位置约定，肌肉记忆在这）
+  { label = "中英", action = "switch_lang", width = 1.15 },
+  { label = "换行", action = "enter", width = 1.4 },
+]

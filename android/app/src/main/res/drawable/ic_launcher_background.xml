@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 背景铺满 108dp 图层，由系统裁切外形，不在资源中预先画圆角。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:angle="315"
+        android:startColor="#6456A7"
+        android:endColor="#373263"
+        android:type="linear" />
+</shape>

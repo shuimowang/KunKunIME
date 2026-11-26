@@ -1,0 +1,194 @@
+# 「开源许可」页的条目。随包分发的每一份第三方数据与程序库都要在这里有一条。
+#
+# [[notice]]
+#   group    分组：核心 / 词库与数据 / 程序库
+#   name     名称
+#   usage    在本输入法里用来做什么
+#   license  许可证 id；由 Notices.fullTextAsset 映射到 licenses/ 或 data/licenses/ 全文
+#   url      来源
+#
+# 数据来源与加工方式见主仓 licenses/THIRD-PARTY.md 与 WindInput/NOTICE.md；
+# prepare-assets.py 将主仓许可证和 ORIGINS.md 原样带入 data/licenses。
+# Rust 依赖不逐条手写，见 scripts/gen-rust-licenses.sh。
+
+[[notice]]
+group = "核心"
+name = "困困输入法 Android（KunKunIME）"
+usage = "本应用的项目源码与修改。应用结合 GPL 输入核心分发，以下分别保留上游代码与数据的许可声明"
+license = "GPL-3.0"
+url = "https://github.com/shuimowang/KunKunIME"
+
+[[notice]]
+group = "核心"
+name = "WindInput Android（上游界面与绑定层）"
+usage = "困困 Android 界面与 UniFFI 绑定层基于该项目修改，保留原作者归属及 MPL-2.0 许可；本目录 LICENSE 含许可全文"
+license = "MPL-2.0"
+url = "https://github.com/huanfeng/WindInputAndroid"
+
+[[notice]]
+group = "核心"
+name = "清风输入法核心（WindInput，上游）"
+usage = "输入引擎、词库加载、配置与统计"
+license = "GPL-3.0"
+url = "https://github.com/huanfeng/WindInput"
+
+[[notice]]
+group = "核心"
+name = "librime / librime-octagram"
+usage = "核心里整句解码、语法模型（.gram）读取与查询的算法与格式依其实现移植；词库格式与排序策略也以其为参考。版权 © 2014 RIME Developers，全文随后"
+license = "BSD-3-Clause"
+url = "https://github.com/lotem/librime-octagram"
+
+[[notice]]
+group = "词库与数据"
+name = "白霜拼音（rime-frost）"
+usage = "拼音词库（字表、基础词库、扩展词库、纠错、16 个可选细胞词库）、Emoji 附加表"
+license = "GPL-3.0"
+url = "https://github.com/gaboolic/rime-frost"
+
+[[notice]]
+group = "词库与数据"
+name = "雾凇拼音（rime-ice）"
+usage = "英文补充词表 en_ext.dict.yaml，保留原文件头与来源"
+license = "GPL-3.0"
+url = "https://github.com/iDvel/rime-ice"
+
+[[notice]]
+group = "词库与数据"
+name = "CMUdict（Carnegie Mellon Pronouncing Dictionary）"
+usage = "困困英语主词表：提取英文拼写并合并多种读音及大小写变体，保留卡内基梅隆大学的版权声明"
+license = "CMUdict"
+url = "https://github.com/cmusphinx/cmudict"
+
+[[notice]]
+group = "词库与数据"
+name = "Standard Ebooks 英文语料"
+usage = "英语补全频序：统计《傲慢与偏见》《汤姆·索亚历险记》《远大前程》的正文词频，实际发布词频顺序和拼写"
+license = "CC0-1.0"
+url = "https://standardebooks.org"
+
+[[notice]]
+group = "词库与数据"
+name = "The Rust Programming Language"
+usage = "英语补全频序中的技术词语料；作者 Steve Klabnik、Carol Nichols 及其他贡献者，精确来源与许可随 data/licenses/THIRD-PARTY.md 分发"
+license = "MIT"
+url = "https://github.com/rust-lang/book"
+
+[[notice]]
+group = "词库与数据"
+name = "ECDICT"
+usage = "英语候选释义；Copyright (c) 2025 Linwei，原始许可随 data/licenses/data/ECDICT-MIT.txt 分发"
+license = "MIT"
+url = "https://github.com/skywind3000/ECDICT"
+
+[[notice]]
+group = "词库与数据"
+name = "CC-CEDICT / MDBG"
+usage = "中文与英文释义子集，保留来源和 CC BY-SA 4.0 声明"
+license = "CC-BY-SA-4.0"
+url = "https://www.mdbg.net/chinese/dictionary?page=cc-cedict"
+
+[[notice]]
+group = "词库与数据"
+name = "pinyin-data"
+usage = "汉字普通话读音，生成拼音映射"
+license = "MIT"
+url = "https://github.com/mozillazg/pinyin-data"
+
+[[notice]]
+group = "词库与数据"
+name = "通用规范汉字表"
+usage = "常用字 / 生僻字判定（候选检索范围、设为生僻字）"
+license = "公开标准"
+url = "https://www.gov.cn/zwgk/2013-08/19/content_2469793.htm"
+
+[[notice]]
+group = "词库与数据"
+name = "Unicode emoji-data"
+usage = "判定哪些字符是 Emoji（字符集分类）"
+license = "Unicode-3.0"
+url = "https://www.unicode.org/Public/17.0.0/ucd/emoji/emoji-data.txt"
+
+[[notice]]
+group = "词库与数据"
+name = "OpenCC"
+usage = "简繁转换词典"
+license = "Apache-2.0"
+url = "https://github.com/BYVoid/OpenCC"
+
+[[notice]]
+group = "词库与数据"
+name = "rime-emoji"
+usage = "Emoji 候选的词表（原样分发，未修改）"
+license = "LGPL-3.0"
+url = "https://github.com/rime/rime-emoji"
+
+[[notice]]
+group = "词库与数据"
+name = "八股文语言模型（rime-octagram-data）"
+usage = "智能联想的「下一词」表：从 zh-hans-t-essay-bgw 模型离线蒸馏出常用词后面常接的词"
+license = "LGPL-3.0"
+url = "https://github.com/lotem/rime-octagram-data"
+
+[[notice]]
+group = "词库与数据"
+name = "中文维基百科"
+usage = "智能联想「下一词」表里的标点：按维基正文统计每个词后面最常接的句读（「吗」后给「？」）"
+license = "CC-BY-SA-4.0"
+url = "https://zh.wikipedia.org"
+
+[[notice]]
+group = "词库与数据"
+name = "万象拼音语法模型（rime-wanxiang-data）"
+usage = "拼音整句打分：wanxiang-mini.gram 是万象 LTS 语法模型的子集（作者 amzxyz），按 Tatoeba、KdConv、CrossWOZ、CPED、中文维基里用得到的条目挑出"
+license = "CC-BY-4.0"
+url = "https://github.com/amzxyz/rime-wanxiang-data"
+
+[[notice]]
+group = "词库与数据"
+name = "Lucide 图标"
+usage = "键盘工具栏与面板里的线性图标（SVG 原样随包，可被用户目录同名文件覆盖）"
+license = "ISC"
+url = "https://lucide.dev"
+
+[[notice]]
+group = "程序库"
+name = "AndroidX / Jetpack Compose"
+usage = "设置界面"
+license = "Apache-2.0"
+url = "https://developer.android.com/jetpack/androidx"
+
+[[notice]]
+group = "程序库"
+name = "Kotlin 标准库与 kotlinx.coroutines"
+usage = "程序语言运行时"
+license = "Apache-2.0"
+url = "https://github.com/Kotlin/kotlinx.coroutines"
+
+[[notice]]
+group = "程序库"
+name = "miuix"
+usage = "设置界面的控件与主题"
+license = "Apache-2.0"
+url = "https://github.com/miuix-kotlin-multiplatform/miuix"
+
+[[notice]]
+group = "程序库"
+name = "tomlj"
+usage = "读取配置与设置清单"
+license = "Apache-2.0"
+url = "https://github.com/tomlj/tomlj"
+
+[[notice]]
+group = "程序库"
+name = "JNA（Java Native Access）"
+usage = "调用输入法核心（LGPL-2.1 与 Apache-2.0 双许可，此处取 Apache-2.0）"
+license = "Apache-2.0"
+url = "https://github.com/java-native-access/jna"
+
+[[notice]]
+group = "程序库"
+name = "UniFFI"
+usage = "生成核心与界面之间的调用接口"
+license = "MPL-2.0"
+url = "https://github.com/mozilla/uniffi-rs"

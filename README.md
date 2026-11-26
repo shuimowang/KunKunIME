@@ -4,6 +4,8 @@
 
 ## 安装与使用
 
+**Android 手机版正在独立开发分支中提供预览工程。** 手机端位于 [android/](android/README.md)，与 Windows 共用输入核心和词库，使用独立的界面、应用标识、版本和构建流程。下列安装步骤仍适用于 Windows；Android 的构建与试用说明见其目录。
+
 1. 从 [GitHub Releases](https://github.com/shuimowang/KunKunIME/releases) 下载 Windows x64 压缩包，将**整个文件夹**解压到长期使用的位置。
 2. 双击 **KunKunIME.exe**，点击 **注册输入法** 并确认 Windows 管理员授权。
 3. 按 **Win + 空格** 选择 **困困输入法**。如果希望每次登录 Windows 后默认使用困困，到 **设置 → 输入规则 → 默认状态 → Windows 登录默认输入法** 点 **设为默认输入法**。同一处可恢复 Windows 自动选择。

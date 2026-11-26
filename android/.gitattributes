@@ -1,0 +1,10 @@
+* text=auto
+*.bat text eol=crlf
+gradlew text eol=lf
+*.jar binary
+*.png binary
+# 词库 yaml 须字节级原样分发（GPL verbatim），禁止行尾归一化
+*.dict.yaml -text
+# 出厂数据表同理：它们是随 APK 分发的**数据**而非源码，checkout 时被改成 CRLF
+# 等于换了一份内容。词库缓存的有效性判据是源文件**内容指纹**，行尾一变就整库重编。
+app/src/main/assets/data/**/*.txt -text
