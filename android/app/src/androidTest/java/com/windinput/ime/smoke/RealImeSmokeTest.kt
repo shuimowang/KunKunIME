@@ -37,6 +37,7 @@ class RealImeSmokeTest {
     private val automation = instrumentation.uiAutomation
     private val appId = "io.github.shuimowang.kunkunime"
     private val imeId = "$appId/com.windinput.ime.service.WindInputImeService"
+    private val pendingTrace = StringBuilder()
 
     @Test(timeout = 180_000)
     fun installedImeTypesPinyinEnglishPasswordAndNumbers() {
@@ -44,6 +45,7 @@ class RealImeSmokeTest {
             File(requireNotNull(context.getExternalFilesDir("smoke")), "press-trace.txt")
                 .writeText("Smoke started at uptime ${SystemClock.uptimeMillis()}\n")
             exerciseInstalledIme()
+            flushTrace()
         } catch (failure: Throwable) {
             // AndroidJUnitRunner closes the activity after the test returns.
             // Capture the failing IME now, before shell cleanup sees Launcher.
@@ -151,15 +153,20 @@ class RealImeSmokeTest {
         instrumentation.waitForIdleSync()
     }
 
-    private fun typeKeys(text: String) = text.forEach { tapImeKey(it.toString()) }
+    private fun typeKeys(text: String) {
+        text.forEach { tapImeKey(it.toString()) }
+        // Inspect the resulting state only after the whole sequence. Reading
+        // every accessibility node between keys changes the input pace.
+        pendingTrace.append("${SystemClock.uptimeMillis()} AFTER TEXT <$text>: ")
+            .append(inputStateSummary()).append('\n')
+        flushTrace()
+    }
 
     private fun tapImeKey(label: String) {
         val key = awaitKey(label)
-        traceKey("PRESS <$label>: ${describeNode(key)}; parent=${key.parent?.let(::describeNode)}")
-        tap(key)
+        tap(key, traceLabel = label)
         instrumentation.waitForIdleSync()
         SystemClock.sleep(80)
-        traceKey("AFTER <$label>: ${inputStateSummary()}")
     }
 
     private fun awaitKey(label: String) = awaitImeNode("IME key $label") {
@@ -224,10 +231,15 @@ class RealImeSmokeTest {
     }
 
     /** Touch real screen coordinates obtained from fresh accessibility nodes. */
-    private fun tap(node: AccessibilityNodeInfo) {
+    private fun tap(node: AccessibilityNodeInfo, traceLabel: String? = null) {
         val bounds = Rect().also(node::getBoundsInScreen)
         assertTrue("Visible control has nonempty screen bounds: $bounds", !bounds.isEmpty)
         val down = SystemClock.uptimeMillis()
+        // Reuse the coordinates already needed for touch injection. Do not
+        // retrieve parents, dump trees, or perform I/O between consecutive keys.
+        if (traceLabel != null) {
+            pendingTrace.append("$down PRESS <$traceLabel>: bounds=${bounds.toShortString()}\n")
+        }
         for ((action, time) in listOf(MotionEvent.ACTION_DOWN to down, MotionEvent.ACTION_UP to down + 40)) {
             val event = MotionEvent.obtain(down, time, action, bounds.exactCenterX(), bounds.exactCenterY(), 0)
             event.source = InputDevice.SOURCE_TOUCHSCREEN
@@ -257,6 +269,8 @@ class RealImeSmokeTest {
     }
 
     private fun captureFailure(failure: Throwable) {
+        runCatching { flushTrace() }
+            .onFailure { Log.e(TAG, "Could not save buffered touch trace", it) }
         runCatching { capture("failure.png") }
             .onFailure { Log.e(TAG, "Could not capture failure screenshot", it) }
         runCatching {
@@ -315,11 +329,12 @@ class RealImeSmokeTest {
             "bounds=${bounds.toShortString()} visible=${node.isVisibleToUser}"
     }
 
-    private fun traceKey(message: String) {
-        Log.i(TAG, message)
+    private fun flushTrace() {
+        if (pendingTrace.isEmpty()) return
         // The complete node list can exceed logcat's per-message length limit.
         File(requireNotNull(context.getExternalFilesDir("smoke")), "press-trace.txt")
-            .appendText("${SystemClock.uptimeMillis()} $message\n")
+            .appendText(pendingTrace.toString())
+        pendingTrace.clear()
     }
 
     private fun inputStateSummary(): String {
