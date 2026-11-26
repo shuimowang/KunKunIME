@@ -69,7 +69,7 @@ GitHub 工作流位于 [`../.github/workflows/android.yml`](../.github/workflows
 
 本地构建需要 Python 3.11+、JDK 21、Android SDK `platforms;android-37.0` / `build-tools;37.0.0`、NDK `28.2.13676358`、Rust 和 cargo-ndk。依赖版本固定在 Gradle 配置、版本目录与 Cargo 锁文件中。
 
-构建工具保持 AGP `8.13.2`、Kotlin `2.3.21` 和 Gradle `8.14.3`。依赖的 [Miuix `0.9.3` 使用 Kotlin `2.4.0` 编译](https://github.com/compose-miuix-ui/miuix/blob/v0.9.3/gradle/libs.versions.toml)，高于 AGP 内置 R8 `8.13.19` 支持的元数据版本。因此在 [`settings.gradle.kts`](settings.gradle.kts) 中，按 [R8 官方覆盖方式](https://r8.googlesource.com/r8/+/refs/heads/main/README.md#replacing-r8-in-android-gradle-plugin) 从 Google Maven 固定使用 R8 `9.1.29`，满足 [Kotlin 2.4 的兼容要求](https://developer.android.com/build/kotlin-support)。主应用与测试 APK 使用同一工具版本；CI 保存的 `outputs/mapping` 可核对实际压缩器版本。
+构建工具保持 AGP `8.13.2`、Kotlin `2.3.21` 和 Gradle `8.14.3`。依赖的 [Miuix `0.9.3` 使用 Kotlin `2.4.0` 编译](https://github.com/compose-miuix-ui/miuix/blob/v0.9.3/gradle/libs.versions.toml)，高于 AGP 内置 R8 `8.13.19` 支持的元数据版本。因此在 [`settings.gradle.kts`](settings.gradle.kts) 中，按 [R8 官方覆盖方式](https://r8.googlesource.com/r8/+/refs/tags/9.1.29/README.md#replacing-r8-in-android-gradle-plugin) 从官方构建归档的 Maven 仓库固定使用 [R8 `9.1.29`](https://storage.googleapis.com/r8-releases/raw/com/android/tools/r8/9.1.29/r8-9.1.29.pom)，满足 [Kotlin 2.4 的兼容要求](https://developer.android.com/build/kotlin-support)。此版本未发布到 Google Maven；归档仓库限定只提供 `com.android.tools:r8`。主应用与测试 APK 使用同一工具版本；CI 保存的 `outputs/mapping` 可核对实际压缩器版本。
 
 ```bash
 cd android

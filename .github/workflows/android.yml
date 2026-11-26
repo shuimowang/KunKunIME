@@ -83,6 +83,9 @@ jobs:
         with:
           packages: platforms;android-37.0 build-tools;37.0.0 platform-tools ndk;28.2.13676358
 
+      - name: Resolve Android build tools before compiling native libraries
+        run: ./gradlew help --no-daemon
+
       - name: Select the same Rust version as Windows
         run: |
           rustup toolchain install 1.100.0 --profile minimal --target aarch64-linux-android,x86_64-linux-android
