@@ -67,7 +67,9 @@ GitHub 工作流位于 [`../.github/workflows/android.yml`](../.github/workflows
 
 设备测试安装带有真实 x86_64 核心的压缩 APK，先运行已有的 6 项无障碍和多指触控用例，再重启应用，通过触屏按键和候选验证中文上屏、英语空格、密码及数字输入，并检查拼音页、数字页的按键与系统底部按钮不重叠。冷启动测试在 debug 进程中短暂暂停真实核心的交接，验证早输、退格和切换输入框的顺序；它不替换核心，不依赖设备恰好足够慢。门闩默认不启用，没有外部触发入口，release 实现不等待。
 
-本地构建需要 Python 3.11+、JDK 21、Android SDK `platforms;android-37.0` / `build-tools;37.0.0`、NDK `28.2.13676358`、Rust 和 cargo-ndk。依赖版本固定在 Gradle 与 Cargo 锁文件中。
+本地构建需要 Python 3.11+、JDK 21、Android SDK `platforms;android-37.0` / `build-tools;37.0.0`、NDK `28.2.13676358`、Rust 和 cargo-ndk。依赖版本固定在 Gradle 配置、版本目录与 Cargo 锁文件中。
+
+构建工具保持 AGP `8.13.2`、Kotlin `2.3.21` 和 Gradle `8.14.3`。依赖的 [Miuix `0.9.3` 使用 Kotlin `2.4.0` 编译](https://github.com/compose-miuix-ui/miuix/blob/v0.9.3/gradle/libs.versions.toml)，高于 AGP 内置 R8 `8.13.19` 支持的元数据版本。因此在 [`settings.gradle.kts`](settings.gradle.kts) 中，按 [R8 官方覆盖方式](https://r8.googlesource.com/r8/+/refs/heads/main/README.md#replacing-r8-in-android-gradle-plugin) 从 Google Maven 固定使用 R8 `9.1.29`，满足 [Kotlin 2.4 的兼容要求](https://developer.android.com/build/kotlin-support)。主应用与测试 APK 使用同一工具版本；CI 保存的 `outputs/mapping` 可核对实际压缩器版本。
 
 ```bash
 cd android
