@@ -2,7 +2,6 @@ package com.windinput.ime.service
 
 import android.content.res.Configuration
 import android.inputmethodservice.InputMethodService
-import android.os.Build
 import android.os.SystemClock
 import android.text.InputType
 import android.view.KeyEvent
@@ -51,6 +50,7 @@ import com.windinput.ime.keyboard.KeyboardWindow
 import com.windinput.ime.keyboard.LayoutRepository
 import com.windinput.ime.keyboard.NumberSideSymbols
 import com.windinput.ime.keyboard.Palette
+import com.windinput.ime.keyboard.PanelIcon
 import com.windinput.ime.panels.ClipboardWindow
 import com.windinput.ime.panels.EmojiWindow
 import com.windinput.ime.panels.SymbolPages
@@ -163,9 +163,19 @@ class WindInputImeService :
         // 放在 onCreateInputView 里就是主线程上一百多毫秒（模拟器实测，键盘弹出掉帧）
         // 配置排在最前：onCreateInputView 头一件事就是按配置定键高，它先进缓存，主线程就不用自己解析
         Thread({
+            val started = SystemClock.uptimeMillis()
             userConfig.readAll()
+            val configReady = SystemClock.uptimeMillis()
             layoutRepository.prewarm()
+            val layoutsReady = SystemClock.uptimeMillis()
+            IconSet.prewarm(PanelIcon.Glyph.entries.map { it.iconName })
+            val iconsReady = SystemClock.uptimeMillis()
             SymbolPages.load(dirs)
+            android.util.Log.i(
+                TAG,
+                "UI预热：配置 ${configReady - started}ms，布局 ${layoutsReady - configReady}ms，" +
+                    "图标 ${iconsReady - layoutsReady}ms，符号 ${SystemClock.uptimeMillis() - iconsReady}ms",
+            )
         }, "wind-prewarm-ui").start()
         // 核心**异步构造**：它要加载三层配置、开 redb、把词库 yaml 编译成 wdat，
         // 放在主线程会突破系统的输入分发超时。准备期间按键暂存，就绪后保序重放。
@@ -242,11 +252,9 @@ class WindInputImeService :
     override fun onCreateInputView(): View {
         // 输入法窗口默认不进挖孔区：横屏时挖孔在侧边，键盘左边空出一条露出底下的应用。
         // 让窗口铺进去，键盘根视图再按挖孔把键往里收（InputRootView.onApplyWindowInsets）
-        if (android.os.Build.VERSION.SDK_INT >= 30) {
-            window.window?.let { w ->
-                w.attributes = w.attributes.apply {
-                    layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-                }
+        window.window?.let { w ->
+            w.attributes = w.attributes.apply {
+                layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
             }
         }
         // 旋转 / 配色变化重建输入视图时不经 onFinishInputView：挂在旧条区上的卡片要在这里收，
@@ -562,6 +570,8 @@ class WindInputImeService :
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        // 一次检查文件、批量读内存；下次弹出时重新检查，设置页写入/外部导入仍会生效。
+        val settings = userConfig.snapshot()
         // 诊断：只记包名与输入类型位，不含输入框里的文字 / 提示 / 标签
         UiTrace.add(
             UiTrace.INPUT,
@@ -576,47 +586,47 @@ class WindInputImeService :
         // 配色核对：视图是按构造那一刻的深浅色画的，系统没发配置变更时不会重建。
         // 对不上（刚装好时拿到了旧配置、或设置页改了深浅色）就当场重建整个输入视图。
         // 条区高度、键行高同理：设置页改了就要按新值重建（键行高此前漏判，要改别的 UI 项才生效）
-        if (Palette.resolve(this, userConfig.getString("ui.android.theme", "system")) !== Palette.current ||
+        if (Palette.resolve(this, settings.getString("ui.android.theme", "system")) !== Palette.current ||
             configuredRowHeightDp() != KeyboardDimens.rowHeightDp ||
             barDims() != (KeyboardDimens.barPreeditDp to KeyboardDimens.barMainRowDp)
         ) {
             UiTrace.add(UiTrace.REBUILD, "输入视图按设置/配色变化重建")
             setInputView(onCreateInputView())
         }
-        session.candidateComments = userConfig.getBoolean("ui.android.candidate_comment", false)
+        session.candidateComments = settings.getBoolean("ui.android.candidate_comment", false)
         applyOneHand() // 设置页改了单手模式：弹键盘时按新配置摆
         KeyHaptics.init(this)
-        KeyHaptics.enabled = userConfig.getBoolean("ui.android.haptic", true)
-        KeyHaptics.strength = userConfig.getInt("ui.android.haptic_strength", KeyHaptics.DEFAULT_STRENGTH)
-        backspaceSwipeOn = userConfig.getBoolean("ui.android.gesture_backspace_select", true)
-        longPressDelayMs = userConfig.getInt("ui.android.long_press_delay", 300)
+        KeyHaptics.enabled = settings.getBoolean("ui.android.haptic", true)
+        KeyHaptics.strength = settings.getInt("ui.android.haptic_strength", KeyHaptics.DEFAULT_STRENGTH)
+        backspaceSwipeOn = settings.getBoolean("ui.android.gesture_backspace_select", true)
+        longPressDelayMs = settings.getInt("ui.android.long_press_delay", 300)
         keyboardWindow?.keyboardView?.apply {
-            soundEnabled = userConfig.getBoolean("ui.android.sound", false)
-            previewEnabled = userConfig.getBoolean("ui.android.key_preview", false)
+            soundEnabled = settings.getBoolean("ui.android.sound", false)
+            previewEnabled = settings.getBoolean("ui.android.key_preview", false)
             longPressDelayMs = this@WindInputImeService.longPressDelayMs
-            spaceSwipeEnabled = userConfig.getBoolean("ui.android.gesture_space_cursor", true)
-            spaceLongPressEnabled = userConfig.getString("ui.android.space_long_press", "none") != "none"
+            spaceSwipeEnabled = settings.getBoolean("ui.android.gesture_space_cursor", true)
+            spaceLongPressEnabled = settings.getString("ui.android.space_long_press", "none") != "none"
             backspaceSwipeEnabled = backspaceSwipeOn
-            swipeSymbolsEnabled = userConfig.getBoolean("ui.android.gesture_swipe_symbols", true)
-            showSwipeHints = userConfig.getBoolean("ui.android.show_swipe_hints", false)
+            swipeSymbolsEnabled = settings.getBoolean("ui.android.gesture_swipe_symbols", true)
+            showSwipeHints = settings.getBoolean("ui.android.show_swipe_hints", false)
             enterLabel = enterActionLabel(info)
         }
-        barView?.candidateBar?.textSizeSp = userConfig.getInt("ui.android.candidate_text_sp", 21).toFloat()
-        barView?.candidateBar?.showDividers = userConfig.getBoolean("ui.android.candidate_divider", false)
-        barView?.showPageNo = userConfig.getBoolean("ui.android.candidate_page_no", false)
-        barView?.iconChip = userConfig.getBoolean("ui.android.toolbar_icon_chip", true)
+        barView?.candidateBar?.textSizeSp = settings.getInt("ui.android.candidate_text_sp", 21).toFloat()
+        barView?.candidateBar?.showDividers = settings.getBoolean("ui.android.candidate_divider", false)
+        barView?.showPageNo = settings.getBoolean("ui.android.candidate_page_no", false)
+        barView?.iconChip = settings.getBoolean("ui.android.toolbar_icon_chip", true)
         keyboardWindow?.keyboardView?.let {
-            it.numberPad9 = userConfig.getString("ui.android.number_page", LayoutTweaks.NUMBER_PAD9) == LayoutTweaks.NUMBER_PAD9
+            it.numberPad9 = settings.getString("ui.android.number_page", LayoutTweaks.NUMBER_PAD9) == LayoutTweaks.NUMBER_PAD9
             it.refreshLayout()
         }
         // 输入视图可能刚重建（配色变了），无痕标记跟着重设
         barView?.setIncognito(manualIncognito || fieldSuspendsLearning)
         barView?.setPinned(visiblePins())
-        clipSuggestionEnabled = userConfig.getBoolean("ui.android.clip_suggestion", true)
-        inlinePreedit = userConfig.getBoolean("ui.android.inline_preedit", false)
-        autoCapEnabled = userConfig.getBoolean("ui.android.auto_cap", true)
-        session.setAutoSpace(userConfig.getBoolean("ui.android.auto_space", true))
-        session.setTouchQuickTrigger(userConfig.getBoolean("ui.android.touch_quick_input", false))
+        clipSuggestionEnabled = settings.getBoolean("ui.android.clip_suggestion", true)
+        inlinePreedit = settings.getBoolean("ui.android.inline_preedit", false)
+        autoCapEnabled = settings.getBoolean("ui.android.auto_cap", true)
+        session.setAutoSpace(settings.getBoolean("ui.android.auto_space", true))
+        session.setTouchQuickTrigger(settings.getBoolean("ui.android.touch_quick_input", false))
         selecting = false
         applyGaps()
         windowManager?.showKeyboard()
@@ -700,8 +710,8 @@ class WindInputImeService :
      * 五笔/拼音的编码是相对「光标当时的位置」积累的，光标一挪，再上屏就落在
      * 新位置，用户看到的是一串字凭空插进了别处。fcitx5 与 Gboard 都在这一刻清组合。
      *
-     * API 29 起标记 deprecated，但编辑器至今仍会调它（API 36 亦然）；34+ 另有
-     * [onUpdateEditorToolType]，两个都接，谁来都清。
+     * onViewClicked 已标记 deprecated，但部分编辑器仍会调用；同时接收
+     * [onUpdateEditorToolType]，两个回调都清理组合。
      */
     @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun onViewClicked(focusChanged: Boolean) {
@@ -1655,11 +1665,10 @@ class WindInputImeService :
 
     /** 选区的绝对位置 [起点, 终点]（与 onUpdateSelection 同口径）；拿不到返回 null */
     private fun selectionOf(ic: android.view.inputmethod.InputConnection): IntArray? {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ic.getSurroundingText(0, 0, 0)?.let {
-                if (it.offset >= 0) return intArrayOf(it.offset + it.selectionStart, it.offset + it.selectionEnd)
-            }
+        ic.getSurroundingText(0, 0, 0)?.let {
+            if (it.offset >= 0) return intArrayOf(it.offset + it.selectionStart, it.offset + it.selectionEnd)
         }
+        // 编辑器可能不提供 surroundingText 或绝对 offset，继续用提取文本获取选区。
         val ext = ic.getExtractedText(ExtractedTextRequest(), 0) ?: return null
         return intArrayOf(ext.startOffset + ext.selectionStart, ext.startOffset + ext.selectionEnd)
     }
@@ -1839,14 +1848,7 @@ class WindInputImeService :
             showToast("没有可用的语音输入法")
             return
         }
-        if (android.os.Build.VERSION.SDK_INT >= 28) {
-            switchInputMethod(id, subtype)
-        } else {
-            val token = window?.window?.attributes?.token ?: return
-            @Suppress("DEPRECATION")
-            (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
-                .setInputMethodAndSubtype(token, id, subtype)
-        }
+        switchInputMethod(id, subtype)
     }
 
     /**

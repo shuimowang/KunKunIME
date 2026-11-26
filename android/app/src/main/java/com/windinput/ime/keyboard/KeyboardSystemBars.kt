@@ -1,6 +1,5 @@
 package com.windinput.ime.keyboard
 
-import android.os.Build
 import android.view.Window
 import android.view.WindowManager
 import androidx.core.graphics.ColorUtils
@@ -11,15 +10,10 @@ internal object KeyboardSystemBars {
     @Suppress("DEPRECATION")
     fun apply(window: Window, palette: Palette) {
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
-        // Older Android versions paint the navigation bar themselves. Edge-to-edge versions
-        // use InputRootView's matching background underneath the system buttons instead.
+        // Match the navigation surface to InputRootView's background under the system buttons.
         window.navigationBarColor = palette.background
-        if (Build.VERSION.SDK_INT >= 28) {
-            window.navigationBarDividerColor = palette.background
-        }
-        if (Build.VERSION.SDK_INT >= 29) {
-            window.isNavigationBarContrastEnforced = false
-        }
+        window.navigationBarDividerColor = palette.background
+        window.isNavigationBarContrastEnforced = false
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars =
             ColorUtils.calculateLuminance(palette.background) > 0.5
     }

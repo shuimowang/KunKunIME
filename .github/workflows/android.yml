@@ -153,6 +153,7 @@ jobs:
             android/app/build/reports/tests/
             android/app/build/test-results/
             android/app/build/smoke-results/
+            android/app/build/outputs/mapping/
           if-no-files-found: ignore
           retention-days: 14
 

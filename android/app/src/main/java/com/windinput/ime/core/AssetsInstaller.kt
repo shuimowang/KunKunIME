@@ -48,13 +48,7 @@ class AssetsInstaller(private val context: Context, private val dirs: DataDirs) 
 
     private fun currentVersion(): String = try {
         val info = context.packageManager.getPackageInfo(context.packageName, 0)
-        val code = if (android.os.Build.VERSION.SDK_INT >= 28) {
-            info.longVersionCode
-        } else {
-            @Suppress("DEPRECATION")
-            info.versionCode.toLong()
-        }
-        "$code:${info.lastUpdateTime}"
+        "${info.longVersionCode}:${info.lastUpdateTime}"
     } catch (e: PackageManager.NameNotFoundException) {
         "unknown"
     }

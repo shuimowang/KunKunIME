@@ -16,8 +16,7 @@ import com.windinput.ime.core.DataDirs
  * 套上字根字体，其余文字仍用系统字体——整段换字体的话汉字、标点都会变成字根字体里的
  * 字形（若有）或回落得很难看。
  *
- * 用自己的 [ZiGenSpan] 而不是系统的 `TypefaceSpan(Typeface)`：后者 API 28 才有，
- * 而本应用 minSdk 26，Android 8.x 上字根会是方框。
+ * [ZiGenSpan] 在测量与绘制时使用同一份字根字体，保持字根宽度与显示一致。
  */
 object ZiGenFont {
 
@@ -62,7 +61,7 @@ object ZiGenFont {
         return out
     }
 
-    /** 测量与绘制时把画笔换成指定字体；任何 API 级别都可用 */
+    /** 测量与绘制时把画笔换成指定字体 */
     private class ZiGenSpan(private val tf: Typeface) : MetricAffectingSpan() {
         override fun updateDrawState(tp: TextPaint) {
             tp.typeface = tf

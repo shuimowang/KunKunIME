@@ -1,8 +1,8 @@
 package com.windinput.ime.core
 
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -15,7 +15,7 @@ import java.util.concurrent.Executors
  * 剪贴板历史存储：监听系统剪贴板，JSON 持久化（设备本地，不进 user 同步树）。
  *
  * 能力对齐 fcitx5 ClipboardManager 的核心子集：置顶、删除、清空(跳过置顶)、
- * 条数上限、敏感内容跳过(Android 13 IS_SENSITIVE 标记)。
+ * 条数上限、敏感内容跳过（[ClipDescription.EXTRA_IS_SENSITIVE] 标记）。
  * 过渡实现：数据量小（上限 50 条），全量读写 JSON 文件；后续量大再换 SQLite。
  *
  * 读写盘都在单独的 IO 线程：单条最长 10 万字、50 条就是几 MB，此前在输入法服务 onCreate
@@ -70,9 +70,7 @@ class ClipboardStore(context: Context) : ClipboardManager.OnPrimaryClipChangedLi
 
     override fun onPrimaryClipChanged() {
         val clip = clipboardManager.primaryClip ?: return
-        if (Build.VERSION.SDK_INT >= 33 &&
-            clip.description?.extras?.getBoolean("android.content.extra.IS_SENSITIVE") == true
-        ) {
+        if (clip.description?.extras?.getBoolean(ClipDescription.EXTRA_IS_SENSITIVE) == true) {
             return // 敏感内容（密码管理器等）不入历史
         }
         val text = clip.getItemAt(0)?.coerceToText(null)?.toString() ?: return

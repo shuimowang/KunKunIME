@@ -103,7 +103,7 @@ def main() -> None:
             "--ks-pass", f"file:{args.password_file.resolve()}",
             # PKCS12 uses the store password for its key. Giving the same file
             # as --key-pass would consume a second line from that file.
-            "--v1-signing-enabled", "false",  # minSdk 26 supports APK signature v2.
+            "--v1-signing-enabled", "false",  # The Android 16 baseline supports APK signature v2.
             "--v2-signing-enabled", "true", "--v3-signing-enabled", "true",
             "--v4-signing-enabled", "false",
             "--out", str(signed), str(aligned),

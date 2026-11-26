@@ -46,8 +46,36 @@ collect_results() {
 }
 trap collect_results EXIT
 
+verify_instrumentation() {
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+result = Path(sys.argv[1]).read_text()
+expected = int(sys.argv[2])
+if not re.search(rf"^OK \({expected} tests?\)\s*$", result, re.MULTILINE):
+    raise SystemExit(f"Instrumentation did not report {expected} passing tests: {sys.argv[1]}")
+if any(marker in result for marker in ("FAILURES!!!", "INSTRUMENTATION_FAILED", "Process crashed")):
+    raise SystemExit("Android reported an instrumentation failure")
+PY
+}
+
 adb_device install -r -t "$smoke_apk"
 adb_device install -r -t "$smoke_test_apk"
+adb_device shell am force-stop "$app_id"
+adb_device logcat -c
+
+# These existing tests cross the optimized app/test APK boundary, including
+# listeners and Kotlin's default-argument bridge. Exercise the shipped code.
+adb_device shell am instrument -w -r \
+    -e class com.windinput.ime.keyboard.A11yActionTest,com.windinput.ime.keyboard.MultiTouchTest \
+    "$app_id.test/androidx.test.runner.AndroidJUnitRunner" \
+    | tr -d '\r' | tee "$smoke_results/keyboard-instrumentation.txt"
+verify_instrumentation "$smoke_results/keyboard-instrumentation.txt" 6
+adb_device logcat -d -v threadtime > "$smoke_results/keyboard-logcat.txt"
+
+# Keep the real-IME startup check cold after the isolated keyboard tests.
 adb_device shell am force-stop "$app_id"
 adb_device logcat -c
 
@@ -58,17 +86,7 @@ adb_device shell am instrument -w -r \
     "$app_id.test/androidx.test.runner.AndroidJUnitRunner" \
     | tr -d '\r' | tee "$smoke_results/instrumentation.txt"
 
-python3 - "$smoke_results/instrumentation.txt" <<'PY'
-from pathlib import Path
-import re
-import sys
-
-result = Path(sys.argv[1]).read_text()
-if not re.search(r"^OK \(1 test\)\s*$", result, re.MULTILINE):
-    raise SystemExit("Real IME instrumentation did not report one passing test")
-if any(marker in result for marker in ("FAILURES!!!", "INSTRUMENTATION_FAILED", "Process crashed")):
-    raise SystemExit("Android reported an instrumentation failure")
-PY
+verify_instrumentation "$smoke_results/instrumentation.txt" 1
 
 for screenshot in cold-start-queued.png pinyin-candidates.png number-pad.png; do
     adb_device pull "/sdcard/Android/data/$app_id/files/smoke/$screenshot" "$smoke_results/$screenshot"

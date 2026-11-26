@@ -1,7 +1,6 @@
 package com.windinput.ime.keyboard
 
 import android.content.Context
-import android.os.Build
 import android.view.View
 import android.view.WindowInsets
 import android.widget.LinearLayout
@@ -11,8 +10,8 @@ import com.windinput.ime.skin.SkinBackground
 /**
  * 输入法根视图：候选条 + 面板区的容器，负责**手势导航条/导航栏避让**。
  *
- * Android 10+ 的手势条与三键导航栏会占据 IME 窗口底部，键盘最后一排会被挤掉。
- * Android 15(API 35) 起 edge-to-edge 强制生效，这条更不能省。
+ * 手势条、系统输入法按钮与三键导航栏会占据 IME 窗口底部；窗口采用 edge-to-edge，
+ * 内容必须主动避让，防止最后一排按键与系统按钮重叠。
  *
  * ⚠ 用**底部占位 View** 而不是 `setPadding` 避让：IME 窗口高度取自根视图的测量
  * 结果，padding 只会压缩内容区（最后一排被裁），占位 View 才会把 inset 高度
@@ -27,7 +26,7 @@ class InputRootView(context: Context) : LinearLayout(context) {
      * 从 0 起步的话键盘刚弹出那一下按无避让的高度测量，最后一排被手势条盖住，
      * insets 到了才长高（肉眼可见地「先被遮住、再恢复」）。所以先用上次收到的真值，
      * 没有就按当前窗口的 WindowMetrics 估一个，insets 到了再校正（通常不变，不会跳）。
-     * API 30+ 按 WindowMetrics 估：它跟着当前横竖屏走。
+     * WindowMetrics 的估值跟着当前横竖屏走。
      *
      * 估值在部分系统上不可靠（真机反馈：首次弹出仍被小横条盖住，之后才恢复）。故再按
      * **横竖屏分别**记住上次收到的真值、跨进程持久化（进程被杀后的「首次」也有据可依），
@@ -35,7 +34,7 @@ class InputRootView(context: Context) : LinearLayout(context) {
      */
     private val portrait = context.resources.configuration.orientation !=
         android.content.res.Configuration.ORIENTATION_LANDSCAPE
-    private val estimated = initialInset(context)
+    private val estimated = estimateBottomInset(context)
     private var insetBottom = maxOf(estimated, savedInset(context, portrait))
 
     /**
@@ -95,26 +94,18 @@ class InputRootView(context: Context) : LinearLayout(context) {
     }
 
     override fun onApplyWindowInsets(insets: WindowInsets): WindowInsets {
-        val bottom = if (Build.VERSION.SDK_INT >= 30) {
-            val nav = insets.getInsets(WindowInsets.Type.navigationBars()).bottom
-            val caption = insets.getInsets(WindowInsets.Type.captionBar()).bottom
-            val gesture = insets.getInsets(WindowInsets.Type.systemGestures()).bottom
-            val density = resources.displayMetrics.density
-            chooseBottomAvoidance(nav, gesture, density, caption).also {
-                UiTrace.add(UiTrace.INSETS, "避让取值 " + describeAvoidance(nav, gesture, density, it, caption))
-            }
-        } else {
-            @Suppress("DEPRECATION")
-            insets.systemWindowInsetBottom
+        val nav = insets.getInsets(WindowInsets.Type.navigationBars()).bottom
+        val caption = insets.getInsets(WindowInsets.Type.captionBar()).bottom
+        val gesture = insets.getInsets(WindowInsets.Type.systemGestures()).bottom
+        val density = resources.displayMetrics.density
+        val bottom = chooseBottomAvoidance(nav, gesture, density, caption).also {
+            UiTrace.add(UiTrace.INSETS, "避让取值 " + describeAvoidance(nav, gesture, density, it, caption))
         }
-        lastInsetBottom = bottom
         UiTrace.add(UiTrace.INSETS, "${if (portrait) "竖" else "横"} 取值=$bottom 当前避让=$insetBottom 额外留空=$extraBottom | ${UiTrace.describeInsets(insets)} | ${UiTrace.describeNavVisibility(insets)}")
         // 横屏时挖孔与三键导航栏在左右两侧：窗口铺到底（服务里开了 cutout ALWAYS），
         // 键往里收，背景照样铺满——否则侧边露出一条底下的应用
-        if (Build.VERSION.SDK_INT >= 30) {
-            val side = insets.getInsets(WindowInsets.Type.displayCutout() or WindowInsets.Type.navigationBars())
-            if (paddingLeft != side.left || paddingRight != side.right) setPadding(side.left, 0, side.right, 0)
-        }
+        val side = insets.getInsets(WindowInsets.Type.displayCutout() or WindowInsets.Type.navigationBars())
+        if (paddingLeft != side.left || paddingRight != side.right) setPadding(side.left, 0, side.right, 0)
         removeCallbacks(applyLowered)
         if (bottom < insetBottom && bottom <= 0) {
             // 真机日志（小米 HyperOS）：键盘弹出的头一次派发会给出 0，紧接着又给回真值（56→0→56）。
@@ -131,18 +122,14 @@ class InputRootView(context: Context) : LinearLayout(context) {
     private var pendingLowered = 0
     private val applyLowered = Runnable {
         // 落实前再读一次窗口当前的 insets：瞬时 0 之后若没有新的派发，真值只在这里能拿到
-        val now = if (Build.VERSION.SDK_INT >= 30) {
-            rootWindowInsets?.let {
-                chooseBottomAvoidance(
-                    it.getInsets(WindowInsets.Type.navigationBars()).bottom,
-                    it.getInsets(WindowInsets.Type.systemGestures()).bottom,
-                    resources.displayMetrics.density,
-                    it.getInsets(WindowInsets.Type.captionBar()).bottom,
-                )
-            } ?: 0
-        } else {
-            0
-        }
+        val now = rootWindowInsets?.let {
+            chooseBottomAvoidance(
+                it.getInsets(WindowInsets.Type.navigationBars()).bottom,
+                it.getInsets(WindowInsets.Type.systemGestures()).bottom,
+                resources.displayMetrics.density,
+                it.getInsets(WindowInsets.Type.captionBar()).bottom,
+            )
+        } ?: 0
         commitInset(maxOf(pendingLowered, now))
     }
 
@@ -163,9 +150,6 @@ class InputRootView(context: Context) : LinearLayout(context) {
 
         /** 纯手势导航下的避让上限（dp）：盖住手势条即可，荣耀识别区 40dp 垫满就是空白反馈 */
         private const val GESTURE_BAR_CAP_DP = 16
-
-        /** 进程内记住上次的真值：API 26–29 没有 WindowMetrics，重建输入视图时用它 */
-        private var lastInsetBottom = -1
 
         /**
          * 底部避让取值（纯函数，单测见 InputRootViewInsetsTest）。
@@ -215,30 +199,18 @@ class InputRootView(context: Context) : LinearLayout(context) {
             prefs(context).edit().putInt(if (portrait) "bottom_portrait" else "bottom_landscape", value).apply()
         }
 
-        private fun initialInset(context: Context): Int =
-            if (Build.VERSION.SDK_INT >= 30) {
-                estimateBottomInset(context)
-            } else {
-                lastInsetBottom.takeIf { it >= 0 } ?: estimateBottomInset(context)
-            }
-
         private fun estimateBottomInset(context: Context): Int {
-            if (Build.VERSION.SDK_INT >= 30) {
-                // 估不出来就退回 0（旧行为）：只是首帧不准，insets 到了照样校正，不值得因此崩
-                return runCatching {
-                    val wm = context.getSystemService(android.view.WindowManager::class.java)
-                    val insets = wm.currentWindowMetrics.windowInsets
-                    chooseBottomAvoidance(
-                        insets.getInsets(WindowInsets.Type.navigationBars()).bottom,
-                        insets.getInsets(WindowInsets.Type.systemGestures()).bottom,
-                        context.resources.displayMetrics.density,
-                        insets.getInsets(WindowInsets.Type.captionBar()).bottom,
-                    )
-                }.getOrDefault(0)
-            }
-            // 26–29：没有 WindowMetrics，取系统资源里的导航栏高度
-            val id = context.resources.getIdentifier("navigation_bar_height", "dimen", "android")
-            return if (id != 0) context.resources.getDimensionPixelSize(id) else 0
+            // 估不出来先退回 0，结合持久化真值布局；窗口 insets 到达后再校正。
+            return runCatching {
+                val wm = context.getSystemService(android.view.WindowManager::class.java)
+                val insets = wm.currentWindowMetrics.windowInsets
+                chooseBottomAvoidance(
+                    insets.getInsets(WindowInsets.Type.navigationBars()).bottom,
+                    insets.getInsets(WindowInsets.Type.systemGestures()).bottom,
+                    context.resources.displayMetrics.density,
+                    insets.getInsets(WindowInsets.Type.captionBar()).bottom,
+                )
+            }.getOrDefault(0)
         }
     }
 }

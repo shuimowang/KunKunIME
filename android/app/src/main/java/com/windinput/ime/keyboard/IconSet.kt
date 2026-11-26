@@ -27,30 +27,57 @@ object IconSet {
     private var assets: AssetManager? = null
     private var overlayDirs: List<File> = emptyList()
     private val cache = HashMap<String, Loaded?>()
+    private var generation = 0L
+
+    private class Source(
+        val generation: Long,
+        val assets: AssetManager?,
+        val overlayDirs: List<File>,
+    )
 
     /** 服务启动与换主题 / 改了覆盖目录后调用；清缓存，下一次取图标重新找 */
     @Synchronized
     fun init(assets: AssetManager, overlayDirs: List<File> = emptyList()) {
         this.assets = assets
-        this.overlayDirs = overlayDirs
+        this.overlayDirs = overlayDirs.toList()
+        generation++
         cache.clear()
     }
 
-    @Synchronized
     fun get(name: String): Loaded? {
-        if (cache.containsKey(name)) return cache[name]
-        return load(name).also { cache[name] = it }
+        while (true) {
+            val source = synchronized(this) {
+                if (cache.containsKey(name)) return cache[name]
+                Source(generation, assets, overlayDirs)
+            }
+            // 读盘、解析和建 Path 都在锁外：后台预载不能让绘制线程等它读另一枚图标。
+            val loaded = load(name, source)
+            synchronized(this) {
+                // 同代另一调用者已先发布，或 init 后新代已发布：都以已发布结果为准。
+                if (cache.containsKey(name)) return cache[name]
+                if (source.generation == generation) {
+                    cache[name] = loaded
+                    return loaded
+                }
+            }
+            // 读取期间换过主题/覆盖目录，丢弃旧结果，从当前配置重新读取。
+        }
     }
 
-    private fun load(name: String): Loaded? {
-        for (dir in overlayDirs) {
+    /** 由已有 UI 预热线程调用；首次绘制若抢先到达，仍由 get 同步兜底。 */
+    fun prewarm(names: Iterable<String>) {
+        for (name in names) get(name)
+    }
+
+    private fun load(name: String, source: Source): Loaded? {
+        for (dir in source.overlayDirs) {
             val f = File(dir, "$name.svg")
             if (!f.isFile) continue
             val loaded = runCatching { build(SvgIconParser.parse(f.readText())) }.getOrNull()
             if (loaded != null) return loaded
             Log.w(TAG, "覆盖图标 ${f.path} 解析不了，退回内置")
         }
-        val am = assets ?: return null
+        val am = source.assets ?: return null
         return runCatching {
             build(SvgIconParser.parse(am.open("$BUNDLED_DIR/$name.svg").bufferedReader().use { it.readText() }))
         }.onFailure { Log.w(TAG, "内置图标 $name 读不了：${it.message}") }.getOrNull()

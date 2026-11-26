@@ -11,8 +11,7 @@ import com.windinput.ime.keyboard.Palette
  * 竖向滚动指示（右缘细条）：符号页、剪贴板这类「默认只露几行、其余要上下滑」的列表用，
  * 告诉用户这里还有内容。
  *
- * 系统自带滚动条的自定义滑块要 API 29，我们 minSdk 26，所以自己画。平时淡出，
- * 打开 / 换类别时先亮 [firstHoldMs]，滑动时亮着、停手后再留 [holdMs]。
+ * 打开 / 换类别时先亮 [FIRST_HOLD_MS]，滑动时亮着、停手后再留 [HOLD_MS]，随后淡出。
  * 内容不超出可视区（不可滚）时什么都不画。颜色取调色板 [Palette.hint]。
  */
 class ScrollThumb(private val recycler: RecyclerView) : RecyclerView.ItemDecoration() {

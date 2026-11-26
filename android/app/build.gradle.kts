@@ -21,10 +21,11 @@ android {
 
     defaultConfig {
         applicationId = "io.github.shuimowang.kunkunime"
-        minSdk = 26
+        // Personal-use baseline: Android 16 and newer.
+        minSdk = 36
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.1.0-preview.2"
+        versionCode = 3
+        versionName = "0.1.0-preview.3"
         // 仪器测试（androidTest）：自绘控件的无障碍动作等要在真实 Android 运行时里验
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -67,8 +68,22 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Ship the same optimized preview APK that the device smoke installs.
+            // It remains debuggable; this is not a release build or a new variant.
+            isDebuggable = true
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+                "proguard-preview-entrypoints.pro",
+            )
+            // AGP applies this build's app mapping when processing androidTest.
+            testProguardFiles("proguard-instrumentation.pro")
+        }
         release {
-            // R8：dex 由约 25MB 缩到约 4MB，类少了冷启动也少加载；JNA / UniFFI 的反射入口在 proguard-rules.pro
+            // R8 code/resource shrinking; JNA and UniFFI entry points are in proguard-rules.pro.
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

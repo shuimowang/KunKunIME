@@ -2,7 +2,7 @@
 
 Android 手机键盘与 Windows 版放在同一个仓库，使用同一份 Rust 拼音、双拼、英语核心和词库。Android 界面与系统输入接口独立位于本目录，电脑版的 TSF、候选窗口和设置程序保持原来的工程边界。
 
-这是 `0.1.0-preview.2` 试用版，尚未发布稳定版。最低 Android 8.0（API 26）；手机包面向 ARM64，CI 另行构建 x86_64 用于模拟器验证。两个架构分别打包，手机无需下载模拟器的原生库。
+这是 `0.1.0-preview.3` 试用版，尚未发布稳定版。按个人使用需求，最低要求提高到 **Android 16（API 36）**，不再维护旧系统兼容分支。`targetSdk` 保持 36，使用 Android 37.0 SDK 编译；最低安装版本与目标平台版本分别管理。手机包面向 ARM64，CI 另行构建 x86_64 用于模拟器验证。两个架构分别打包，手机无需下载模拟器的原生库。
 
 ## 当前范围
 
@@ -12,7 +12,14 @@ Android 手机键盘与 Windows 版放在同一个仓库，使用同一份 Rust 
 - 按输入框类型处理密码、数字、回车动作和禁止个性化学习。
 - 字母页默认采用「123 · 逗句号合一 · 宽空格 · 中英 · 回车」底行，字母角标默认隐藏；候选与键盘共用浅灰背景、白色圆角键、蓝色强调色。
 
-### preview.2 的改进
+### preview.3 的改进
+
+- 直接使用现代系统的窗口 Insets、输入法子类型、剪贴板敏感标记和振动接口，删除旧系统版本判断；保留不同手机的振动能力检查、编辑器能力回退及系统按钮避让。
+- 对实际分发和设备测试使用的预览包启用 R8 代码与资源压缩，保留必要的原生接口、反射入口和测试入口；CI 同时保存本次映射，便于诊断。它仍是可调试的预览版。
+- 键盘配置按文件分开同步，避免无关配置解析占用同一把锁；每次显示键盘时，将 22 个常用设置合并为一次快照读取，减少逐项重复检查配置文件。
+- 在现有后台任务中预载内置 SVG 图标；读盘、解析不占用图标缓存锁，主题变化后不发布过期结果。首次绘制早于预载时仍保留正常加载路径。
+
+### preview.2 已包含的改进
 
 - 词库准备期间暂存中文按键，准备完成后按顺序处理；候选栏显示暂存数量。离开当前输入框时清掉未完成的输入，避免送进另一个应用或密码框。
 - 密码、PIN、数字、电话和日期字段直接输入，不等待中文核心。
@@ -31,7 +38,7 @@ Android 手机键盘与 Windows 版放在同一个仓库，使用同一份 Rust 
 
 **从 preview.1 迁移：** 首版使用临时 CI 证书，与 preview.2 的固定签名不同，因此不能直接覆盖。已安装首版时，先在设置中导出个人词库，再卸载旧版并安装新版，之后导回词库。卸载会清除应用设置和未导出的本机数据。
 
-从本次已签名分发包开始，后续分发包继续使用同一把私有密钥并递增 Android `versionCode`，即可覆盖更新。GitHub Actions 的原始 `debug` 产物仍用临时测试证书，与已签名分发包不能混装更新；原始产物主要用于开发和复核。固定签名不改变此版仍为调试预览包的性质。
+**从已签名 preview.2 更新到 preview.3：** 可以直接覆盖安装，保留设置与词库。自 preview.2 起，分发包继续使用同一把私有密钥并递增 Android `versionCode`。GitHub Actions 的原始 `debug` 产物仍用临时测试证书，与已签名分发包不能混装更新；原始产物主要用于开发和复核。固定签名不改变此版仍为调试预览包的性质。
 
 本应用不申请网络权限。设置中的项目主页、反馈和版本下载由用户点击后交给浏览器打开。拼音候选、输入记录和学习数据在本机处理；其他系统输入法和应用的行为各自独立。
 
@@ -58,7 +65,7 @@ GitHub 工作流位于 [`../.github/workflows/android.yml`](../.github/workflows
 | ARM64 手机 | `app/build/outputs/apk/debug/app-arm64-v8a-debug.apk` | `KunKunIME-Android-arm64-debug` |
 | x86_64 模拟器 | `app/build/outputs/apk/debug/app-x86_64-debug.apk` | `KunKunIME-Android-x86_64-debug` |
 
-设备测试安装真实 x86_64 核心，通过触屏按键和候选验证中文上屏、英语空格、密码及数字输入，并检查拼音页、数字页的按键与系统底部按钮不重叠。冷启动测试在 debug 进程中短暂暂停真实核心的交接，验证早输、退格和切换输入框的顺序；它不替换核心，不依赖设备恰好足够慢。门闩默认不启用，没有外部触发入口，release 实现不等待。
+设备测试安装带有真实 x86_64 核心的压缩 APK，先运行已有的 6 项无障碍和多指触控用例，再重启应用，通过触屏按键和候选验证中文上屏、英语空格、密码及数字输入，并检查拼音页、数字页的按键与系统底部按钮不重叠。冷启动测试在 debug 进程中短暂暂停真实核心的交接，验证早输、退格和切换输入框的顺序；它不替换核心，不依赖设备恰好足够慢。门闩默认不启用，没有外部触发入口，release 实现不等待。
 
 本地构建需要 Python 3.11+、JDK 21、Android SDK `platforms;android-37.0` / `build-tools;37.0.0`、NDK `28.2.13676358`、Rust 和 cargo-ndk。依赖版本固定在 Gradle 与 Cargo 锁文件中。
 
@@ -88,7 +95,7 @@ Windows 开发机可用 `scripts/build-rust.ps1`，并配置 `ANDROID_NDK_HOME`�
 ```bash
 python3 scripts/sign-apk.py \
   --input /path/to/app-arm64-v8a-debug.apk \
-  --output /path/to/KunKunIME-Android-0.1.0-preview.2-arm64.apk \
+  --output /path/to/KunKunIME-Android-0.1.0-preview.3-arm64.apk \
   --build-tools /path/to/android-sdk/build-tools/37.0.0 \
   --keystore /private/kunkun-android.p12 \
   --password-file /private/keystore-password.txt

@@ -111,9 +111,8 @@ import java.io.File
  * 点进去才是那组开关——首页和一级页都在一屏内看完，不用在一条长列表里找。
  * 方案列表、统计、词库、关于是代码画的专属区块，其余全部来自清单。
  *
- * 用到的新版系统能力：edge-to-edge（内容画到系统栏下，标题栏与底部留出 insets）、
- * 预测性返回（Android 13+ 侧滑返回时当前页跟手右移，松手才真正返回）、
- * 莫奈取色（Android 12+ 跟随壁纸主色，低版本回落 miuix 默认色）。
+ * 使用 edge-to-edge（内容画到系统栏下，标题栏与底部留出 insets）、
+ * 预测性返回（侧滑返回时当前页跟手右移，松手才真正返回）、莫奈取色（跟随壁纸主色）。
  */
 class SettingsActivity : ComponentActivity() {
 
@@ -397,7 +396,7 @@ private fun SettingsApp(
             // 手势放弃：本协程已取消，回弹另起一个。不能 animateTo(route)：那是把过渡反过来
             // （上一级 → 当前页），被放弃的那次 seek 会作为「初始值动画」沿原方向接着跑完一整段
             // 线性时长，当前页先被带出去一截再拉回来（「回弹到位后又往回弹一点」）。
-            // 系统（API 34+）在 onBackCancelled 前已把进度弹回 0，这里通常只剩 snapTo；
+            // 系统在 onBackCancelled 前已把进度弹回 0，这里通常只剩 snapTo；
             // 仍有残余进度时沿同一方向 seek 回 0。途中路由被点走（targetState 变了）就不再插手
             val from = transitionState.fraction
             cancelBackJob[0] = appScope.launch {

@@ -2,11 +2,9 @@ package com.windinput.ime.service
 
 import android.content.ComponentName
 import android.inputmethodservice.InputMethodService
-import android.os.Build
 import android.util.Log
 import android.view.inputmethod.InputMethodManager
 import android.view.inputmethod.InputMethodSubtype
-import androidx.annotation.RequiresApi
 import com.windinput.ime.core.SchemaEntry
 
 /**
@@ -21,8 +19,7 @@ import com.windinput.ime.core.SchemaEntry
  * 回调里的方案已经是当前方案时同样不动；按用户的选择切方案期间，引擎还没切完推来的旧状态
  * 不往系统同步（见 Service 的 awaitingSchema）。
  *
- * 只在 API 34+ 做：子类型的任意文字标签（setSubtypeNameOverride）是 34 才有的，更早的系统只能用
- * 资源字符串，显示不了方案名——那里只留 method.xml 的兜底子类型。
+ * 用 setSubtypeNameOverride 直接显示方案名；核心尚未就绪时保留 method.xml 的兜底子类型。
  */
 internal class SchemaSubtypes(private val service: InputMethodService) {
 
@@ -66,7 +63,7 @@ internal class SchemaSubtypes(private val service: InputMethodService) {
      * 方案列表为空（核心未就绪）时什么都不做。
      */
     fun sync(schemas: List<SchemaEntry>, currentId: String?) {
-        if (Build.VERSION.SDK_INT < 34 || schemas.isEmpty()) return
+        if (schemas.isEmpty()) return
         val list = schemas.map { it.id to it.name.ifEmpty { it.id } }
         val subtypes = list.map { (id, name) -> build(id, name) }
         if (list != registered) {
@@ -91,7 +88,6 @@ internal class SchemaSubtypes(private val service: InputMethodService) {
     /** 系统回调来的子类型是不是自己同步过去的（是就消费掉这次标记） */
     fun consumeSelfSwitch(subtype: InputMethodSubtype): Boolean = pendingSelfSwitches.remove(subtype.hashCode())
 
-    @RequiresApi(34)
     private fun build(id: String, name: String): InputMethodSubtype =
         InputMethodSubtype.InputMethodSubtypeBuilder()
             .setSubtypeId(subtypeId(id))

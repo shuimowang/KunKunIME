@@ -2,7 +2,6 @@
 <resources>
     <string name="app_name">困困输入法</string>
     <string name="ime_name">困困输入法</string>
-    <!-- 兜底子类型的标签：API 34+ 按启用的方案另注册子类型（标签 = 方案名，见 SchemaSubtypes），
-         更早的系统、或方案还没注册上时显示这一行 -->
+    <!-- 兜底子类型的标签：方案尚未注册时显示；核心就绪后按启用方案注册对应名称（见 SchemaSubtypes） -->
     <string name="subtype_zh">困困输入法</string>
 </resources>

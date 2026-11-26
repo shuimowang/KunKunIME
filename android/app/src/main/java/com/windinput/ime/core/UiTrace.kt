@@ -48,8 +48,7 @@ object UiTrace {
         if (category.isNullOrEmpty()) "$time $msg" else "$time [$category] $msg"
 
     /**
-     * 是否被系统强制 edge-to-edge：Android 15（API 35）起，targetSdk ≥ 35 的应用无法再退出。
-     * 输入法窗口的底部处理在两种模式下差别很大，诊断里要带上。
+     * 系统与 targetSdk 的 edge-to-edge 策略诊断，报告中同时保留两者用于核对构建信息。
      */
     internal fun edgeToEdgeForced(sdk: Int, targetSdk: Int): Boolean = sdk >= 35 && targetSdk >= 35
 
@@ -62,12 +61,8 @@ object UiTrace {
     @Synchronized
     fun snapshot(): List<String> = lines.toList()
 
-    /** 各类 insets 的底部/左右原始值，一行写完（API 30+）；更早的系统只有一个 systemWindowInsetBottom */
+    /** 各类 insets 的底部/左右原始值，一行写完 */
     fun describeInsets(insets: WindowInsets): String {
-        if (Build.VERSION.SDK_INT < 30) {
-            @Suppress("DEPRECATION")
-            return "systemWindowInsetBottom=${insets.systemWindowInsetBottom}"
-        }
         fun b(name: String, type: Int) = insets.getInsets(type).let { "$name=${it.bottom}" + if (it.left != 0 || it.right != 0) "(L${it.left}R${it.right})" else "" }
         return listOf(
             b("nav", WindowInsets.Type.navigationBars()),
@@ -81,11 +76,10 @@ object UiTrace {
     }
 
     /**
-     * 导航栏的「忽略可见性」取值与当前是否可见（API 30+）。纯手势导航下系统有时把导航栏报成
+     * 导航栏的「忽略可见性」取值与当前是否可见。纯手势导航下系统有时把导航栏报成
      * 不可见但保留高度，只看 getInsets 会误判成 0；两个值并排才看得出系统到底怎么给的。
      */
     fun describeNavVisibility(insets: WindowInsets): String {
-        if (Build.VERSION.SDK_INT < 30) return "navIgnoringVisibility=? navVisible=?"
         val type = WindowInsets.Type.navigationBars()
         val ignoring = insets.getInsetsIgnoringVisibility(type)
         val cutout = insets.displayCutout?.let { "safe(L${it.safeInsetLeft} T${it.safeInsetTop} R${it.safeInsetRight} B${it.safeInsetBottom})" } ?: "无"
@@ -106,16 +100,14 @@ object UiTrace {
             "导航模式 navigation_mode=${secure("navigation_mode")}（0 三键 / 1 两键 / 2 手势） " +
                 "小米 force_fsg_nav_bar=${global("force_fsg_nav_bar")} hide_gesture_line=${global("hide_gesture_line")}",
         )
-        if (Build.VERSION.SDK_INT >= 30) {
-            runCatching {
-                val wm = context.getSystemService(android.view.WindowManager::class.java)
-                val m = wm.currentWindowMetrics
-                out += "窗口 ${m.bounds.width()}x${m.bounds.height()}px  " + describeInsets(m.windowInsets)
-                out += "窗口导航  " + describeNavVisibility(m.windowInsets)
-                // 窗口小于最大窗口 = 分屏 / 小窗 / 浮动；只看尺寸，不读别的应用信息
-                val max = wm.maximumWindowMetrics.bounds
-                out += "最大窗口 ${max.width()}x${max.height()}px 多窗口=${m.bounds.width() != max.width() || m.bounds.height() != max.height()}"
-            }
+        runCatching {
+            val wm = context.getSystemService(android.view.WindowManager::class.java)
+            val m = wm.currentWindowMetrics
+            out += "窗口 ${m.bounds.width()}x${m.bounds.height()}px  " + describeInsets(m.windowInsets)
+            out += "窗口导航  " + describeNavVisibility(m.windowInsets)
+            // 窗口小于最大窗口 = 分屏 / 小窗 / 浮动；只看尺寸，不读别的应用信息
+            val max = wm.maximumWindowMetrics.bounds
+            out += "最大窗口 ${max.width()}x${max.height()}px 多窗口=${m.bounds.width() != max.width() || m.bounds.height() != max.height()}"
         }
         return out
     }

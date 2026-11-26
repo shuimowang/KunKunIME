@@ -3,13 +3,12 @@ package com.windinput.ime.core
 import android.util.Log
 import org.tomlj.Toml
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * 用户层配置（<用户根>/keyboard/config.toml）的最小读写。
- *
- * ⚠️ 过渡实现：正式配置链路由 Rust wind-config 负责（三层合并 + REGISTRY 校验），
- * 本类只服务于 Rust 核心接入前的 Kotlin 侧设置项（点分键 → TOML 节）。
- * 文件格式与桌面用户层 config.toml 一致，接入后可被 wind-config 直接读取。
+ * TOML 配置的最小读写与进程内缓存（点分键 → TOML 节）。
+ * 手机键盘偏好使用独立的 mobile/keyboard.toml；本类也可读取其他配置文件的标量键。
+ * Rust 核心的配置合并与校验仍由 wind-config 负责。
  */
 class UserConfig(private val file: File) {
 
@@ -25,18 +24,39 @@ class UserConfig(private val file: File) {
          * 失效：本进程写入（[put]）直接换上新表；进程外改了文件（测试脚本 run-as 直接写）按
          * 修改时间 + 大小发现。
          */
-        private val cache = HashMap<String, Snapshot>()
+        private val cache = ConcurrentHashMap<String, Snapshot>()
+        // 同一文件的多实例仍串行读改写；后台解析引擎配置不能挡住主线程读取键盘配置。
+        private val fileLocks = ConcurrentHashMap<String, Any>()
     }
+
+    // 只做路径归一化，不用会读盘的 canonicalPath；相对路径/./ 的多实例也共享一份状态。
+    private val fileKey = file.absoluteFile.toPath().normalize().toString()
+    private val fileLock = fileLocks.computeIfAbsent(fileKey) { Any() }
 
     private class Snapshot(val modified: Long, val length: Long, val values: Map<String, Any>)
 
+    /** 一次应用设置所用的只读快照；各 getter 不再检查文件，也不会随之后的写入改变。 */
+    class Values internal constructor(private val values: Map<String, Any>) {
+        fun getBoolean(key: String, default: Boolean): Boolean =
+            values[key] as? Boolean ?: default
+
+        fun getInt(key: String, default: Int): Int =
+            (values[key] as? Long)?.toInt() ?: default
+
+        fun getString(key: String, default: String): String =
+            values[key] as? String ?: default
+    }
+
+    /** 每次取新快照仍检查外部修改；同一次弹键盘只需取一次，避免逐项重复 stat。 */
+    fun snapshot(): Values = Values(readAll())
+
     /** 点分键 → 值（String/Boolean/Long/Double），读取失败返回空表 */
-    fun readAll(): Map<String, Any> = synchronized(cache) {
+    fun readAll(): Map<String, Any> = synchronized(fileLock) {
         if (!file.isFile) return emptyMap()
         val modified = file.lastModified()
         val length = file.length()
-        cache[file.path]?.takeIf { it.modified == modified && it.length == length }?.let { return it.values }
-        parse().also { cache[file.path] = Snapshot(modified, length, it) }
+        cache[fileKey]?.takeIf { it.modified == modified && it.length == length }?.let { return it.values }
+        parse().also { cache[fileKey] = Snapshot(modified, length, it) }
     }
 
     private fun parse(): Map<String, Any> = try {
@@ -63,26 +83,26 @@ class UserConfig(private val file: File) {
      * 写回一个键值（读全量 → 改内存 → 重新序列化整文件）。
      * 值仅支持标量（Boolean/Long/Double/String）。
      */
-    fun put(key: String, value: Any) = synchronized(cache) {
+    fun put(key: String, value: Any) = synchronized(fileLock) {
         val all = readAll().toMutableMap()
         // 与 TOML 解析出的类型对齐（整数解析出来是 Long）：缓存里放的就是下次读到的样子
         all[key] = if (value is Int) value.toLong() else value
         write(all)
         // 直接换上刚写的表：修改时间精度可能只到秒，同一秒内同长度的两次写（30 → 31）
         // 只凭时间 + 大小分不出来
-        cache[file.path] = Snapshot(file.lastModified(), file.length(), all)
+        cache[fileKey] = Snapshot(file.lastModified(), file.length(), all)
     }
 
     /**
      * 删掉满足 [predicate] 的键（「恢复键盘设置」用），返回删了几个；一个都没删就不动文件。
      */
-    fun removeIf(predicate: (String) -> Boolean): Int = synchronized(cache) {
+    fun removeIf(predicate: (String) -> Boolean): Int = synchronized(fileLock) {
         val all = readAll()
         val kept = all.filterKeys { !predicate(it) }
         val removed = all.size - kept.size
         if (removed > 0) {
             write(kept)
-            cache[file.path] = Snapshot(file.lastModified(), file.length(), kept)
+            cache[fileKey] = Snapshot(file.lastModified(), file.length(), kept)
         }
         removed
     }
