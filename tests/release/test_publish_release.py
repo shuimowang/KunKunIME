@@ -9,7 +9,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -121,6 +121,71 @@ class ReleasePublicationTest(unittest.TestCase):
                                        "android", self.notes, {}, True, True)
             self.assertEqual("awaiting_signed_android_apk", result["status"])
             gh.assert_not_called()
+
+    def test_created_draft_waits_only_until_release_list_becomes_visible(self):
+        tag = "android-v0.1.0"
+        release = dict(self.release(names=set()), tag_name=tag)
+        for missed_reads in range(5):
+            with self.subTest(missed_reads=missed_reads), \
+                    patch.object(publisher, "ensure_tag") as ensure_tag, \
+                    patch.object(publisher, "api", side_effect=[
+                        [], *([[]] * missed_reads), [release],
+                    ]) as api, patch.object(publisher, "gh") as gh, \
+                    patch.object(publisher.time, "sleep") as sleep:
+                result = publisher.publish(REPO, tag, COMMIT, "android", self.notes,
+                                           {}, True, False)
+                self.assertEqual("awaiting_signed_android_apk", result["status"])
+                self.assertEqual(COMMIT, result["source_sha"])
+                ensure_tag.assert_called_once_with(REPO, tag, COMMIT)
+                self.assertEqual([call(delay) for delay in (1, 2, 4, 8)[:missed_reads]],
+                                 sleep.call_args_list)
+                self.assertEqual([call(f"repos/{REPO}/releases?per_page=100&page=1")] *
+                                 (missed_reads + 2), api.call_args_list)
+                gh.assert_called_once()
+                self.assertEqual(("release", "create", tag), gh.call_args.args[:3])
+                self.assertIn("--draft", gh.call_args.args)
+                self.assertIn("--latest=false", gh.call_args.args)
+
+    def test_created_draft_permanently_missing_stops_without_creating_again(self):
+        with patch.object(publisher, "ensure_tag") as ensure_tag, \
+                patch.object(publisher, "api", return_value=[]) as api, \
+                patch.object(publisher, "gh") as gh, \
+                patch.object(publisher.time, "sleep") as sleep:
+            with self.assertRaisesRegex(ValueError, "Expected an unpublished draft"):
+                self.publish()
+            ensure_tag.assert_called_once_with(REPO, TAG, COMMIT)
+            self.assertEqual(6, api.call_count)
+            self.assertEqual([call(1), call(2), call(4), call(8)], sleep.call_args_list)
+            gh.assert_called_once()
+            self.assertEqual(("release", "create", TAG), gh.call_args.args[:3])
+
+    def test_created_release_must_still_be_an_unpublished_same_commit_draft(self):
+        for visible, message in (
+            (self.release(draft=False), "Expected an unpublished draft"),
+            (dict(self.release(), target_commitish=OTHER), "different commit"),
+        ):
+            with self.subTest(message=message), patch.object(publisher, "ensure_tag"), \
+                    patch.object(publisher, "api", side_effect=[[], [], [visible]]) as api, \
+                    patch.object(publisher, "gh") as gh, \
+                    patch.object(publisher.time, "sleep") as sleep:
+                with self.assertRaisesRegex(ValueError, message):
+                    self.publish()
+                self.assertEqual(3, api.call_count)
+                sleep.assert_called_once_with(1)
+                gh.assert_called_once()
+                self.assertEqual(("release", "create", TAG), gh.call_args.args[:3])
+
+    def test_created_draft_lookup_errors_are_not_retried(self):
+        with patch.object(publisher, "ensure_tag"), \
+                patch.object(publisher, "api", side_effect=[[], RuntimeError("HTTP 403")]) as api, \
+                patch.object(publisher, "gh") as gh, \
+                patch.object(publisher.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
+                self.publish()
+            self.assertEqual(2, api.call_count)
+            sleep.assert_not_called()
+            gh.assert_called_once()
+            self.assertEqual(("release", "create", TAG), gh.call_args.args[:3])
 
     def test_android_version_selects_channel_without_publishing_or_replacing_latest(self):
         for version, prerelease in (("0.1.0", False), ("0.1.0-preview.4", True)):

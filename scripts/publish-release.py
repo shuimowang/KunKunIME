@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?\Z")
@@ -146,8 +147,6 @@ def publish(repository: str, tag: str, source_sha: str, title: str, notes: Path,
         if files:
             verify_assets(repository, tag, release, files)
         return {"status": "already_published", "url": release["html_url"], "tag": tag}
-    if release and release["target_commitish"] != source_sha:
-        raise ValueError("Existing draft targets a different commit")
     if release is None:
         command = ["release", "create", tag, "--repo", f"github.com/{repository}",
                    "--verify-tag", "--target", source_sha, "--draft", "--latest=false",
@@ -156,8 +155,17 @@ def publish(repository: str, tag: str, source_sha: str, title: str, notes: Path,
             command.append("--prerelease")
         gh(*command)
         release = find_release(repository, tag)
+        # A successful create can precede visibility in the release list. Only
+        # retry this read, never creation or a response that is already visible.
+        for delay in (1, 2, 4, 8):
+            if release is not None:
+                break
+            time.sleep(delay)
+            release = find_release(repository, tag)
     if not release or not release["draft"]:
         raise ValueError("Expected an unpublished draft")
+    if release["target_commitish"] != source_sha:
+        raise ValueError("Existing draft targets a different commit")
     if draft_only:
         return {"status": "awaiting_signed_android_apk", "url": release["html_url"],
                 "tag": tag, "source_sha": source_sha}
