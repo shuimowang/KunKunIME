@@ -1,7 +1,7 @@
 //! Android FFI 的离线全拼 / 英文真实词库验收。
 //!
-//! Linux 宿主与 Android 同用 XDG 路径。直接读取单仓的 WindInput/data，或显式指定
-//! KUNKUN_IME_TEST_DATA 指向 prepare-assets.py 生成的 assets/data。必需数据缺失即失败，
+//! Linux 宿主与 Android 同用 XDG 路径。读取 prepare-assets.py 从共享数据与手机配置生成的
+//! assets/data，也可用 KUNKUN_IME_TEST_DATA 指定产物目录。必需数据缺失即失败，
 //! 不依赖五笔、不下载第三方仓库、不把“跳过”算作通过。
 //!
 //! 核心含进程级目录与配置缓存，因此整个场景在一个测试、一个核心中顺序执行。
@@ -55,7 +55,7 @@ fn source_data() -> PathBuf {
     let path = std::env::var_os("KUNKUN_IME_TEST_DATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../WindInput/data")
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../app/src/main/assets/data")
         });
     for relative in [
         "config.toml",
@@ -190,8 +190,9 @@ fn offline_full_pinyin_english_and_private_persistence() {
         .position(|text| text.to_ascii_lowercase().starts_with("beau") && text.len() > 4)
         .unwrap_or_else(|| panic!("英文真实词库必须给出 beau 补全，实得 {candidates:?}"));
     assert_eq!(
-        committed(&core.select_candidate(completion as u32)).trim_end(),
-        candidates[completion],
+        committed(&core.select_candidate(completion as u32)),
+        format!("{} ", candidates[completion]),
+        "点选英文补全必须恰好追加一个空格",
     );
     core.focus_lost();
     core.focus_gained();
@@ -201,6 +202,34 @@ fn offline_full_pinyin_english_and_private_persistence() {
         "hello ",
         "触摸英文空格应提交原文并自动补空格",
     );
+    let period = core.press(
+        PressKey::Char {
+            ch: ".".into(),
+            shifted: false,
+        },
+        KeySource::Touch,
+    );
+    assert!(period.consumed);
+    assert_eq!(period.ops.len(), 1, "句末标点只替换之前补的空格");
+    assert_eq!(period.ops[0].kind, 3, "标点走 ReplaceBackward");
+    assert_eq!(period.ops[0].count, 1);
+    assert_eq!(period.ops[0].text, ". ");
+
+    // 手机的自动空格开关必须是唯一控制点，关闭后底层引擎也不能留下一个空格。
+    core.set_auto_space(false);
+    type_touch(&core, "world");
+    assert_eq!(
+        committed(&core.press(PressKey::Space, KeySource::Touch)),
+        "world",
+        "关闭手机自动空格后，英文方案不能再自行补空格",
+    );
+    core.set_auto_space(true);
+
+    // 表情 / 数字等宿主直出内容前的原样选词必须完全不补空格。
+    core.focus_lost();
+    core.focus_gained();
+    type_touch(&core, "hello");
+    assert_eq!(committed(&core.select_candidate_plain(0)), "hello");
 
     // Android 设置写盘必须与 Kotlin DataDirs / LogLevel / 重置入口同址。
     core.config_set(

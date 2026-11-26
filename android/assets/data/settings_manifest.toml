@@ -2414,16 +2414,6 @@ advanced = true
 [[item]]
 page = "schema"
 section = "英文"
-key = "schema.english.commit_space"
-source = "engine"
-type = "toggle"
-title = "上屏后自动加空格"
-summary = "上屏英文词后补一个空格，连续打词不必手动按；回车上屏不补"
-advanced = true
-
-[[item]]
-page = "schema"
-section = "英文"
 key = "schema.english.frequency.enabled"
 source = "engine"
 type = "toggle"

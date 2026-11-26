@@ -12,6 +12,14 @@ class SettingsManifestTest {
     }
 
     @Test
+    fun englishSpacingHasOnePhoneControl() {
+        val keys = bundled.items.map { it.key }
+        assertTrue("手机自动空格开关必须可用", "ui.android.auto_space" in keys)
+        assertTrue("不能同时暴露桌面补空格开关，否则一次确认会出现两个空格",
+            "schema.english.commit_space" !in keys)
+    }
+
+    @Test
     fun homeHasThreeSegmentsInDesignOrder() {
         assertEquals(
             listOf("schema", "input", "ui", "stats", "dict", "keyboard", "keys", "toolbar", "advanced", "about"),

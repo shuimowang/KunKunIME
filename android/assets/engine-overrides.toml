@@ -6,6 +6,11 @@ active = "pinyin"
 available = ["pinyin", "shuangpin", "english"]
 dict_cache_policy = "preload"
 
+# The touch layer owns the phone's automatic space and punctuation replacement.
+# The desktop engine must not add another trailing space before that layer runs.
+[schema.english]
+commit_space = false
+
 [debug]
 log_level = "warn"
 
