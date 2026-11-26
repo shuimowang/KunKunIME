@@ -1,0 +1,177 @@
+name: Android build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Android change detection
+    runs-on: ubuntu-24.04
+    outputs:
+      android: ${{ steps.filter.outputs.android }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BASE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import subprocess
+
+          base = os.environ["PR_BASE"] or os.environ["PUSH_BASE"]
+          run = True
+          if os.environ["EVENT_NAME"] != "workflow_dispatch" and base and set(base) != {"0"}:
+              paths = subprocess.check_output(
+                  ["git", "diff", "--name-only", "--no-renames", "-z", base, "HEAD"]
+              ).decode().split("\0")
+              run = any(p.startswith(("android/", "WindInput/", "licenses/")) or
+                        p in {".github/workflows/android.yml", "LICENSE", "ORIGINS.md"}
+                        for p in paths)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"android={str(run).lower()}\n")
+          PY
+
+  build:
+    name: Android native core, APK and device smoke test
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    defaults:
+      run:
+        shell: bash
+        working-directory: android
+    steps:
+      # Both the Android binding and WindInput are from this exact checkout.
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - name: Set up Java 21
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+          cache-dependency-path: |
+            android/**/*.gradle.kts
+            android/gradle/libs.versions.toml
+            android/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Set up Android SDK and NDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          packages: platforms;android-37.0 build-tools;37.0.0 platform-tools ndk;28.2.13676358
+
+      - name: Resolve Android build tools before compiling native libraries
+        run: ./gradlew help --no-daemon
+
+      - name: Select the same Rust version as Windows
+        run: |
+          rustup toolchain install 1.100.0 --profile minimal --target aarch64-linux-android,x86_64-linux-android
+          rustup default 1.100.0
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
+      - name: Cache Android Rust builds
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: android/rust
+          cache-on-failure: true
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --version 4.1.2 --locked
+
+      - name: Assemble the shared Pinyin and English assets
+        run: python3 scripts/prepare-assets.py
+
+      - name: Test real Pinyin and English through the Rust mobile binding
+        working-directory: android/rust
+        env:
+          KUNKUN_IME_TEST_DATA: ${{ github.workspace }}/android/app/src/main/assets/data
+        run: cargo test --locked -p wind-android --lib --test key_flow -- --test-threads=1
+
+      - name: Build arm64 and x86_64 native libraries and generate Kotlin bindings
+        run: scripts/build-rust.sh release
+
+      - name: Check native libraries and generated UniFFI bindings
+        run: |
+          test -s app/src/main/jniLibs/arm64-v8a/libwind_android.so
+          test -s app/src/main/jniLibs/x86_64/libwind_android.so
+          test -s app/src/main/java/uniffi/wind_android/wind_android.kt
+
+      - name: Generate notices for the actual Rust dependencies
+        run: scripts/gen-rust-licenses.sh
+
+      - name: Test Kotlin and build the app plus instrumentation APK
+        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
+
+      - name: Verify phone and emulator APK architectures and shared app code
+        run: python3 scripts/verify-apks.py
+
+      - name: Enable emulator acceleration
+        run: |
+          test -e /dev/kvm
+          sudo chmod a+rw /dev/kvm
+
+      - name: Verify the installed app with a real Android input connection
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          cores: 2
+          ram-size: 3072M
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          disable-animations: true
+          working-directory: android
+          script: bash scripts/smoke-test.sh
+
+      - name: Upload device and JVM test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: KunKunIME-Android-test-reports
+          path: |
+            android/app/build/reports/tests/
+            android/app/build/test-results/
+            android/app/build/smoke-results/
+            android/app/build/outputs/mapping/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload the verified ARM64 phone APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: KunKunIME-Android-arm64-debug
+          path: android/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload the verified x86_64 emulator APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: KunKunIME-Android-x86_64-debug
+          path: android/app/build/outputs/apk/debug/app-x86_64-debug.apk
+          if-no-files-found: error
+          retention-days: 14

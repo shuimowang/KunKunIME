@@ -1,0 +1,41 @@
+# 九宫格数字键盘（数字 / 电话 / 日期框自动调起，123 层「1234」进入；语法说明见 qwerty.toml）
+#
+# 形态按豆包 / 微信（docs/android-ime-features.md §14.4）：
+#   左列前三行是占位空白，视图在那里画可上下滚动的符号列（电话框换成 * # +）；
+#   右列 ⌫ · 空格 · 换行，换行占两行（第 4 行同一位置放等宽 spacer）。
+#   底行左起「符号」「返回」与字母层、123 层同一位置：符号入口不随层变，返回总在第二格。
+# 数字和句点用 commit 原样上屏：中文模式下句点不能变「。」，有编码时数字不能变成选词。
+
+[meta]
+id = "number"
+name = "数字键盘"
+
+[[rows]]
+key = [
+  { spacer = 1 },
+  { commit = "1", width = 1.4 }, { commit = "2", width = 1.4 }, { commit = "3", width = 1.4 },
+  { label = "⌫", action = "backspace" },
+]
+
+[[rows]]
+key = [
+  { spacer = 1 },
+  { commit = "4", width = 1.4 }, { commit = "5", width = 1.4 }, { commit = "6", width = 1.4 },
+  { label = "空格", action = "space", special = true },
+]
+
+[[rows]]
+key = [
+  { spacer = 1 },
+  { commit = "7", width = 1.4 }, { commit = "8", width = 1.4 }, { commit = "9", width = 1.4 },
+  { label = "换行", action = "enter", row_span = 2, accent = true },
+]
+
+[[rows]]
+key = [
+  { label = "符号", action = "symbol_page" },
+  { label = "返回", action = "switch_symbols", width = 1.4, accent = true },
+  { commit = "0", width = 1.4 },
+  { commit = ".", width = 1.4 },
+  { spacer = 1 },
+]

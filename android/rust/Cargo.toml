@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["wind-android"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+
+# 与主仓 workspace 同一套 lint 策略：调试残留与占位实现不得进主干。
+# `todo!`/`unimplemented!` 尤其隐蔽——它们编译得过、跑到才 panic，是最典型的「假完成」。
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"

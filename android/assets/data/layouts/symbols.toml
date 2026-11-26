@@ -1,0 +1,44 @@
+# 123 层布局（语法说明见 qwerty.toml）
+#
+# 形态按豆包 / 微信（docs/android-ime-features.md §14.2）。标点一律写 ASCII：
+# 中文模式下键面显示「：（）……“、」，输出由引擎转换；布局只说「这是冒号」。
+
+[meta]
+id = "symbols"
+name = "123"
+
+[[rows]]
+keys = "1234567890"
+
+[[rows]]
+# 中文：- / ： ～ （ ） …… @ “ ‘；英文 ^ 改出 _
+key = [
+  { chars = "-/:~()" },
+  { text = "^", en_text = "_" },
+  { chars = "@\"'" },
+]
+
+[[rows]]
+# 中文：。 ， 、 ？ ！ 和一个半角句点（原样上屏，打小数用）；
+# 英文下 \ 改出 '，半角句点改出 ;，免得一行两个句点
+key = [
+  { label = "1234", action = "number_pad", width = 1.5 },
+  { chars = ".," },
+  { text = "\\", en_text = "'" },
+  { chars = "?!" },
+  { commit = ".", en_text = ";" },
+  { label = "⌫", action = "backspace", width = 1.5 },
+]
+
+# 底行与字母层底行同宽对齐：
+#   左下永远是「符号」（字母层、123 层、数字键盘同一位置，真机反馈：入口不能随层乱跑）；
+#   切换键「哪里进、哪里回」：字母层「123」那一格 = 这里的「返回」 = 数字键盘的「返回」。
+#   「1234」挪到第 3 行左端（原「符号」的位置）
+[[rows]]
+key = [
+  { label = "符号", action = "symbol_page", width = 1.35 },
+  { label = "返回", action = "switch_symbols", width = 1.15, accent = true },
+  { label = "☺", action = "emoji" },
+  { label = "空格", action = "space", width = 5.1 },
+  { label = "换行", action = "enter", width = 1.4, accent = true },
+]

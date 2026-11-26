@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose 自绘 UI，仅需一个无 ActionBar 的系统基底主题 -->
+    <style name="Theme.WindInput" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+
+    <!-- 文件关联的导入入口：透明壳，只显示对话框，叠在来源应用上面 -->
+    <style name="Theme.WindInput.Translucent" parent="Theme.WindInput">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+</resources>

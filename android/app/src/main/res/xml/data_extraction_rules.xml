@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 系统备份与换机迁移规则（Android 12 起：android:dataExtractionRules）。
+     进 / 不进备份的取舍见 backup_rules.xml 的注释；三处的排除项必须一致（BackupRulesTest 核对）。 -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="clipboard.json" />
+        <exclude domain="file" path="data/" />
+        <exclude domain="file" path="rust/data/KunKunIME/cache/" />
+        <exclude domain="file" path="rust/data/KunKunIME/logs/" />
+        <exclude domain="file" path="rust/userdata.redb.state/lock" />
+        <exclude domain="sharedpref" path="ime_insets.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="clipboard.json" />
+        <exclude domain="file" path="data/" />
+        <exclude domain="file" path="rust/data/KunKunIME/cache/" />
+        <exclude domain="file" path="rust/data/KunKunIME/logs/" />
+        <exclude domain="file" path="rust/userdata.redb.state/lock" />
+        <exclude domain="sharedpref" path="ime_insets.xml" />
+    </device-transfer>
+</data-extraction-rules>

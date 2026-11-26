@@ -1,0 +1,47 @@
+[package]
+name = "wind-android"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+# Kotlin 绑定生成器（host 侧工具，不进 Android 产物）：
+# cargo run -p wind-android --features cli --bin uniffi-bindgen -- \
+#   generate --library <wind_android.dll/.so> --language kotlin --out-dir <dir>
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi_bindgen.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["uniffi/cli"]
+
+[dependencies]
+# ⚠ **只此一条**通往核心。绑定层曾经直接 path 依赖七个核心 crate
+# （coordinator/host/bridge/config/ipc/keys/ui-types），等于焊在核心的内部结构上：
+# 核心一次内部重构就打断本仓构建，而本仓在另一条 CI 上，断了往往过几天才发现。
+# 新增能力时改 wind-mobile 的门面，不要在这里另开一条 path 依赖绕过它。
+#
+# 单仓布局：android/rust/wind-android 回到仓库根后，引用同一份 WindInput 核心。
+wind-mobile = { path = "../../../WindInput/wind_input/crates/wind-mobile" }
+# 与检入的 Kotlin 绑定及 Cargo.lock 同版；升级时必须一起重新生成。
+uniffi = "=0.32.0"
+# 只用来读 zip 中央目录里声明的解压后大小（手机端另设更低的上限，见 scheme::MAX_UNPACKED_BYTES）。
+# 与主仓 wind-transfer 同一版本、同一组 feature，已在依赖树里，不多编一份代码。
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# Rust 日志 → logcat：没有它，引擎侧问题在设备上只能盲猜（walking skeleton
+# 首测就栽在这上面）。仅 Android 目标编译，桌面构建（跑测试、生成绑定）不受影响。
+[target.'cfg(target_os = "android")'.dependencies]
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
+tracing-android = "0.2"
+
+[dev-dependencies]
+# 方案包测试在代码里现打 zip / 建临时目录，不往仓库塞二进制样例。
+tempfile = "3"
+# 真实输入验收读取核心配置落盘，校验目录兼容与恢复默认行为。
+toml = "0.8"
+
+[lints]
+workspace = true

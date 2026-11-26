@@ -1,0 +1,37 @@
+*.iml
+.gradle/
+/local.properties
+.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+app/build/
+app/src/main/assets/data/
+*.apk
+*.aab
+.kotlin/
+
+# Rust 交叉编译产物与同次构建生成的 UniFFI 绑定
+app/src/main/jniLibs/
+app/src/main/java/uniffi/
+rust/target/
+
+# OMC/会话运行时产物
+.omc/
+.remember/
+.superpowers/
+docs/superpowers/
+
+# 所有签名密钥均留在构建环境，不提交仓库
+keystore/*.keystore
+keystore/*.jks
+keystore/release*
+*.p12
+*.keystore
+*.jks
+keystore-password.txt
+
+# 本机生成物（图片生成等中间产物）
+output/

@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 按键振动强度可调：系统 performHapticFeedback 的强度定死，要自己调振动器（KeyHaptics） -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- 输入法不申请网络权限。下载与更新、反馈链接均由用户主动交给浏览器打开。 -->
+
+    <!-- 系统备份：设置与个人词库进备份，剪贴板历史、出厂数据、缓存不进（见 res/xml/backup_rules.xml） -->
+    <application
+        android:name=".WindInputApp"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.WindInput">
+
+        <!-- 诊断压缩包分享：只开放 cacheDir/diagnostics/（见 res/xml/file_paths.xml） -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- 输入法服务：Android IME 框架对接点 -->
+        <service
+            android:name=".service.WindInputImeService"
+            android:label="@string/ime_name"
+            android:permission="android.permission.BIND_INPUT_METHOD"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
+
+        <!-- 输入测试台：模拟器自动化测试用（scripts/smoke-test.sh） -->
+        <activity
+            android:name=".settings.TestPadActivity"
+            android:exported="true"
+            android:label="输入测试台"
+            android:windowSoftInputMode="stateVisible|adjustResize" />
+
+        <!-- 设置入口（Compose，miuix 风格）。只在这里开预测性返回：侧滑时页面跟手；
+             不放在 application 上，免得改变输入法服务自己的返回键处理 -->
+        <activity
+            android:name=".settings.SettingsActivity"
+            android:enableOnBackInvokedCallback="true"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 方案包文件关联：.wpkg / .zip 的 VIEW 与 SEND，进预览 / 导入（透明壳，界面同设置页「导入方案」）。
+             .wpkg 没有标准 MIME，靠 pathPattern 认；pathPattern 的 `.*` 不回溯，
+             文件名里带点（a.b.wpkg）时前一条匹配不上，所以多写几条 -->
+        <activity
+            android:name=".settings.SchemeImportActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
+            android:excludeFromRecents="true"
+            android:label="导入方案"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.WindInput.Translucent">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.wpkg" />
+                <data android:pathPattern=".*\\..*\\.wpkg" />
+                <data android:pathPattern=".*\\..*\\..*\\.wpkg" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

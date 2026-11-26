@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 系统备份规则（Android 11 及以前：android:fullBackupContent）。
+     Android 12 起用 data_extraction_rules.xml，两份的排除项必须一致，改一份要同步另一份
+     （BackupRulesTest 核对）。
+
+     进备份：设置、个人词库与统计、方案覆盖、导入的扩展词库（file 域 rust/），
+     键盘设置与布局（file 域 mobile/），键盘小状态（shared_prefs）。这些目录都是本应用私有目录。
+     不进备份（只写排除项，其余默认都进）：
+     - clipboard.json：剪贴板历史，可能有隐私内容，也不该跟着换机
+     - data/（file 域）：随 APK 的出厂数据，升级时整体重放
+     - rust/data/KunKunIME/cache、logs（file 域）：核心的本地目录，词库编译缓存可重建，日志不带走
+     - rust/userdata.redb.state/lock（file 域）：进程锁文件
+     - ime_insets.xml：导航栏避让的本机测量值，换机就不对了
+     cacheDir 与 noBackupFilesDir（崩溃记录，见 CrashLog）系统本来就不备份。 -->
+<full-backup-content>
+    <exclude domain="file" path="clipboard.json" />
+    <exclude domain="file" path="data/" />
+    <exclude domain="file" path="rust/data/KunKunIME/cache/" />
+    <exclude domain="file" path="rust/data/KunKunIME/logs/" />
+    <exclude domain="file" path="rust/userdata.redb.state/lock" />
+    <exclude domain="sharedpref" path="ime_insets.xml" />
+</full-backup-content>

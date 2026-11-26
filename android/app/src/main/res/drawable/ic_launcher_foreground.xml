@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 路径直接取自仓库 assets/kunkun.svg，居中放在 108dp 自适应图标的安全区域。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:translateX="22" android:translateY="22">
+        <path android:fillColor="#F4CE87"
+            android:pathData="m49,8 l1.7,5.3 L56,15 l-5.3,1.7 L49,22 l-1.7,-5.3 L42,15 l5.3,-1.7 z" />
+        <path android:fillColor="#00000000"
+            android:strokeColor="#F9F5EF"
+            android:strokeWidth="4.4"
+            android:strokeLineCap="round"
+            android:pathData="M12,29 c3,7 9,9 15,3 m9,-1 c4,6 10,5 15,-2" />
+        <path android:fillColor="#D2CBEA"
+            android:pathData="M22.8,46 H41.2 A1.8,1.8 0,0 1,43,47.8 A1.8,1.8 0,0 1,41.2,49.6 H22.8 A1.8,1.8 0,0 1,21,47.8 A1.8,1.8 0,0 1,22.8,46 Z" />
+    </group>
+</vector>
