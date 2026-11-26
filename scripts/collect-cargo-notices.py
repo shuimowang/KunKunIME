@@ -18,6 +18,11 @@ ZUNE_COMMITS = {
     ("zune-core", "0.4.12"): "f8fbb123d5ed04441e8324a555bfcda0cb1bd28f",
     ("zune-jpeg", "0.4.21"): "fa2c767a01d7d9373911d0bf63e0588553d67e0e",
 }
+UNIFFI_COMMIT = "5c7b73906358e1a7acdc1bdc7bf5cd86fb27e44c"
+UNIFFI_032_PACKAGES = {
+    "uniffi", "uniffi_bindgen", "uniffi_core", "uniffi_internal_macros",
+    "uniffi_macros", "uniffi_meta", "uniffi_pipeline", "uniffi_udl",
+}
 NOTICE = re.compile(
     r"^(?:licen[cs]es?|copying|copyright|notices?|unlicense|authors|patents|ofl|"
     r"third[-_ ]party[-_ ](?:licen[cs]es?|notices?|attributions?))(?:$|[ ._-])", re.I
@@ -137,6 +142,16 @@ def collect(output, archive_path, offline, manifest=MANIFEST, targets=(TARGET,),
             override = Path(__file__).parent.resolve() / "license-overrides/zune-image"
             files = [override / "LICENSE.md", override / "LICENSE-ZLIB"]
             row["notice_source"] = f"https://github.com/etemesi254/zune-image/tree/{commit}"
+        if not files and p["version"] == "0.32.0" and p["name"] in UNIFFI_032_PACKAGES:
+            # These published crates omit their workspace-root MPL notice.
+            # Accept only the reviewed release, never a generic SPDX fallback.
+            vcs = json.loads((folder / ".cargo_vcs_info.json").read_text(encoding="utf-8"))
+            if (p["license"] != "MPL-2.0" or vcs["git"]["sha1"] != UNIFFI_COMMIT
+                    or vcs["path_in_vcs"] != p["name"]):
+                raise RuntimeError(f"Upstream license pin changed for {versioned}")
+            override = Path(__file__).parent.resolve() / "license-overrides/uniffi-rs"
+            files = [override / "LICENSE"]
+            row["notice_source"] = f"https://github.com/mozilla/uniffi-rs/blob/{UNIFFI_COMMIT}/LICENSE"
         if not files:
             raise RuntimeError(f"Review missing third-party notice for {versioned}")
         row["notices"] = {}
