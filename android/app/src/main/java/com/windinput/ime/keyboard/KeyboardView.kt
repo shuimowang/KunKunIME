@@ -36,6 +36,9 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     interface Listener {
+        /** A fresh key interaction cancels speech before this key's own gesture is prepared. */
+        fun onKeyboardInteraction() = Unit
+
         fun onKeyAction(action: KeyAction, shifted: Boolean)
 
         /** 空格滑动移光标：delta 为有符号步数（右正左负） */
@@ -61,6 +64,15 @@ class KeyboardView(context: Context) : View(context) {
 
         /** 功能键长按（空格 → 按设置切输入法 / 语音；中英键弹不出菜单时退到这里） */
         fun onKeyLongPress(action: KeyAction)
+
+        /** 长按空格开始语音；拒绝启动仍消费本次长按，抬手不会补空格。 */
+        fun onSpaceVoiceStart(): Boolean = false
+
+        /** 上滑进入取消区 / 滑回继续录音；状态变化时才回调。 */
+        fun onSpaceVoiceCancelChanged(cancel: Boolean) = Unit
+
+        /** 松手结束；cancel=true 表示丢弃本次语音（上滑、系统取消或视图隐藏）。 */
+        fun onSpaceVoiceEnd(cancel: Boolean) = Unit
 
         /**
          * 功能键长按的竖排菜单：手指不抬、上移选、抬手定（中英键：各方案 + 切换输入法）。
@@ -105,6 +117,9 @@ class KeyboardView(context: Context) : View(context) {
 
     /** 长按空格有没有动作（设置项 ui.android.space_long_press ≠ none）；做什么由 Service 决定 */
     var spaceLongPressEnabled = false
+
+    /** voice 模式走按住录音 / 松手结束；其他长按模式仍走 onKeyLongPress。 */
+    var spaceVoiceEnabled = false
     var backspaceSwipeEnabled = true
     var swipeSymbolsEnabled = true
 
@@ -391,6 +406,19 @@ class KeyboardView(context: Context) : View(context) {
     private var spaceSwipeActive = false
     private var lastStepX = 0f
 
+    private val spaceVoiceGesture = SpaceVoiceGesture(
+        cancelThresholdPx = 64f * density,
+        onStart = { listener?.onSpaceVoiceStart() == true },
+        onCancelChanged = { listener?.onSpaceVoiceCancelChanged(it) },
+        onEnd = { listener?.onSpaceVoiceEnd(it) },
+    )
+
+    /**
+     * 识别已结束、切换输入框等场景由 Service 中止；不放过当前手指后续的 UP。
+     * 内部先清活动标记再回调，因此重复调用或回调重入都不会重复终止识别。
+     */
+    fun cancelSpaceVoiceGesture() = spaceVoiceGesture.abort()
+
     /** 退格键的全部手势（点按 / 连删 / 左滑扩选 / 上滑双选项 / 下滑恢复）见 [BackspaceGesture] */
     private val backspaceGesture = BackspaceGesture(
         object : BackspaceGesture.Listener {
@@ -434,6 +462,14 @@ class KeyboardView(context: Context) : View(context) {
     private val longPressRunnable = Runnable {
         val key = pressedKey ?: return@Runnable
         val rect = pressedRect ?: return@Runnable
+        if (key.action == KeyAction.Space && spaceVoiceEnabled) {
+            if (spaceSwipeActive) return@Runnable
+            longPressFired = true
+            popupManager.dismissAll()
+            repeatHaptic()
+            spaceVoiceGesture.start(lastY)
+            return@Runnable
+        }
         val popup = popupChars(key)
         if (popup.isNotEmpty()) {
             popupManager.dismissPreview()
@@ -464,7 +500,8 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     private fun hasLongPressAction(action: KeyAction): Boolean =
-        action == KeyAction.SwitchLang || (action == KeyAction.Space && spaceLongPressEnabled)
+        action == KeyAction.SwitchLang ||
+            (action == KeyAction.Space && (spaceLongPressEnabled || spaceVoiceEnabled))
 
     /** 长按气泡的字符集，字母键是「大写 | 符号 | 小写」，见 [KeyDef.popupChars] */
     private fun popupChars(key: KeyDef): String = key.popupChars(englishMode)
@@ -480,8 +517,8 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     override fun onDetachedFromWindow() {
-        backspaceGesture.cancel()
-        popupManager.dismissAll()
+        cancelPress()
+        activePointerId = MotionEvent.INVALID_POINTER_ID
         handler.removeCallbacks(clearHighlight)
         handler.removeCallbacks(clearSideHighlight)
         sideScroller.forceFinished(true)
@@ -600,6 +637,7 @@ class KeyboardView(context: Context) : View(context) {
 
     /** 左列按下：先停住滑行（这一下只是「停」，不算点选），否则记下按的是哪格 */
     private fun startSideTouch(event: MotionEvent) {
+        listener?.onKeyboardInteraction()
         val stoppedFling = !sideScroller.isFinished
         sideScroller.forceFinished(true)
         sideTouch = true
@@ -871,10 +909,17 @@ class KeyboardView(context: Context) : View(context) {
                 if (i >= 0) movePress(event.getX(i), event.getY(i))
             }
             MotionEvent.ACTION_POINTER_UP -> {
-                if (event.getPointerId(event.actionIndex) == activePointerId) finishPress()
+                if (event.getPointerId(event.actionIndex) == activePointerId) {
+                    if (spaceVoiceGesture.consumed) spaceVoiceGesture.move(event.getY(event.actionIndex))
+                    finishPress()
+                    activePointerId = MotionEvent.INVALID_POINTER_ID
+                }
             }
             MotionEvent.ACTION_UP -> {
-                if (event.getPointerId(0) == activePointerId) finishPress()
+                if (event.getPointerId(0) == activePointerId) {
+                    if (spaceVoiceGesture.consumed) spaceVoiceGesture.move(event.y)
+                    finishPress()
+                }
                 activePointerId = MotionEvent.INVALID_POINTER_ID
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -891,6 +936,9 @@ class KeyboardView(context: Context) : View(context) {
             longPressFired
 
     private fun startPress(pointerId: Int, x: Float, y: Float) {
+        // Service cancellation may abort the previous Space press. Notify
+        // before reset/prepare below, never after creating this press's PENDING.
+        listener?.onKeyboardInteraction()
         activePointerId = pointerId
         lastY = y
         downX = x
@@ -905,6 +953,8 @@ class KeyboardView(context: Context) : View(context) {
         pressedKey = bounds?.key
         pressedRect = bounds?.rect
         val key = bounds?.key
+        spaceVoiceGesture.reset()
+        if (key?.action == KeyAction.Space) spaceVoiceGesture.prepare()
         // 高亮立刻改指新键（连击时上一键的延迟清除不会误伤：clearHighlight 已撤销）
         handler.removeCallbacks(clearHighlight)
         highlightKey = key
@@ -928,6 +978,10 @@ class KeyboardView(context: Context) : View(context) {
     private fun movePress(x: Float, y: Float) {
         val key = pressedKey ?: return
         lastY = y
+        if (spaceVoiceGesture.consumed) {
+            spaceVoiceGesture.move(y)
+            return
+        }
         if (popupManager.isPopupShown) {
             if (optionsAction != null && !optionsMoved) {
                 if (kotlin.math.abs(y - optionsAnchorY) < touchSlopPx) return
@@ -941,7 +995,9 @@ class KeyboardView(context: Context) : View(context) {
 
         // 空格横向滑动：移动光标（步进制，进入后不再出空格）
         if (key.action == KeyAction.Space && spaceSwipeEnabled) {
-            if (!spaceSwipeActive && kotlin.math.abs(dx) > swipeActivatePx) {
+            if (!spaceSwipeActive && kotlin.math.abs(dx) > swipeActivatePx &&
+                spaceVoiceGesture.beginCursor()
+            ) {
                 spaceSwipeActive = true
                 cancelTimers()
                 popupManager.dismissAll()
@@ -1003,6 +1059,11 @@ class KeyboardView(context: Context) : View(context) {
 
     /** 当前手指抬起（或被下一指顶替）：按本次按压的状态决定发什么 */
     private fun finishPress() {
+        if (spaceVoiceGesture.consumed) {
+            spaceVoiceGesture.release()
+            cancelPress()
+            return
+        }
         optionsAction?.let { action ->
             val index = popupManager.popupSelectedIndex()?.takeIf { it != optionsInitial }
             optionsAction = null
@@ -1096,6 +1157,7 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     private fun cancelPress() {
+        spaceVoiceGesture.reset()
         backspaceGesture.cancel()
         cancelTimers()
         popupManager.dismissAll()
@@ -1209,17 +1271,38 @@ class KeyboardView(context: Context) : View(context) {
             kb.rect.roundOut(r)
             node.setBoundsInParent(r)
             node.addAction(androidx.core.view.accessibility.AccessibilityNodeInfoCompat.ACTION_CLICK)
+            if (hasLongPressAction(kb.key.action)) {
+                node.isLongClickable = true
+                node.addAction(androidx.core.view.accessibility.AccessibilityNodeInfoCompat.ACTION_LONG_CLICK)
+            }
         }
 
         override fun onPerformActionForVirtualView(id: Int, action: Int, arguments: android.os.Bundle?): Boolean {
-            if (action != androidx.core.view.accessibility.AccessibilityNodeInfoCompat.ACTION_CLICK) return false
             if (id >= SIDE_A11Y_BASE) {
+                if (action != androidx.core.view.accessibility.AccessibilityNodeInfoCompat.ACTION_CLICK) return false
                 if (id - SIDE_A11Y_BASE !in 0 until sideCount) return false
+                listener?.onKeyboardInteraction()
                 clickSide(id - SIDE_A11Y_BASE)
                 return true
             }
             val key = keyBounds.getOrNull(id)?.key ?: return false
-            handleKey(key)
+            when (action) {
+                androidx.core.view.accessibility.AccessibilityNodeInfoCompat.ACTION_CLICK -> {
+                    listener?.onKeyboardInteraction()
+                    handleKey(key)
+                }
+                androidx.core.view.accessibility.AccessibilityNodeInfoCompat.ACTION_LONG_CLICK -> {
+                    if (!hasLongPressAction(key.action)) return false
+                    // Voice long-click is a toggle: a second activation stops
+                    // the existing request rather than cancelling and restarting.
+                    if (key.action != KeyAction.Space || !spaceVoiceEnabled) listener?.onKeyboardInteraction()
+                    // A screen reader long-click has no physical UP. Let the
+                    // service toggle voice explicitly, rather than hold forever.
+                    cancelPress()
+                    listener?.onKeyLongPress(key.action)
+                }
+                else -> return false
+            }
             invalidate()
             invalidateVirtualView(id)
             return true

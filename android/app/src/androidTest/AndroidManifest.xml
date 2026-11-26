@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only the instrumentation APK contains this controlled service. It never captures audio. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <application>
+        <service
+            android:name="com.windinput.ime.smoke.ControlledRecognitionService"
+            android:exported="true"
+            android:label="KunKunIME controlled speech IPC test"
+            android:permission="android.permission.BIND_SPEECH_RECOGNITION_SERVICE">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+            </intent-filter>
+        </service>
+        <!-- Shell-only synchronization after cancellation: no production app hook. -->
+        <receiver
+            android:name="com.windinput.ime.smoke.ControlledRecognitionReleaseReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
+    </application>
+</manifest>

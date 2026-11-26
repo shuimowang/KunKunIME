@@ -241,7 +241,7 @@ def main() -> None:
             body += f"\n[本次构建与检查](https://github.com/{args.repository}/actions/runs/{run})。\n"
         complete_notes.write_text(body, encoding="utf-8")
         result = publish(args.repository, tag, args.source_sha, title, complete_notes,
-                         files, args.draft_only, args.platform == "android")
+                         files, args.draft_only, "-" in version)
     print(json.dumps(result, ensure_ascii=False))
     if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(summary, "a", encoding="utf-8") as out:

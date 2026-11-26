@@ -9,6 +9,7 @@
         <exclude domain="file" path="rust/data/KunKunIME/logs/" />
         <exclude domain="file" path="rust/userdata.redb.state/lock" />
         <exclude domain="sharedpref" path="ime_insets.xml" />
+        <exclude domain="sharedpref" path="voice_input.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="clipboard.json" />
@@ -17,5 +18,6 @@
         <exclude domain="file" path="rust/data/KunKunIME/logs/" />
         <exclude domain="file" path="rust/userdata.redb.state/lock" />
         <exclude domain="sharedpref" path="ime_insets.xml" />
+        <exclude domain="sharedpref" path="voice_input.xml" />
     </device-transfer>
 </data-extraction-rules>

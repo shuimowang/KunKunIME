@@ -2,3 +2,6 @@
 # No app-side startup gate or direct keyboard-view test API is retained.
 -keepattributes RuntimeVisibleAnnotations,AnnotationDefault
 -keep class com.windinput.ime.smoke.RealImeSmokeTest { *; }
+-keep class com.windinput.ime.smoke.VoiceImeSmokeTest { *; }
+-keep class com.windinput.ime.smoke.ControlledRecognitionService { *; }
+-keep class com.windinput.ime.smoke.ControlledRecognitionReleaseReceiver { *; }

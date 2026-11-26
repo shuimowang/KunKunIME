@@ -39,7 +39,7 @@ class RealImeSmokeTest {
     private val imeId = "$appId/com.windinput.ime.service.WindInputImeService"
     private val pendingTrace = StringBuilder()
 
-    @Test(timeout = 180_000)
+    @Test(timeout = 240_000)
     fun installedImeTypesPinyinEnglishPasswordAndNumbers() {
         val startupHold = StartupProbe.hold()
         try {
@@ -157,6 +157,8 @@ class RealImeSmokeTest {
         awaitText("hello ")
         Log.i(TAG, "PASS: English text and space")
 
+        exerciseQuickPhrasesAndUpdateScreen()
+
         selectScene("密码")
         clearEditor()
         typeKeys("abc")
@@ -182,6 +184,73 @@ class RealImeSmokeTest {
             val logs = deviceShell("logcat -d -v brief -s DeferredSession:I RustSession:I")
             "Rust core ready:" in logs && "核心就绪" in logs
         }
+    }
+
+    /** The actual panel, editor Activity and persisted store, through public UI actions. */
+    private fun exerciseQuickPhrasesAndUpdateScreen() {
+        clearEditor()
+        fun openPhrases() {
+            tapEditor()
+            awaitKey("a")
+            tapImeKey("剪贴板")
+            tapImeKey("切换到常用语")
+        }
+        fun anyText(text: String): AccessibilityNodeInfo {
+            var result: AccessibilityNodeInfo? = null
+            eventually("visible action $text") {
+                val match: (AccessibilityNodeInfo) -> Boolean = { it.text?.toString() == text }
+                result = findAppNode(match) ?: findImeNode(match)
+                result != null
+            }
+            return requireNotNull(result)
+        }
+        fun saveEditor(value: String) {
+            val field = awaitNode("phrase editor", imeOnly = false) {
+                it.isEditable && it.className?.toString() == "android.widget.EditText" &&
+                    it.contentDescription?.toString() != TestPadActivity.TEST_PAD_DESC
+            }
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
+            }
+            assertTrue(field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args))
+            eventually("phrase save enabled") { anyText("保存").isEnabled }
+            tap(anyText("保存"))
+            awaitEditor()
+        }
+        openPhrases()
+        tapImeKey("新增常用语")
+        saveEditor("常用语测试123")
+        openPhrases()
+        val added = awaitImeNode("saved phrase") { it.text?.toString() == "常用语测试123" }
+        assertTrue(added.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK))
+        tap(anyText("编辑"))
+        saveEditor("已修改常用语456")
+        openPhrases()
+        val edited = awaitImeNode("edited phrase") { it.text?.toString() == "已修改常用语456" }
+        tap(edited)
+        awaitText("已修改常用语456")
+        assertEquals("Selecting a phrase only commits text, never sends or adds a newline", "已修改常用语456", editorText())
+        openPhrases()
+        val remove = awaitImeNode("phrase to remove") { it.text?.toString() == "已修改常用语456" }
+        assertTrue(remove.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK))
+        tap(anyText("删除"))
+        eventually("deleted phrase removed from panel") {
+            findImeNode { it.text?.toString() == "已修改常用语456" } == null
+        }
+        capture("quick-phrases.png")
+        tap(awaitImeNode("sample phrase") { it.text?.toString() == "好的谢谢。" })
+        awaitText("已修改常用语456好的谢谢。")
+        Log.i(TAG, "PASS: quick phrases add, edit, persist, commit without sending, and delete")
+
+        instrumentation.startActivitySync(Intent(context, com.windinput.ime.update.UpdateActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        anyText("检查更新")
+        capture("app-update.png")
+        tap(anyText("返回"))
+        awaitEditor()
+        tapEditor()
+        awaitKey("a")
+        Log.i(TAG, "PASS: in-app update screen exposes manual update check")
     }
 
     private fun selectScene(label: String) {

@@ -3,6 +3,10 @@
 # APK; AGP handles references to the tested app using the same build's mapping.
 -keepattributes RuntimeVisibleAnnotations,AnnotationDefault
 -keep class com.windinput.ime.smoke.RealImeSmokeTest { *; }
+-keep class com.windinput.ime.smoke.VoiceImeSmokeTest { *; }
+-keep class com.windinput.ime.smoke.ControlledRecognitionService { *; }
+-keep class com.windinput.ime.smoke.ControlledRecognitionReleaseReceiver { *; }
+-keep class com.windinput.ime.keyboard.VoiceGestureTest { *; }
 -keep class com.windinput.ime.keyboard.A11yActionTest {
     public <init>();
     public void clickingKeyNodeTypesTheKey();

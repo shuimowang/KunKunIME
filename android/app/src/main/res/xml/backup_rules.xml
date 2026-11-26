@@ -11,6 +11,7 @@
      - rust/data/KunKunIME/cache、logs（file 域）：核心的本地目录，词库编译缓存可重建，日志不带走
      - rust/userdata.redb.state/lock（file 域）：进程锁文件
      - ime_insets.xml：导航栏避让的本机测量值，换机就不对了
+     - voice_input.xml：语音服务与麦克风的本机授权选择，换机后重新说明并选择
      cacheDir 与 noBackupFilesDir（崩溃记录，见 CrashLog）系统本来就不备份。 -->
 <full-backup-content>
     <exclude domain="file" path="clipboard.json" />
@@ -19,4 +20,5 @@
     <exclude domain="file" path="rust/data/KunKunIME/logs/" />
     <exclude domain="file" path="rust/userdata.redb.state/lock" />
     <exclude domain="sharedpref" path="ime_insets.xml" />
+    <exclude domain="sharedpref" path="voice_input.xml" />
 </full-backup-content>

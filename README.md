@@ -4,7 +4,7 @@
 
 ## 安装与使用
 
-**Android 手机版已合入主分支。** 手机端位于 [android/](android/README.md)，与 Windows 共用输入核心和词库，使用独立的界面、应用标识、版本和构建流程。手机发行采用 `android-v…` 预览标签，最低 Android 16、ARM64。下列安装步骤适用于 Windows；Android 的下载、升级与签名说明见其目录。
+**Android 手机版已合入主分支。** 手机端位于 [android/](android/README.md)，与 Windows 共用输入核心和词库，使用独立的界面、应用标识、版本和构建流程。Android `0.1.0` 为正式版，最低 Android 16、ARM64，支持长按空格语音输入、独立保存的常用语，以及在「关于 → 应用更新」主动检查、下载并安装新版。常用语可新增、编辑、移到顶部或删除，点选只填入输入框。手机发行采用独立的 `android-v…` 标签；下列安装步骤适用于 Windows，Android 的下载、升级、语音设置与签名说明见其目录。
 
 1. 从 [GitHub Releases](https://github.com/shuimowang/KunKunIME/releases) 下载 Windows x64 压缩包，将**整个文件夹**解压到长期使用的位置。
 2. 双击 **KunKunIME.exe**，点击 **注册输入法** 并确认 Windows 管理员授权。
@@ -67,7 +67,7 @@ Cargo 的 `release` 配置决定二进制的优化方式，GitHub Release 提供
 
 手动运行 Windows 工作流并勾选 `publish_release` 可以请求当前版本的发行构建。上传中断时只重试发布 job，可复用原构建的附件；已有公开版本不允许被新构建覆盖。发行标签必须指向实际通过检查的提交，版本对应的说明保存在 `releases/v<版本>.md`。
 
-Android 工作流分别验证 debug 的初始化暂存流程和非 debug release 的真实输入流程，成功后为新版本准备独立的预览草稿。维护者按 [Android 签名说明](android/README.md#分发签名)使用固定私钥签名，上传手机 APK、对应依赖源码和最终校验文件，再公开草稿；CI 的临时证书 APK 不自动成为用户下载包。私钥和恢复密码不进入仓库或工作流产物。
+Android 工作流分别验证 debug 的初始化暂存流程和非 debug release 的真实输入流程，成功后为新版本准备独立的发行草稿。`android-v0.1.0` 等稳定版本创建正式版草稿，带 `-preview.…` 等后缀的版本仍标为预览版；Android 草稿不自动替换仓库的 Latest。维护者按 [Android 签名说明](android/README.md#分发签名)使用固定私钥签名，上传手机 APK、对应依赖源码和最终校验文件，再公开草稿；CI 的临时证书 APK 不自动成为用户下载包。私钥和恢复密码不进入仓库或工作流产物。
 
 | 开发入口 | 源码 |
 |---|---|

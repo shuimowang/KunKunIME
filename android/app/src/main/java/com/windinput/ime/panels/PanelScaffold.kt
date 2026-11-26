@@ -64,6 +64,7 @@ object PanelScaffold {
         rightActions: List<Pair<String, () -> Unit>> = emptyList(),
         rightView: View? = null,
         backspace: BackspaceGesture.Listener? = null,
+        titleView: View? = null,
     ): View {
         val density = context.resources.displayMetrics.density
         val root = LinearLayout(context).apply {
@@ -88,7 +89,7 @@ object PanelScaffold {
             ),
         )
         header.addView(
-            TextView(context).apply {
+            titleView ?: TextView(context).apply {
                 text = title
                 textSize = 15f
                 gravity = Gravity.CENTER_VERTICAL

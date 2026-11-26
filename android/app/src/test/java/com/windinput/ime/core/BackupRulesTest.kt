@@ -41,6 +41,11 @@ class BackupRulesTest {
     }
 
     @Test
+    fun voiceServiceConsentIsNotTransferredToAnotherDevice() {
+        assertTrue("sharedpref:voice_input.xml" in excludes("backup_rules.xml"))
+    }
+
+    @Test
     fun privateCoreStateOnlyExcludesTheProcessLock() {
         val rules = excludes("backup_rules.xml")
         val state = rules.filter { it.startsWith("file:rust/userdata.redb.state/") }

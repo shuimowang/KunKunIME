@@ -3,8 +3,17 @@
 
     <!-- 按键振动强度可调：系统 performHapticFeedback 的强度定死，要自己调振动器（KeyHaptics） -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
-    <!-- 输入法不申请网络权限。下载与更新、反馈链接均由用户主动交给浏览器打开。 -->
+    <!-- 仅在用户检查/下载更新时连接 GitHub；语音交给用户选择的系统识别服务。 -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 
     <!-- 系统备份：设置与个人词库进备份，剪贴板历史、出厂数据、缓存不进（见 res/xml/backup_rules.xml） -->
     <application
@@ -18,7 +27,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.WindInput">
 
-        <!-- 诊断压缩包分享：只开放 cacheDir/diagnostics/（见 res/xml/file_paths.xml） -->
+        <!-- 仅开放诊断导出与已经验证的更新包缓存（见 res/xml/file_paths.xml）。 -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -49,6 +58,26 @@
             android:exported="true"
             android:label="输入测试台"
             android:windowSoftInputMode="stateVisible|adjustResize" />
+
+        <activity
+            android:name=".settings.VoiceSetupActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:label="语音输入" />
+
+        <activity
+            android:name=".update.UpdateActivity"
+            android:exported="false"
+            android:label="应用更新" />
+
+        <activity
+            android:name=".settings.QuickPhraseEditorActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:windowSoftInputMode="adjustResize"
+            android:label="常用语" />
 
         <!-- 设置入口（Compose，miuix 风格）。只在这里开预测性返回：侧滑时页面跟手；
              不放在 application 上，免得改变输入法服务自己的返回键处理 -->

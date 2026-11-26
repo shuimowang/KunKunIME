@@ -1777,8 +1777,8 @@ key = "ui.android.space_long_press"
 source = "android"
 type = "select"
 title = "长按空格"
-summary = "切换输入法也在中英键的长按里。语音输入要求系统里装了带语音的输入法，没有时退回切换输入法"
-default = "none"
+summary = "语音：按住空格说话，松手结束，上滑取消；首次使用需选择识别方式并允许麦克风。切换输入法也在中英键的长按里"
+default = "voice"
 options = [
   { value = "none", label = "不做什么" },
   { value = "switch_ime", label = "切换输入法" },

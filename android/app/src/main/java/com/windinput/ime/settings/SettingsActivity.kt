@@ -649,6 +649,7 @@ private fun PageScreen(
         "dict" -> DictOverview(session, onOpen = onOpenSub)
         "about" -> AboutSection(versionName, onOpenSub)
     }
+    if (page.id == SettingsActivity.PAGE_KEYBOARD) VoiceSettingsEntry()
     @Suppress("UNUSED_EXPRESSION") values.version // 开关变了，依赖它的项跟着显示 / 隐藏
     val sections = visibleSections(manifest, page.id, values)
     if (sections.isEmpty() && !values.engineReady && manifest.itemsOf(page.id).isNotEmpty()) {
@@ -999,15 +1000,15 @@ private fun AboutSection(versionName: String, onOpenSub: (String) -> Unit) {
             summary = "版本 $versionName",
             startAction = { KunKunLogo(Modifier.padding(end = 14.dp).size(40.dp)) },
         )
-        NavRow(SUB_PRIVACY, "输入法不申请网络权限；本地数据、系统备份与删除方式", icon = SettingsIcons.privacy) {
+        NavRow(SUB_PRIVACY, "语音、应用更新、本地数据与系统备份", icon = SettingsIcons.privacy) {
             onOpenSub(SUB_PRIVACY)
         }
         NavRow(
-            "下载与更新",
-            "在浏览器打开困困输入法 GitHub 发布页，选择 Android 安装包",
+            "应用更新",
+            "在应用内检查、下载并安装安卓正式版",
             icon = SettingsIcons.website,
         ) {
-            Diagnostics.openUrl(context, ProjectLinks.RELEASES_URL)
+            context.startActivity(Intent(context, com.windinput.ime.update.UpdateActivity::class.java))
         }
         NavRow("反馈问题", "在 GitHub 上提交问题或建议（浏览器打开）", icon = SettingsIcons.feedback) {
             Diagnostics.openIssues(context)

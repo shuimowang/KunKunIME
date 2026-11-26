@@ -2,9 +2,13 @@
 
 import hashlib
 import importlib.util
+import io
+import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 
@@ -117,6 +121,40 @@ class ReleasePublicationTest(unittest.TestCase):
                                        "android", self.notes, {}, True, True)
             self.assertEqual("awaiting_signed_android_apk", result["status"])
             gh.assert_not_called()
+
+    def test_android_version_selects_channel_without_publishing_or_replacing_latest(self):
+        for version, prerelease in (("0.1.0", False), ("0.1.0-preview.4", True)):
+            with self.subTest(version=version):
+                tag = f"android-v{version}"
+                notes_dir = self.directory / "releases"
+                notes_dir.mkdir(exist_ok=True)
+                (notes_dir / f"{tag}.md").write_text("Android release notes")
+                metadata = self.directory / "release-info.json"
+                metadata.write_text(json.dumps({
+                    "version_name": version, "version_code": 5,
+                    "git_commit": COMMIT, "build_type": "release",
+                    "debuggable": False, "test_only": False,
+                    "application_id": "io.github.shuimowang.kunkunime",
+                    "min_sdk": 36, "target_sdk": 36,
+                }))
+                release = dict(self.release(names=set()), tag_name=tag, prerelease=prerelease)
+                arguments = ["publish-release.py", "--platform", "android", "--metadata", str(metadata),
+                             "--draft-only", "--source-sha", COMMIT, "--repository", REPO]
+                with patch.object(publisher, "ROOT", self.directory), \
+                        patch("sys.argv", arguments), patch.dict(os.environ, {}, clear=True), \
+                        patch.object(publisher.subprocess, "check_output", return_value=COMMIT), \
+                        patch.object(publisher, "ensure_tag"), \
+                        patch.object(publisher, "find_release", side_effect=[None, release]), \
+                        patch.object(publisher, "gh") as gh, redirect_stdout(io.StringIO()) as output:
+                    publisher.main()
+                self.assertEqual("awaiting_signed_android_apk", json.loads(output.getvalue())["status"])
+                gh.assert_called_once()
+                command = gh.call_args.args
+                self.assertEqual(("release", "create", tag), command[:3])
+                self.assertEqual(prerelease, "--prerelease" in command)
+                self.assertIn("--draft", command)
+                self.assertIn("--latest=false", command)
+                self.assertNotIn("--latest=true", command)
 
 
 if __name__ == "__main__":

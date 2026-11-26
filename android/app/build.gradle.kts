@@ -35,8 +35,8 @@ android {
         // Personal-use baseline: Android 16 and newer.
         minSdk = 36
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.1.0-preview.4"
+        versionCode = 5
+        versionName = "0.1.0"
         // 仪器测试（androidTest）：自绘控件的无障碍动作等要在真实 Android 运行时里验
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

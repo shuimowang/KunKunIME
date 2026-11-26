@@ -13,19 +13,22 @@ class PrivacyPolicyTest {
         .map { it.groupValues[1] }
         .toSet()
 
-    /** 输入法本身离线工作；浏览器打开发布页不需要输入法申请网络权限。 */
+    /** 明确枚举实际功能所需权限，不能无提示地扩大到存储等权限。 */
     @Test
-    fun manifestRequestsOnlyVibrate() {
+    fun manifestRequestsOnlyDisclosedInputAndUpdatePermissions() {
         assertEquals(
-            setOf("android.permission.VIBRATE"),
+            setOf("android.permission.VIBRATE", "android.permission.RECORD_AUDIO",
+                "android.permission.INTERNET", "android.permission.REQUEST_INSTALL_PACKAGES"),
             permissions,
         )
     }
 
     @Test
-    fun policyDistinguishesOfflineImeFromBrowserAndSystemBackup() {
+    fun policyDistinguishesLocalTypingFromRequestedUpdatesAndSystemServices() {
         val network = PRIVACY_POLICY.single { it.first == "联网" }.second
-        assertTrue(network.contains("不申请网络权限"))
+        assertTrue(network.contains("主动检查或下载更新"))
+        assertTrue(network.contains("不会在后台自动检查更新"))
+        assertTrue(network.contains("GitHub"))
         assertTrue(network.contains("浏览器"))
         assertTrue(network.contains("系统备份可能联网"))
     }
@@ -33,8 +36,29 @@ class PrivacyPolicyTest {
     @Test
     fun policyCoversRequiredTopics() {
         val titles = PRIVACY_POLICY.map { it.first }
-        for (t in listOf("联网", "启用时的系统提示", "数据只存本地", "权限用途", "删除数据")) {
+        for (t in listOf("联网", "下载与更新", "启用时的系统提示", "数据只存本地", "语音输入", "权限用途", "删除数据")) {
             assertTrue("隐私政策缺「$t」", t in titles)
         }
+    }
+
+    @Test
+    fun policyExplainsMicrophoneConsentAndSystemSpeechDataHandling() {
+        val voice = PRIVACY_POLICY.single { it.first == "语音输入" }.second
+        assertTrue(voice.contains("明确选择系统语音服务"))
+        assertTrue(voice.contains("可能把声音发送给其提供者"))
+        assertTrue(voice.contains("不保存录音"))
+        assertTrue(voice.contains("密码框禁用"))
+        val use = PRIVACY_POLICY.single { it.first == "权限用途" }.second
+        assertTrue(use.contains("拒绝授权仍可正常打字"))
+    }
+
+    @Test
+    fun policyExplainsVerifiedUpdatesAndSystemControlledInstallation() {
+        val updates = PRIVACY_POLICY.single { it.first == "下载与更新" }.second
+        assertTrue(updates.contains("不会携带你的输入文字"))
+        assertTrue(updates.contains("SHA-256、包名、版本和签名"))
+        assertTrue(updates.contains("系统界面交给你确认"))
+        assertTrue(updates.contains("不会静默安装"))
+        assertTrue(updates.contains("不需要存储权限"))
     }
 }

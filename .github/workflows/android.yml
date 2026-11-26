@@ -293,7 +293,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name KunKunIME-Android-release-support --dir release-support
-      - name: Create an exact-source prerelease draft awaiting the fixed-key APK
+      - name: Create an exact-source release draft awaiting the fixed-key APK
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/publish-release.py --platform android --metadata release-support/release-info.json --draft-only

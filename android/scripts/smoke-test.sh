@@ -45,6 +45,10 @@ test "$(adb_device shell getprop ro.product.cpu.abi | tr -d '\r')" = 'x86_64' ||
 mkdir -p "$smoke_results"
 old_ime="$(adb_device shell settings get secure default_input_method | tr -d '\r')"
 old_hardware_ime="$(adb_device shell settings get secure show_ime_with_hard_keyboard | tr -d '\r')"
+old_recognizer="$(adb_device shell settings get secure voice_recognition_service | tr -d '\r')"
+voice_probe_configured=false
+old_app_microphone=false
+old_test_microphone=false
 
 collect_results() {
     local status=$?
@@ -53,6 +57,22 @@ collect_results() {
     adb_device shell dumpsys input_method > "$smoke_results/input-method.txt" 2>&1 || true
     adb_device exec-out screencap -p > "$smoke_results/screenshot.png" 2>/dev/null || true
     adb_device pull "/sdcard/Android/data/$app_id/files/smoke/." "$smoke_results/" >/dev/null 2>&1 || true
+    if [[ "$voice_probe_configured" == true ]]; then
+        cp "$smoke_results/logcat.txt" "$smoke_results/voice-ipc-logcat.txt" || true
+        if [[ -z "$old_recognizer" || "$old_recognizer" == null ]]; then
+            adb_device shell settings delete secure voice_recognition_service >/dev/null 2>&1 || true
+        else
+            adb_device shell settings put secure voice_recognition_service "$old_recognizer" >/dev/null 2>&1 || true
+        fi
+        # Revocation can kill the instrumented app, so restore only after the
+        # runner exits. The test itself restores its temporary consent prefs.
+        if [[ "$old_app_microphone" != true ]]; then
+            adb_device shell pm revoke "$app_id" android.permission.RECORD_AUDIO >/dev/null 2>&1 || true
+        fi
+        if [[ "$old_test_microphone" != true ]]; then
+            adb_device shell pm revoke "$app_id.test" android.permission.RECORD_AUDIO >/dev/null 2>&1 || true
+        fi
+    fi
     if [[ -n "$old_ime" && "$old_ime" != null ]]; then
         adb_device shell ime set "$old_ime" >/dev/null 2>&1 || true
     fi
@@ -91,10 +111,10 @@ adb_device logcat -c
 if [[ "$smoke_variant" == debug ]]; then
     # Direct view APIs and the startup-control API are only kept in debug.
     adb_device shell am instrument -w -r \
-        -e class com.windinput.ime.keyboard.A11yActionTest,com.windinput.ime.keyboard.MultiTouchTest \
+        -e class com.windinput.ime.keyboard.A11yActionTest,com.windinput.ime.keyboard.MultiTouchTest,com.windinput.ime.keyboard.VoiceGestureTest \
         "$app_id.test/androidx.test.runner.AndroidJUnitRunner" \
         | tr -d '\r' | tee "$smoke_results/keyboard-instrumentation.txt"
-    verify_instrumentation "$smoke_results/keyboard-instrumentation.txt" 6
+    verify_instrumentation "$smoke_results/keyboard-instrumentation.txt" 18
     adb_device logcat -d -v threadtime > "$smoke_results/keyboard-logcat.txt"
 fi
 
@@ -110,16 +130,45 @@ adb_device shell am instrument -w -r \
     | tr -d '\r' | tee "$smoke_results/instrumentation.txt"
 
 verify_instrumentation "$smoke_results/instrumentation.txt" 1
+adb_device logcat -d -v threadtime > "$smoke_results/typing-logcat.txt"
 
-smoke_screenshots=(pinyin-candidates.png number-pad.png)
+smoke_screenshots=(pinyin-candidates.png number-pad.png quick-phrases.png app-update.png)
 if [[ "$smoke_variant" == debug ]]; then smoke_screenshots+=(cold-start-queued.png); fi
 for screenshot in "${smoke_screenshots[@]}"; do
     adb_device pull "/sdcard/Android/data/$app_id/files/smoke/$screenshot" "$smoke_results/$screenshot"
     test -s "$smoke_results/$screenshot"
 done
 
+# Android's real SpeechRecognizer binds a provider from the test APK. This
+# deterministic fixture captures no audio and is never packaged in the app.
+# Both builds exercise real touch, IME/editor wiring and cross-process callbacks.
+microphone_granted() {
+    adb_device shell dumpsys package "$1" | python3 -c '
+import re, sys
+print("true" if re.search(r"android\.permission\.RECORD_AUDIO: granted=true\b", sys.stdin.read()) else "false")
+'
+}
+old_app_microphone="$(microphone_granted "$app_id")"
+old_test_microphone="$(microphone_granted "$app_id.test")"
+voice_probe_configured=true
+adb_device shell settings put secure voice_recognition_service \
+    "$app_id.test/com.windinput.ime.smoke.ControlledRecognitionService"
+adb_device shell pm grant "$app_id" android.permission.RECORD_AUDIO
+adb_device shell pm grant "$app_id.test" android.permission.RECORD_AUDIO
+adb_device shell am force-stop "$app_id"
+adb_device logcat -c
+adb_device shell am instrument -w -r \
+    -e class com.windinput.ime.smoke.VoiceImeSmokeTest \
+    "$app_id.test/androidx.test.runner.AndroidJUnitRunner" \
+    | tr -d '\r' | tee "$smoke_results/voice-ipc-instrumentation.txt"
+verify_instrumentation "$smoke_results/voice-ipc-instrumentation.txt" 1
+for screenshot in voice-ipc-listening.png voice-ipc-final.png voice-ipc-cancelled.png; do
+    adb_device pull "/sdcard/Android/data/$app_id/files/smoke/$screenshot" "$smoke_results/$screenshot"
+    test -s "$smoke_results/$screenshot"
+done
+
 if [[ "$smoke_variant" == debug ]]; then
-    echo 'KunKunIME debug smoke passed: startup queue/cancellation, six view tests, real IME input.'
+    echo 'KunKunIME debug smoke passed: startup queue/cancellation, eighteen view tests, real IME/phrases, controlled speech IPC. No audio accuracy claim.'
 else
-    echo 'KunKunIME release smoke passed: non-debuggable app, real Pinyin/backspace, English, password, numbers, hide/show. No startup gate was used.'
+    echo 'KunKunIME release smoke passed: non-debuggable app, real IME/phrases, controlled speech IPC. No startup gate or audio accuracy claim.'
 fi

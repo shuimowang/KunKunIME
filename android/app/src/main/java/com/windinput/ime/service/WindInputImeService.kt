@@ -1,5 +1,8 @@
 package com.windinput.ime.service
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.inputmethodservice.InputMethodService
 import android.os.SystemClock
@@ -10,6 +13,7 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.view.inputmethod.InputMethodSubtype
+import android.view.inputmethod.InputConnection
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import com.windinput.ime.WindInputApp
@@ -29,6 +33,7 @@ import com.windinput.ime.core.UiTrace
 import com.windinput.ime.core.UserConfig
 import com.windinput.ime.core.suspendsLearning
 import com.windinput.ime.core.usesDirectInput
+import com.windinput.ime.core.allowsVoiceInput
 import com.windinput.ime.keyboard.BackspaceGesture
 import com.windinput.ime.keyboard.HardwareKeys
 import com.windinput.ime.keyboard.ToolbarItem
@@ -51,6 +56,7 @@ import com.windinput.ime.keyboard.LayoutRepository
 import com.windinput.ime.keyboard.NumberSideSymbols
 import com.windinput.ime.keyboard.Palette
 import com.windinput.ime.keyboard.PanelIcon
+import com.windinput.ime.keyboard.VoiceStatusView
 import com.windinput.ime.panels.ClipboardWindow
 import com.windinput.ime.panels.EmojiWindow
 import com.windinput.ime.panels.SymbolPages
@@ -63,6 +69,10 @@ import com.windinput.ime.panels.TextEditingWindow
 import com.windinput.ime.settings.SettingsActivity
 import com.windinput.ime.settings.SUB_ENABLED_SCHEMAS
 import com.windinput.ime.settings.SUB_NUMPAD_SYMBOLS
+import com.windinput.ime.settings.VoicePreferences
+import com.windinput.ime.settings.VoiceSetupActivity
+import com.windinput.ime.voice.VoiceInputController
+import com.windinput.ime.voice.VoiceState
 import java.io.File
 
 /**
@@ -125,6 +135,15 @@ class WindInputImeService :
     private lateinit var dataDirs: com.windinput.ime.core.DataDirs
 
     private var barView: BarView? = null
+    private var voiceStatusView: VoiceStatusView? = null
+    private var voiceController: VoiceInputController? = null
+    private var voiceState: VoiceState? = null
+    private var voiceHeld = false
+    private var voiceCancelOnRelease = false
+    private var cancellingVoice = false
+    private var voiceInputEpoch = 0L
+    private data class VoiceTarget(val epoch: Long, val connection: InputConnection)
+    private var voiceTarget: VoiceTarget? = null
     private var windowManager: InputWindowManager? = null
     private var keyboardWindow: KeyboardWindow? = null
     private var textEditingWindow: TextEditingWindow? = null
@@ -243,6 +262,9 @@ class WindInputImeService :
     }
 
     override fun onDestroy() {
+        cancelVoiceInput()
+        voiceController?.destroy()
+        voiceController = null
         (session as? DeferredSession)?.close()
         switchHandler.removeCallbacks(showSwitching)
         clipboardStore.stop()
@@ -250,6 +272,7 @@ class WindInputImeService :
     }
 
     override fun onCreateInputView(): View {
+        cancelVoiceInput()
         // 输入法窗口默认不进挖孔区：横屏时挖孔在侧边，键盘左边空出一条露出底下的应用。
         // 让窗口铺进去，键盘根视图再按挖孔把键往里收（InputRootView.onApplyWindowInsets）
         window.window?.let { w ->
@@ -272,11 +295,29 @@ class WindInputImeService :
 
         val bar = BarView(this, candidateListener = this, listener = this)
         barView = bar
+        // Preserve BarView's exact configured height while it is INVISIBLE.
+        // A MATCH_PARENT meter in a WRAP_CONTENT frame could otherwise expand
+        // during its first measurement and move keys under a held finger.
+        val barContainer = FrameLayout(this).apply {
+            addView(bar, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ))
+        }
+        voiceStatusView = VoiceStatusView(
+            this,
+            onStop = { finishVoiceInput() },
+            onCancel = { cancelVoiceInput() },
+        ).apply { visibility = View.GONE }
+        barContainer.addView(voiceStatusView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT,
+        ))
         root.addView(
-            bar,
+            barContainer,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
+                KeyboardDimens.barHeightPx(resources.displayMetrics.density),
             ),
         )
 
@@ -326,8 +367,9 @@ class WindInputImeService :
             // 例外由窗口自己声明（InputWindow.keepsBar）：展开候选面板没有自己的返回栏，
             // 返回入口就在条区尾格上，把它一并让位掉就等于展开后无路可退。
             it.onWindowChanged = { window ->
+                cancelVoiceInput()
                 val keyboardMode = window === keyboardWindow
-                bar.visibility =
+                barContainer.visibility =
                     if (keyboardMode || window.keepsBar) View.VISIBLE else View.GONE
                 bar.setExpanded(window === expandedCandidatesWindow)
                 assocHold.set(AssocHold.Reason.EXPANDED, window === expandedCandidatesWindow)
@@ -356,6 +398,11 @@ class WindInputImeService :
         // Apply again after the IME window attaches so the system-owned navigation buttons
         // use the same light/dark appearance as the keyboard, including subsequent shows.
         window.window?.let { KeyboardSystemBars.apply(it, Palette.current) }
+    }
+
+    override fun onWindowHidden() {
+        cancelVoiceInput()
+        super.onWindowHidden()
     }
 
     private companion object {
@@ -484,6 +531,7 @@ class WindInputImeService :
      * 应用收到的就是普通按键。
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        cancelVoiceInput()
         // 只露条区的模式下空闲时屏幕上什么都没有，但窗口在系统眼里是「显示着」的：
         // 交给基类会把这一下返回当成「收起输入法」吃掉，用户得按两下才退得出页面
         if (keyCode == KeyEvent.KEYCODE_BACK && hardKeyboardOnly && !composing) return false
@@ -518,6 +566,7 @@ class WindInputImeService :
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        cancelVoiceInput()
         if (consumedHardKeys.remove(keyCode)) return true
         return super.onKeyUp(keyCode, event)
     }
@@ -553,6 +602,7 @@ class WindInputImeService :
     }
 
     override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
+        cancelVoiceInput()
         super.onStartInput(attribute, restarting)
         hasInlineComposition = false // 换了输入框，宿主那边没有我们挂的组合区
         deleteUndo.invalidate() // 删除记录只对原来那个输入框有效
@@ -569,6 +619,7 @@ class WindInputImeService :
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
+        cancelVoiceInput()
         super.onStartInputView(info, restarting)
         // 一次检查文件、批量读内存；下次弹出时重新检查，设置页写入/外部导入仍会生效。
         val settings = userConfig.snapshot()
@@ -605,7 +656,9 @@ class WindInputImeService :
             previewEnabled = settings.getBoolean("ui.android.key_preview", false)
             longPressDelayMs = this@WindInputImeService.longPressDelayMs
             spaceSwipeEnabled = settings.getBoolean("ui.android.gesture_space_cursor", true)
-            spaceLongPressEnabled = settings.getString("ui.android.space_long_press", "none") != "none"
+            val spaceLongPress = settings.getString("ui.android.space_long_press", "voice")
+            spaceLongPressEnabled = spaceLongPress != "none"
+            spaceVoiceEnabled = spaceLongPress == "voice"
             backspaceSwipeEnabled = backspaceSwipeOn
             swipeSymbolsEnabled = settings.getBoolean("ui.android.gesture_swipe_symbols", true)
             showSwipeHints = settings.getBoolean("ui.android.show_swipe_hints", false)
@@ -640,6 +693,7 @@ class WindInputImeService :
         oldSelStart: Int, oldSelEnd: Int, newSelStart: Int, newSelEnd: Int,
         candidatesStart: Int, candidatesEnd: Int,
     ) {
+        if (oldSelStart != newSelStart || oldSelEnd != newSelEnd) cancelVoiceInput()
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
         updateAutoCaps()
         deleteUndo.onSelectionUpdate(oldSelStart, oldSelEnd, newSelStart, newSelEnd, SystemClock.uptimeMillis())
@@ -695,6 +749,7 @@ class WindInputImeService :
      * 忘了它——接着按的第一个键就拼进了那串旧码，出来的字完全对不上。
      */
     override fun onFinishInputView(finishingInput: Boolean) {
+        cancelVoiceInput()
         candidateMenu?.dismiss()
         schemaPicker?.dismiss()
         assocHold.clear()
@@ -715,11 +770,13 @@ class WindInputImeService :
      */
     @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun onViewClicked(focusChanged: Boolean) {
+        cancelVoiceInput()
         super.onViewClicked(focusChanged)
         abandonComposition()
     }
 
     override fun onUpdateEditorToolType(toolType: Int) {
+        cancelVoiceInput()
         super.onUpdateEditorToolType(toolType)
         abandonComposition()
     }
@@ -795,6 +852,7 @@ class WindInputImeService :
     }
 
     override fun onFinishInput() {
+        cancelVoiceInput()
         consumedHardKeys.clear()
         session.focusLost()
         super.onFinishInput()
@@ -931,6 +989,14 @@ class WindInputImeService :
      */
     private fun applyEdits(ic: android.view.inputmethod.InputConnection, ops: List<EditOp>) {
         if (ops.isEmpty()) return
+        if (ops.any { op ->
+            when (op) {
+                is EditOp.SetComposition -> if (op.text.isEmpty() || isCompositionPlaceholder(op.text)) {
+                    hasInlineComposition
+                } else inlinePreedit
+                else -> true
+            }
+        }) cancelVoiceInput()
         ic.beginBatchEdit()
         try {
             for (op in ops) {
@@ -1029,6 +1095,7 @@ class WindInputImeService :
         get() = ((session as? DeferredSession)?.bufferedInputCount ?: 0) > 0
 
     override fun onKeyAction(action: KeyAction, shifted: Boolean) {
+        cancelVoiceInput()
         when (action) {
             KeyAction.Backspace -> recordBackwardDelete { performKeyAction(action, shifted) }
             else -> {
@@ -1041,6 +1108,10 @@ class WindInputImeService :
                 performKeyAction(action, shifted)
             }
         }
+    }
+
+    override fun onKeyboardInteraction() {
+        cancelVoiceInput()
     }
 
     private fun performKeyAction(action: KeyAction, shifted: Boolean) {
@@ -1069,6 +1140,7 @@ class WindInputImeService :
 
     /** Normal host fallback, also used for a deferred key the engine declines after replay. */
     private fun performDefaultKeyAction(action: KeyAction, shifted: Boolean) {
+        cancelVoiceInput()
         if (action is KeyAction.Commit) {
             commitDirectNow(action.text)
             return
@@ -1145,6 +1217,7 @@ class WindInputImeService :
     }
 
     private fun setOneHand(mode: String) {
+        cancelVoiceInput()
         userConfig.put(KEY_ONE_HAND, mode)
         if (mode != OneHandStrip.OFF) userConfig.put(KEY_ONE_HAND_LAST, mode)
         applyOneHand()
@@ -1177,6 +1250,7 @@ class WindInputImeService :
      * 再换成菜单。一段提示都没有的候选（标点、符号）直接给菜单，不弹一张空卡片。
      */
     private fun showCandidateMenu(index: Int) {
+        cancelVoiceInput()
         val bar = barView ?: return
         // 标题取已加载的那份（长按的必然是看得见的候选），不为一个字再跨一次 JNI、再算一遍注释
         val title = loadedCandidates.getOrNull(index)
@@ -1226,6 +1300,7 @@ class WindInputImeService :
     }
 
     override fun onCandidateSelected(index: Int) {
+        cancelVoiceInput()
         if (symbolHistoryInBar) {
             loadedCandidates.getOrNull(index)?.let {
                 recentSymbolStore.record(it)
@@ -1384,6 +1459,7 @@ class WindInputImeService :
         super.onCurrentInputMethodSubtypeChanged(newSubtype)
         // 自己同步过去的那次回调：方案本来就是它，不再切（防回环）
         if (schemaSubtypes.consumeSelfSwitch(newSubtype)) return
+        cancelVoiceInput()
         val id = SchemaSubtypes.schemaOf(newSubtype.extraValue) ?: return
         val schemas = session.schemas()
         if (schemas.isEmpty()) {
@@ -1405,15 +1481,18 @@ class WindInputImeService :
      */
     override fun onKeyLongPress(action: KeyAction) {
         if (action == KeyAction.Space) {
-            // 长按空格：切输入法（Gboard 的习惯）或语音（豆包、搜狗的习惯），见设置「长按空格」。
-            // 有编码时先丢掉——不然弹出系统选择框回来，编码还悬在条区上
-            abandonComposition()
-            when (userConfig.getString("ui.android.space_long_press", "none")) {
-                "voice" -> if (voiceInputAvailable()) onVoiceInput() else onSwitchInputMethod()
-                "switch_ime" -> onSwitchInputMethod()
+            // Accessibility long-clicks have no held pointer. Use the same
+            // recognition session with explicit 完成 / 取消 controls instead.
+            when (userConfig.getString("ui.android.space_long_press", "voice")) {
+                "voice" -> onVoiceInput()
+                "switch_ime" -> {
+                    abandonComposition()
+                    onSwitchInputMethod()
+                }
             }
             return
         }
+        cancelVoiceInput()
         if (action != KeyAction.SwitchLang) return
         if (!showSchemaPicker("切换方案")) {
             quickPanelWindow?.let { windowManager?.show(it) } // 核心没起来：退回快捷面板
@@ -1432,6 +1511,7 @@ class WindInputImeService :
      * 先按了一下中英键就会记下上次方案，之后卡片永远不出——没看到就算弹过。去掉了。
      */
     private fun maybeShowFirstRunPicker() {
+        if (voiceController?.isActive == true) return
         if (onboardingPrefs.getBoolean(KEY_FIRST_PICK_SHOWN, false)) return
         val info = currentInputEditorInfo ?: return
         val cls = info.inputType and android.text.InputType.TYPE_MASK_CLASS
@@ -1439,6 +1519,7 @@ class WindInputImeService :
         val bar = barView ?: return
         // 条区要先量好才能定位卡片
         bar.post {
+            if (voiceController?.isActive == true) return@post
             if (onboardingPrefs.getBoolean(KEY_FIRST_PICK_SHOWN, false)) return@post
             // 排进来到执行之间键盘可能已经收起：此时弹出用户看不到，标记却记上了
             if (!isInputViewShown || currentInputEditorInfo == null) return@post
@@ -1452,6 +1533,7 @@ class WindInputImeService :
 
     /** 方案选择卡片（长按中英键、首次使用共用）。@return 是否弹出（核心未就绪 / 条区未就位时为 false） */
     private fun showSchemaPicker(title: String, dismissOnOutside: Boolean = true): Boolean {
+        cancelVoiceInput()
         val bar = barView ?: return false
         if (bar.width <= 0) return false
         val schemas = session.schemas()
@@ -1489,6 +1571,7 @@ class WindInputImeService :
 
     /** 从中英键（卡片或长按菜单）或键盘选择面板选中一个方案 */
     private fun selectSchemaFromKey(schemas: List<SchemaEntry>, target: SchemaEntry) {
+        cancelVoiceInput()
         if (target.id != ENGLISH_SCHEMA_ID) {
             statePrefs.edit().putString(KEY_LAST_CHINESE, target.id).apply()
         } else {
@@ -1508,6 +1591,7 @@ class WindInputImeService :
      */
     override fun longPressOptions(action: KeyAction): KeyboardView.KeyOptions? {
         if (action != KeyAction.SwitchLang) return null
+        cancelVoiceInput()
         val schemas = session.schemas()
         if (schemas.isEmpty()) return null
         return KeyboardView.KeyOptions(
@@ -1521,6 +1605,7 @@ class WindInputImeService :
      * 以前这里会改弹可点的方案卡片，按久一点没滑就弹出一张卡挡住键盘，真机反馈像误触
      */
     override fun onLongPressOption(action: KeyAction, index: Int?) {
+        cancelVoiceInput()
         if (action != KeyAction.SwitchLang || index == null) return
         val schemas = session.schemas()
         when {
@@ -1534,6 +1619,7 @@ class WindInputImeService :
 
     /** 空格滑动移光标 */
     override fun onCursorMove(delta: Int) {
+        cancelVoiceInput()
         if (delta == 0) return
         if (hasBufferedInput) abandonComposition()
         val keyCode =
@@ -1549,6 +1635,7 @@ class WindInputImeService :
      * 有编码时整个手势等价于清空编码（抬手时做，见 [onBackspaceSwipeDelete]）。
      */
     override fun onBackspaceSelect(count: Int) {
+        cancelVoiceInput()
         if (composing || hasBufferedInput) return
         val ic = currentInputConnection ?: return
         val extracted = ic.getExtractedText(ExtractedTextRequest(), 0) ?: return
@@ -1559,6 +1646,7 @@ class WindInputImeService :
 
     /** 退格滑动抬手：有编码 → 清空编码；否则删除选区 */
     override fun onBackspaceSwipeDelete() {
+        cancelVoiceInput()
         if (composing || hasBufferedInput) {
             abandonComposition()
             return
@@ -1576,6 +1664,7 @@ class WindInputImeService :
      * 有选区先删选区。同样包在批处理里，文本框撤销栈可整体找回
      */
     override fun onBackspaceDeleteBeforeCursor() {
+        cancelVoiceInput()
         if (composing || hasBufferedInput) {
             abandonComposition()
             return
@@ -1594,6 +1683,7 @@ class WindInputImeService :
     private fun panelBackspace(delete: () -> Unit) = object : BackspaceGesture.Listener {
         // 有编码（符号页保留条区，编码仍可见）时先交引擎退格，和键盘退格键一致；引擎不接再走面板自己的删除
         override fun onDelete() {
+            cancelVoiceInput()
             if ((composing || hasBufferedInput) && engineKey(KeyAction.Backspace, false)) return
             recordBackwardDelete(delete)
         }
@@ -1618,6 +1708,7 @@ class WindInputImeService :
      * 误清了可以在编辑面板「撤销」找回（文本框自带的撤销栈）
      */
     override fun onBackspaceClearAll() {
+        cancelVoiceInput()
         if (composing || hasBufferedInput) {
             abandonComposition()
             return
@@ -1678,6 +1769,7 @@ class WindInputImeService :
      * 恢复前同步核对光标仍在记录点，不在就作废不放——防止把旧内容插到别处
      */
     override fun onBackspaceRestore() {
+        cancelVoiceInput()
         if (composing) return
         val ic = currentInputConnection ?: return
         val sel = selectionOf(ic) ?: return
@@ -1709,6 +1801,7 @@ class WindInputImeService :
     // ── 工具栏 ───────────────────────────────────────────────────
 
     override fun onToolbarAction(action: BarView.ToolbarAction) {
+        cancelVoiceInput()
         val wm = windowManager ?: return
         when (action) {
             BarView.ToolbarAction.QUICK_PANEL -> quickPanelWindow?.let { wm.show(it) }
@@ -1719,12 +1812,14 @@ class WindInputImeService :
     // ── 快捷功能面板 ─────────────────────────────────────────────
 
     override fun onQuickCommand(cmd: EngineCmd) {
+        cancelVoiceInput()
         session.runCommand(cmd)
     }
 
     override fun quickSchemas(): List<SchemaEntry> = session.schemas()
 
     override fun onOpenPanel(target: QuickPanelWindow.Target) {
+        cancelVoiceInput()
         val wm = windowManager ?: return
         when (target) {
             QuickPanelWindow.Target.EMOJI -> emojiWindow?.let { wm.show(it) }
@@ -1737,6 +1832,7 @@ class WindInputImeService :
     // ── 键盘选择面板 ─────────────────────────────────────────────
 
     override fun onKeyboardSelectSchema(index: Int) {
+        cancelVoiceInput()
         val schemas = session.schemas()
         schemas.firstOrNull { it.index == index }?.let { selectSchemaFromKey(schemas, it) }
     }
@@ -1754,11 +1850,12 @@ class WindInputImeService :
         ToolbarItem.parse(userConfig.getString(ToolbarItem.CONFIG_KEY, ToolbarItem.DEFAULT_PINS))
 
     override fun onToolbarPinsChanged(pins: List<ToolbarItem>) {
+        cancelVoiceInput()
         userConfig.put(ToolbarItem.CONFIG_KEY, ToolbarItem.format(pins))
         barView?.setPinned(visiblePins())
     }
 
-    /** 实际摆上工具栏的：没有语音输入法时不摆语音，当前方案进不了临时拼音时不摆它 */
+    /** 实际摆上工具栏的：语音只用于普通文本框，当前方案进不了临时拼音时不摆它 */
     private fun visiblePins(): List<ToolbarItem> = toolbarPins().filter {
         when (it) {
             ToolbarItem.VOICE -> voiceInputAvailable()
@@ -1779,6 +1876,7 @@ class WindInputImeService :
     }
 
     override fun onToolbarItem(item: ToolbarItem) {
+        if (item != ToolbarItem.VOICE) cancelVoiceInput()
         when (item) {
             ToolbarItem.KEYBOARD -> onOpenPanel(QuickPanelWindow.Target.KEYBOARD_SELECT)
             ToolbarItem.CLIPBOARD -> onOpenPanel(QuickPanelWindow.Target.CLIPBOARD)
@@ -1808,10 +1906,12 @@ class WindInputImeService :
      * 选择器列出全部已启用输入法，与 Gboard 地球键长按的行为一致。
      */
     override fun onSwitchInputMethod() {
+        cancelVoiceInput()
         (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker()
     }
 
-    override fun voiceInputAvailable(): Boolean = findVoiceInput() != null
+    override fun voiceInputAvailable(): Boolean =
+        allowsVoiceInput(currentInputEditorInfo?.inputType ?: 0)
 
     /** 输入框要求的无痕（应用置了 NO_PERSONALIZED_LEARNING、密码框），每个框重算 */
     private var fieldSuspendsLearning = false
@@ -1835,37 +1935,153 @@ class WindInputImeService :
     override fun incognitoForced(): Boolean = fieldSuspendsLearning
 
     override fun onToggleIncognito() {
+        cancelVoiceInput()
         manualIncognito = !manualIncognito
         applyLearningSuspended()
     }
 
-    /**
-     * 语音输入：**转发给系统里带 voice 子类型的输入法**（通常是 Google 语音输入），
-     * 说完系统会切回本输入法。自研识别不做（docs/android-ime-features.md §9）。
-     */
+    /** Toolbar and accessibility entry: tap 完成 to accept, 取消 to discard. */
     override fun onVoiceInput() {
-        val (id, subtype) = findVoiceInput() ?: run {
-            showToast("没有可用的语音输入法")
-            return
-        }
-        switchInputMethod(id, subtype)
+        if (voiceController?.isActive == true) finishVoiceInput()
+        else beginVoiceInput(held = false)
     }
 
-    /**
-     * 在已启用的输入法里找第一个 `voice` 模式的子类型。
-     *
-     * 只看**已启用**的：没启用的输入法系统不允许切过去，列出来也是点不通的入口。
-     * `allowsImplicitlySelectedSubtypes = true` 是必须的——语音输入法一般不会被
-     * 用户手动勾选子类型，全靠系统隐式选中。
-     */
-    private fun findVoiceInput(): Pair<String, InputMethodSubtype>? {
-        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-        for (imi in imm.enabledInputMethodList) {
-            val subtype = imm.getEnabledInputMethodSubtypeList(imi, true)
-                .firstOrNull { it.mode == "voice" } ?: continue
-            return imi.id to subtype
+    override fun onSpaceVoiceStart(): Boolean = beginVoiceInput(held = true)
+
+    override fun onSpaceVoiceCancelChanged(cancel: Boolean) {
+        voiceCancelOnRelease = cancel
+        renderVoiceStatus()
+    }
+
+    override fun onSpaceVoiceEnd(cancel: Boolean) {
+        if (cancel) cancelVoiceInput()
+        else finishVoiceInput()
+    }
+
+    private fun beginVoiceInput(held: Boolean): Boolean {
+        if (voiceController?.isActive == true) return false
+        val connection = currentInputConnection ?: return false
+        val info = currentInputEditorInfo
+        if (!isInputViewShown || !allowsVoiceInput(info?.inputType ?: 0)) {
+            showToast("请在普通文本框中使用语音输入")
+            return false
         }
-        return null
+        if (composing || hasBufferedInput) {
+            showToast("请先选字，再长按空格说话")
+            return false
+        }
+        if (!VoicePreferences.configured(this) ||
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED ||
+            !VoiceInputController.hasAnyRecognition(this)
+        ) {
+            openVoiceSetup()
+            return false
+        }
+        // A toolbar action can originate in the quick panel. Return first so
+        // the panel-change cancellation cannot invalidate this new request.
+        windowManager?.showKeyboard()
+        candidateMenu?.dismiss()
+        schemaPicker?.dismiss()
+        if (currentInputConnection !== connection || !isInputViewShown ||
+            !allowsVoiceInput(currentInputEditorInfo?.inputType ?: 0)
+        ) return false
+        voiceTarget = VoiceTarget(voiceInputEpoch, connection)
+        voiceHeld = held
+        voiceCancelOnRelease = false
+        val controller = voiceController ?: VoiceInputController(this, object : VoiceInputController.Listener {
+            override fun onState(state: VoiceState) {
+                voiceState = state
+                renderVoiceStatus()
+            }
+
+            override fun onResult(text: String) {
+                val target = voiceTarget ?: return
+                val current = currentInputConnection
+                // The recognizer may finish after a focus or cursor change.
+                // Never resolve the target lazily to whichever app is current.
+                if (target.epoch != voiceInputEpoch || current !== target.connection ||
+                    !isInputViewShown || !allowsVoiceInput(currentInputEditorInfo?.inputType ?: 0) ||
+                    composing || hasBufferedInput ||
+                    (voiceState?.onDevice == false && (manualIncognito || fieldSuspendsLearning))
+                ) return
+                voiceTarget = null
+                deleteUndo.invalidate()
+                // One final commit only: do not route speech through the Pinyin
+                // engine, add a space, or execute an editor's Send action.
+                if (!target.connection.commitText(text, 1)) showToast("文字未能输入，请重新长按空格")
+                reportPrecedingText()
+            }
+
+            override fun onError(message: String) = showToast(message)
+
+            override fun onFinished() {
+                voiceTarget = null
+                clearVoiceStatus()
+                // A held Space gesture still consumes its eventual UP. Do not
+                // call cancelSpaceVoiceGesture from this terminal callback.
+            }
+        }).also { voiceController = it }
+        val started = controller.start(
+            languageTag = if (latinInput) "en-US" else "zh-CN",
+            allowSystemFallback = VoicePreferences.allowSystemFallback(this) &&
+                !manualIncognito && !fieldSuspendsLearning,
+        )
+        if (!started) {
+            voiceTarget = null
+            clearVoiceStatus()
+        }
+        return started
+    }
+
+    private fun finishVoiceInput() {
+        voiceHeld = false
+        voiceCancelOnRelease = false
+        renderVoiceStatus()
+        voiceController?.stop()
+    }
+
+    private fun cancelVoiceInput() {
+        if (cancellingVoice) return
+        cancellingVoice = true
+        try {
+            ++voiceInputEpoch
+            voiceTarget = null
+            voiceController?.cancel()
+            // Also abort a pending long-press timer when recording has not
+            // started yet; otherwise it could start in a different editor.
+            keyboardWindow?.keyboardView?.cancelSpaceVoiceGesture()
+            clearVoiceStatus()
+        } finally {
+            cancellingVoice = false
+        }
+    }
+
+    private fun renderVoiceStatus() {
+        val state = voiceState ?: return
+        if (voiceTarget == null) return
+        barView?.visibility = View.INVISIBLE
+        voiceStatusView?.apply {
+            visibility = View.VISIBLE
+            render(state, cancelOnRelease = voiceCancelOnRelease, held = voiceHeld)
+        }
+    }
+
+    private fun clearVoiceStatus() {
+        voiceState = null
+        voiceHeld = false
+        voiceCancelOnRelease = false
+        voiceStatusView?.visibility = View.GONE
+        barView?.visibility = View.VISIBLE
+    }
+
+    private fun openVoiceSetup() {
+        cancelVoiceInput()
+        requestHideSelf(0)
+        try {
+            startActivity(Intent(this, VoiceSetupActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: RuntimeException) {
+            showToast("无法打开语音设置，请从困困输入法设置中开启语音输入")
+        }
     }
 
     /**
@@ -1877,6 +2093,7 @@ class WindInputImeService :
      * 停在别处时也落到这一页（路由只在创建时从 intent 读）。
      */
     private fun openSettings(page: String? = null, sub: String? = null) {
+        cancelVoiceInput()
         requestHideSelf(0)
         val intent = android.content.Intent(this, SettingsActivity::class.java)
             .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -1889,6 +2106,7 @@ class WindInputImeService :
     }
 
     override fun onToggleExpanded() {
+        cancelVoiceInput()
         val wm = windowManager ?: return
         if (wm.current === expandedCandidatesWindow) {
             wm.showKeyboard()
@@ -1901,6 +2119,7 @@ class WindInputImeService :
     }
 
     override fun onPasteSuggestion(text: String) {
+        cancelVoiceInput()
         currentInputConnection?.commitText(text, 1)
     }
 
@@ -1910,16 +2129,19 @@ class WindInputImeService :
     }
 
     override fun onReadingTapped(reading: LeadingReading) {
+        cancelVoiceInput()
         session.setLeadingReading(reading)
     }
 
     override fun onExpandedCandidateSelected(index: Int) {
+        cancelVoiceInput()
         session.candidateSelected(index)
         // 选中即原位返回：展开候选的唯一去向就是选一个词
         windowManager?.showKeyboard()
     }
 
     override fun onBackToKeyboard() {
+        cancelVoiceInput()
         selecting = false
         windowManager?.showKeyboard()
     }
@@ -1939,6 +2161,7 @@ class WindInputImeService :
      * 拿不到 ExtractedText 的宿主（极少数自绘编辑器）退回方向键，能移不能选。
      */
     override fun onEditAction(action: TextEditingWindow.EditAction) {
+        cancelVoiceInput()
         val ic = currentInputConnection ?: return
         if (hasBufferedInput && action != TextEditingWindow.EditAction.COPY &&
             action != TextEditingWindow.EditAction.TOGGLE_SELECT
@@ -2046,6 +2269,7 @@ class WindInputImeService :
     // ── 剪贴板面板 ───────────────────────────────────────────────
 
     override fun onPasteText(text: String) {
+        cancelVoiceInput()
         currentInputConnection?.commitText(text, 1)
         windowManager?.showKeyboard()
     }
@@ -2089,11 +2313,13 @@ class WindInputImeService :
     }
 
     override fun onSymbolBackspace() {
+        cancelVoiceInput()
         sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
     }
 
     /** 回到进来前的那一层：键盘窗口的层没动过，123 层或数字键盘原样还在 */
     override fun onSymbolBack() {
+        cancelVoiceInput()
         windowManager?.showKeyboard()
     }
 
@@ -2109,6 +2335,7 @@ class WindInputImeService :
      * 字符却已插到了它前面。选词是同步回调，上屏顺序有保证。
      */
     private fun commitDirect(text: String) {
+        cancelVoiceInput()
         if (!engineKey(KeyAction.Commit(text), shifted = false)) commitDirectNow(text)
     }
 
@@ -2125,6 +2352,7 @@ class WindInputImeService :
     }
 
     override fun onEmojiBackspace() {
+        cancelVoiceInput()
         // KEYCODE_DEL 由编辑器按字素删除，代理链正确处理 emoji 代理对
         sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
     }
