@@ -4,7 +4,7 @@
 
 ## 安装与使用
 
-**Android 手机版正在独立开发分支中提供预览工程。** 手机端位于 [android/](android/README.md)，与 Windows 共用输入核心和词库，使用独立的界面、应用标识、版本和构建流程。下列安装步骤仍适用于 Windows；Android 的构建与试用说明见其目录。
+**Android 手机版已合入主分支。** 手机端位于 [android/](android/README.md)，与 Windows 共用输入核心和词库，使用独立的界面、应用标识、版本和构建流程。手机发行采用 `android-v…` 预览标签，最低 Android 16、ARM64。下列安装步骤适用于 Windows；Android 的下载、升级与签名说明见其目录。
 
 1. 从 [GitHub Releases](https://github.com/shuimowang/KunKunIME/releases) 下载 Windows x64 压缩包，将**整个文件夹**解压到长期使用的位置。
 2. 双击 **KunKunIME.exe**，点击 **注册输入法** 并确认 Windows 管理员授权。
@@ -42,10 +42,32 @@
 使用 Windows x64、PowerShell 7、Python 3.11 或更新版本、Rust stable（MSVC 工具链）和 Visual Studio C++ 桌面开发工具（含 CMake、x86 与 x64 工具）。Python 用于随包收集第三方许可。在仓库根目录执行：
 
 ```powershell
-pwsh -File scripts/build-windows.ps1
+pwsh -File scripts/build-windows.ps1 -Profile release
 ```
 
 默认产物在 `dist/困困输入法/`。已有 Cargo 依赖缓存时可加 `-Offline`。注册构建产物后，可运行 `pwsh -File scripts/test-typing.ps1 -Package "dist/困困输入法"`，在专用编辑框中验证 Windows 实际上屏；测试会短暂使用前台键盘。
+
+### Windows 发行附件
+
+生成正式发行包及对应的 Cargo 依赖源码归档：
+
+```powershell
+pwsh -File scripts/build-windows.ps1 -Profile release -ReleaseDir dist/releases
+```
+
+该命令在 `dist/releases/` 输出以下文件，版本号来自 `WindInput/docs/VERSION`：
+
+- `KunKunIME-<版本>-Windows-x64.zip`：完整程序目录，包含主程序、64 位与 32 位 TSF DLL、词库、使用说明和许可文件。
+- `KunKunIME-<版本>-Cargo-sources.zip`：同一锁定依赖图中的 crates.io 源码包、`Cargo.lock` 和许可索引；生成时逐项核对源码包 SHA-256。
+- `SHA256SUMS.txt`：上述两个压缩包的 SHA-256 校验值。
+
+发布前保持 `WindInput/docs/VERSION`、`wind-setting/Cargo.toml`、`WindInput/data_custom/custom.toml` 中的版本，以及两份 Cargo 锁文件中 `wind_setting` 的版本一致。脚本会检查发行包内 EXE 和两个 DLL 的产品版本；`-ReleaseDir` 只接受 `release` 编译配置。新 Windows 发行沿用 `v<版本>` 标签，例如 `v0.1.10`，将这些附件上传到对应标签的 GitHub Release；本仓源码由该标签的源码归档提供，Cargo 依赖源码在单独的附件中。
+
+Cargo 的 `release` 配置决定二进制的优化方式，GitHub Release 提供版本说明和下载附件。Windows 工作流检测到产品版本值变化时，改用 `release` 配置构建和运行回归；主分支的 Windows 与设置检查都成功后，自动创建对应版本的 Release，上传并核对这三个附件，再公开发布。PR 只做检查，不发布。新版本有发行说明、但尚未建立标签时，后续修复提交继续使用发行配置；标签建立后，普通代码提交恢复 `dev-variant`，不重复发行同一个版本。
+
+手动运行 Windows 工作流并勾选 `publish_release` 可以请求当前版本的发行构建。上传中断时只重试发布 job，可复用原构建的附件；已有公开版本不允许被新构建覆盖。发行标签必须指向实际通过检查的提交，版本对应的说明保存在 `releases/v<版本>.md`。
+
+Android 工作流分别验证 debug 的初始化暂存流程和非 debug release 的真实输入流程，成功后为新版本准备独立的预览草稿。维护者按 [Android 签名说明](android/README.md#分发签名)使用固定私钥签名，上传手机 APK、对应依赖源码和最终校验文件，再公开草稿；CI 的临时证书 APK 不自动成为用户下载包。私钥和恢复密码不进入仓库或工作流产物。
 
 | 开发入口 | 源码 |
 |---|---|

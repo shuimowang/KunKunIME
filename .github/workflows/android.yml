@@ -6,13 +6,18 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      prepare_release:
+        description: Prepare a release draft after both device checks (main only; fixed-key signing remains separate)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
   group: android-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   changes:
@@ -20,6 +25,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       android: ${{ steps.filter.outputs.android }}
+      release: ${{ steps.filter.outputs.release }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -30,26 +36,52 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PUSH_BASE: ${{ github.event.before }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PREPARE_RELEASE: ${{ inputs.prepare_release }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
           import os
+          from pathlib import Path
+          import re
           import subprocess
+
+          def version_of(source):
+              code = re.search(r'versionCode\s*=\s*(\d+)', source)
+              name = re.search(r'versionName\s*=\s*"([^"]+)"', source)
+              if code is None or name is None:
+                  raise ValueError("Cannot identify Android version declarations")
+              return code[1], name[1]
 
           base = os.environ["PR_BASE"] or os.environ["PUSH_BASE"]
           run = True
+          release = os.environ.get("PREPARE_RELEASE") == "true"
+          version_path = "android/app/build.gradle.kts"
+          current_version = version_of(Path(version_path).read_text())
           if os.environ["EVENT_NAME"] != "workflow_dispatch" and base and set(base) != {"0"}:
               paths = subprocess.check_output(
                   ["git", "diff", "--name-only", "--no-renames", "-z", base, "HEAD"]
               ).decode().split("\0")
               run = any(p.startswith(("android/", "WindInput/", "licenses/")) or
-                        p in {".github/workflows/android.yml", "LICENSE", "ORIGINS.md"}
+                        p in {".github/workflows/android.yml", "scripts/collect-cargo-notices.py", "LICENSE", "ORIGINS.md"}
                         for p in paths)
+              if version_path in paths:
+                  previous = subprocess.check_output(["git", "show", f"{base}:{version_path}"], text=True)
+                  release = version_of(previous) != current_version
+          if run and not release and Path(f"releases/android-v{current_version[1]}.md").is_file():
+              tag = subprocess.run(
+                  ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/git/ref/tags/android-v{current_version[1]}"],
+                  text=True, capture_output=True,
+              )
+              if tag.returncode and "(HTTP 404)" not in tag.stderr:
+                  raise RuntimeError(tag.stderr)
+              release = tag.returncode != 0
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write(f"android={str(run).lower()}\n")
+              output.write(f"release={str(release).lower()}\n")
           PY
 
   build:
-    name: Android native core, APK and device smoke test
+    name: Android release APK, debug queue and release IME tests
     needs: changes
     if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-24.04
@@ -122,18 +154,50 @@ jobs:
       - name: Generate notices for the actual Rust dependencies
         run: scripts/gen-rust-licenses.sh
 
-      - name: Test Kotlin and build the app plus instrumentation APK
-        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
+      - name: Archive the locked Android Rust dependency sources and notices
+        run: |
+          rustup component add rust-docs --toolchain 1.100.0
+          python3 ../scripts/collect-cargo-notices.py \
+            --manifest rust/Cargo.toml --package wind-android \
+            --target aarch64-linux-android --target x86_64-linux-android \
+            --output app/build/release-support/cargo-notices \
+            --crate-sources app/build/release-support/Cargo-sources.zip
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
 
-      - name: Verify phone and emulator APK architectures and shared app code
-        run: python3 scripts/verify-apks.py
+          support = Path("app/build/release-support")
+          notices = support / "cargo-notices"
+          with ZipFile(support / "Cargo-sources.zip", "a") as archive:
+              for source in sorted(notices.rglob("*")):
+                  if source.is_file():
+                      archive.write(source, "notices/" + source.relative_to(notices).as_posix())
+          PY
+
+      - name: Build debug APKs for queue and view regression tests
+        run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
+
+      - name: Test Kotlin and build non-debuggable release app plus matching instrumentation
+        # The CI key is temporary. The tested release payload is re-signed with
+        # the external fixed key after download; no private signing key enters CI.
+        run: >-
+          ./gradlew :app:testReleaseUnitTest :app:assembleRelease :app:assembleReleaseAndroidTest
+          -PimeTestBuildType=release -PciReleaseSigning=true --no-daemon
+
+      - name: Verify release identity, flags, ABI payloads and publication metadata
+        run: |
+          python3 scripts/verify-apks.py --variant debug
+          python3 scripts/verify-apks.py --variant release \
+            --aapt2 "$ANDROID_HOME/build-tools/37.0.0/aapt2" \
+            --cargo-sources app/build/release-support/Cargo-sources.zip \
+            --write-release-info app/build/release-support/release-info.json
 
       - name: Enable emulator acceleration
         run: |
           test -e /dev/kvm
           sudo chmod a+rw /dev/kvm
 
-      - name: Verify the installed app with a real Android input connection
+      - name: Verify debug startup queue and actual release IME separately
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 36
@@ -145,7 +209,9 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           disable-animations: true
           working-directory: android
-          script: bash scripts/smoke-test.sh
+          script: |
+            bash scripts/smoke-test.sh debug
+            bash scripts/smoke-test.sh release
 
       - name: Upload device and JVM test reports
         if: always()
@@ -160,18 +226,56 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Upload the verified ARM64 phone APK
+      - name: Upload the verified ARM64 release APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: KunKunIME-Android-arm64-debug
-          path: android/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+          name: KunKunIME-Android-arm64-release
+          path: android/app/build/outputs/apk/release/*-arm64-v8a.apk
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload the verified x86_64 emulator APK
+      - name: Upload the verified x86_64 release APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: KunKunIME-Android-x86_64-debug
-          path: android/app/build/outputs/apk/debug/app-x86_64-debug.apk
+          name: KunKunIME-Android-x86_64-release
+          path: android/app/build/outputs/apk/release/*-x86_64.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload verified release metadata and locked Rust sources
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: KunKunIME-Android-release-support
+          path: |
+            android/app/build/release-support/release-info.json
+            android/app/build/release-support/Cargo-sources.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release-draft:
+    name: Prepare the checked Android release draft
+    needs: [changes, build]
+    if: >-
+      needs.changes.outputs.release == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: prepare-android-release-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Download this run's verified release identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name KunKunIME-Android-release-support --dir release-support
+      - name: Create an exact-source prerelease draft awaiting the fixed-key APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/publish-release.py --platform android --metadata release-support/release-info.json --draft-only

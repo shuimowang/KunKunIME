@@ -1,14 +1,33 @@
 #!/usr/bin/env bash
 # Install this build and exercise its real IME on a dedicated, running emulator.
-# Requires assembleDebug + assembleDebugAndroidTest; never reuses an old APK.
-# Outputs instrumentation results, logcat and a screenshot under app/build/.
+# Usage: smoke-test.sh [debug|release]. Requires the matching app/test APK pair.
+# Each run starts with clean app data on a dedicated emulator. Reports are kept
+# separately; only debug can cover the deterministic startup queue gate.
 set -euo pipefail
 
 smoke_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app_id="io.github.shuimowang.kunkunime"
-smoke_apk="$smoke_root/app/build/outputs/apk/debug/app-x86_64-debug.apk"
-smoke_test_apk="$smoke_root/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
-smoke_results="$smoke_root/app/build/smoke-results"
+smoke_variant="${1:-debug}"
+case "$smoke_variant" in
+    debug|release) ;;
+    *) echo 'Usage: smoke-test.sh [debug|release]' >&2; exit 2 ;;
+esac
+smoke_apk="$(python3 - "$smoke_root" "$smoke_variant" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+folder = Path(sys.argv[1]) / "app/build/outputs/apk" / sys.argv[2]
+metadata = json.loads((folder / "output-metadata.json").read_text())
+outputs = [entry["outputFile"] for entry in metadata["elements"]
+           if {f["value"] for f in entry["filters"] if f["filterType"] == "ABI"} == {"x86_64"}]
+if len(outputs) != 1:
+    raise SystemExit("Expected one x86_64 APK in this build's output metadata")
+print(folder / outputs[0])
+PY
+)"
+smoke_test_apk="$smoke_root/app/build/outputs/apk/androidTest/$smoke_variant/app-$smoke_variant-androidTest.apk"
+smoke_results="$smoke_root/app/build/smoke-results/$smoke_variant"
 smoke_adb="${ADB:-adb}"
 smoke_serial="${ANDROID_SERIAL:-$($smoke_adb get-serialno)}"
 adb_device() { "$smoke_adb" -s "$smoke_serial" "$@"; }
@@ -63,17 +82,21 @@ PY
 
 adb_device install -r -t "$smoke_apk"
 adb_device install -r -t "$smoke_test_apk"
+# Debug finishes in English mode; release must not inherit its settings, words,
+# screenshots or derived caches. This guard-protected emulator is test-only.
+test "$(adb_device shell pm clear "$app_id" | tr -d '\r')" = 'Success'
 adb_device shell am force-stop "$app_id"
 adb_device logcat -c
 
-# These existing tests cross the optimized app/test APK boundary, including
-# listeners and Kotlin's default-argument bridge. Exercise the shipped code.
-adb_device shell am instrument -w -r \
-    -e class com.windinput.ime.keyboard.A11yActionTest,com.windinput.ime.keyboard.MultiTouchTest \
-    "$app_id.test/androidx.test.runner.AndroidJUnitRunner" \
-    | tr -d '\r' | tee "$smoke_results/keyboard-instrumentation.txt"
-verify_instrumentation "$smoke_results/keyboard-instrumentation.txt" 6
-adb_device logcat -d -v threadtime > "$smoke_results/keyboard-logcat.txt"
+if [[ "$smoke_variant" == debug ]]; then
+    # Direct view APIs and the startup-control API are only kept in debug.
+    adb_device shell am instrument -w -r \
+        -e class com.windinput.ime.keyboard.A11yActionTest,com.windinput.ime.keyboard.MultiTouchTest \
+        "$app_id.test/androidx.test.runner.AndroidJUnitRunner" \
+        | tr -d '\r' | tee "$smoke_results/keyboard-instrumentation.txt"
+    verify_instrumentation "$smoke_results/keyboard-instrumentation.txt" 6
+    adb_device logcat -d -v threadtime > "$smoke_results/keyboard-logcat.txt"
+fi
 
 # Keep the real-IME startup check cold after the isolated keyboard tests.
 adb_device shell am force-stop "$app_id"
@@ -88,9 +111,15 @@ adb_device shell am instrument -w -r \
 
 verify_instrumentation "$smoke_results/instrumentation.txt" 1
 
-for screenshot in cold-start-queued.png pinyin-candidates.png number-pad.png; do
+smoke_screenshots=(pinyin-candidates.png number-pad.png)
+if [[ "$smoke_variant" == debug ]]; then smoke_screenshots+=(cold-start-queued.png); fi
+for screenshot in "${smoke_screenshots[@]}"; do
     adb_device pull "/sdcard/Android/data/$app_id/files/smoke/$screenshot" "$smoke_results/$screenshot"
     test -s "$smoke_results/$screenshot"
 done
 
-echo 'KunKunIME device smoke passed: queued startup Pinyin, editor changes, English, password, numbers, hide/show.'
+if [[ "$smoke_variant" == debug ]]; then
+    echo 'KunKunIME debug smoke passed: startup queue/cancellation, six view tests, real IME input.'
+else
+    echo 'KunKunIME release smoke passed: non-debuggable app, real Pinyin/backspace, English, password, numbers, hide/show. No startup gate was used.'
+fi

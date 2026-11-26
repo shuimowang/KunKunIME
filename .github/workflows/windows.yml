@@ -5,6 +5,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Build the current Windows version with release optimizations and publish after all checks (main only)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,6 +22,8 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       windows: ${{ steps.filter.outputs.windows }}
+      release: ${{ steps.filter.outputs.release }}
+      profile: ${{ steps.filter.outputs.profile }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -27,28 +34,55 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PUSH_BASE: ${{ github.event.before }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
           import os
+          from pathlib import Path
           import subprocess
 
           base = os.environ["PR_BASE"] or os.environ["PUSH_BASE"]
           run = True
+          release = os.environ.get("PUBLISH_RELEASE") == "true"
           if os.environ["EVENT_NAME"] != "workflow_dispatch" and base and set(base) != {"0"}:
               paths = subprocess.check_output(
                   ["git", "diff", "--name-only", "--no-renames", "-z", base, "HEAD"]
               ).decode().split("\0")
               run = any(p and not p.startswith("android/") and
                         p != ".github/workflows/android.yml" for p in paths)
+              if "WindInput/docs/VERSION" in paths:
+                  previous = subprocess.check_output(
+                      ["git", "show", f"{base}:WindInput/docs/VERSION"], text=True
+                  ).strip()
+                  release = previous != Path("WindInput/docs/VERSION").read_text().strip()
+          # Keep an announced version in release mode while repairing a failed
+          # build. Once its tag exists, ordinary commits use development checks.
+          version = Path("WindInput/docs/VERSION").read_text().strip()
+          if run and not release and Path(f"releases/v{version}.md").is_file():
+              tag = subprocess.run(
+                  ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/git/ref/tags/v{version}"],
+                  text=True, capture_output=True,
+              )
+              if tag.returncode and "(HTTP 404)" not in tag.stderr:
+                  raise RuntimeError(tag.stderr)
+              release = tag.returncode != 0
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write(f"windows={str(run).lower()}\n")
+              output.write(f"release={str(release).lower()}\n")
+              output.write(f"profile={'release' if release else 'dev-variant'}\n")
           PY
+      - name: Check release upload guards
+        run: python3 -m unittest discover -s tests/release -v
 
   windows:
     needs: changes
     if: needs.changes.outputs.windows == 'true'
     runs-on: windows-2022
-    timeout-minutes: 60
+    timeout-minutes: 90
+    env:
+      KUNKUN_CARGO_PROFILE: ${{ needs.changes.outputs.profile }}
+      KUNKUN_RELEASE_BUILD: ${{ needs.changes.outputs.release }}
     defaults:
       run:
         shell: pwsh
@@ -63,7 +97,12 @@ jobs:
           rustup default 1.100.0
           rustc -V
       - name: Build the Windows application and both TSF components
-        run: ./scripts/build-windows.ps1
+        run: |
+          if ($env:KUNKUN_RELEASE_BUILD -eq 'true') {
+            ./scripts/build-windows.ps1 -Profile release -ReleaseDir dist/releases
+          } else {
+            ./scripts/build-windows.ps1 -Profile dev-variant
+          }
       - name: Load the 64-bit and 32-bit COM components without registering
         run: ./scripts/test-tsf.ps1 -Package (Join-Path $PWD 'dist/困困输入法')
 
@@ -72,21 +111,29 @@ jobs:
           python -X utf8 tests/windows/mcp_stdio.py "dist/困困输入法/KunKunIME.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:CARGO_TARGET_DIR = Join-Path $PWD 'target'
-          cargo test --locked --manifest-path WindInput/wind_input/Cargo.toml --profile dev-variant -p wind_service --bin KunKunIME mcp::
+          cargo test --locked --manifest-path WindInput/wind_input/Cargo.toml --profile $env:KUNKUN_CARGO_PROFILE -p wind_service --bin KunKunIME mcp::
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked --manifest-path WindInput/wind_input/Cargo.toml --profile dev-variant -p wind_service --bin KunKunIME register_ime::tests::default_ime_
+          cargo test --locked --manifest-path WindInput/wind_input/Cargo.toml --profile $env:KUNKUN_CARGO_PROFILE -p wind_service --bin KunKunIME register_ime::tests::default_ime_
 
 
       - name: Test Pinyin, direct English typing and completions
         run: |
           $env:CARGO_TARGET_DIR = Join-Path $PWD 'target'
-          cargo test --locked --manifest-path WindInput/wind_input/Cargo.toml --profile dev-variant -p wind-coordinator --test kunkun_bilingual --test manual_completions
+          cargo test --locked --manifest-path WindInput/wind_input/Cargo.toml --profile $env:KUNKUN_CARGO_PROFILE -p wind-coordinator --test kunkun_bilingual --test manual_completions
       - name: Test candidate z-order without stealing input focus
         run: |
           $env:CARGO_TARGET_DIR = Join-Path $PWD 'target'
-          cargo test --locked --manifest-path WindInput/wind_input/Cargo.toml --profile dev-variant -p wind-ui --lib candidate_window::topmost_tests -- --test-threads=1
+          cargo test --locked --manifest-path WindInput/wind_input/Cargo.toml --profile $env:KUNKUN_CARGO_PROFILE -p wind-ui --lib candidate_window::topmost_tests -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked --manifest-path WindInput/wind_input/Cargo.toml --profile dev-variant -p wind-ui --lib candidate_window::tests::present_
+          cargo test --locked --manifest-path WindInput/wind_input/Cargo.toml --profile $env:KUNKUN_CARGO_PROFILE -p wind-ui --lib candidate_window::tests::present_
+      - name: Upload versioned release archives after the Windows checks
+        if: needs.changes.outputs.release == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: KunKunIME-Windows-release
+          path: dist/releases/
+          if-no-files-found: error
+          retention-days: 14
       - name: Archive the verified Windows bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -102,6 +149,7 @@ jobs:
     timeout-minutes: 45
     env:
       CARGO_PROFILE_DEV_DEBUG: '0'
+      KUNKUN_SETTINGS_PROFILE: ${{ needs.changes.outputs.release == 'true' && 'release' || 'dev' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -111,14 +159,42 @@ jobs:
       - name: Test settings and the completion manager
         shell: pwsh
         run: |
-          cargo test --locked --manifest-path wind-setting/Cargo.toml --lib autosave -- --test-threads=1
+          cargo test --locked --manifest-path wind-setting/Cargo.toml --profile $env:KUNKUN_SETTINGS_PROFILE --lib autosave -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked --manifest-path wind-setting/Cargo.toml --lib completion_add -- --test-threads=1
+          cargo test --locked --manifest-path wind-setting/Cargo.toml --profile $env:KUNKUN_SETTINGS_PROFILE --lib completion_add -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked --manifest-path wind-setting/Cargo.toml --lib unified_window -- --test-threads=1
+          cargo test --locked --manifest-path wind-setting/Cargo.toml --profile $env:KUNKUN_SETTINGS_PROFILE --lib unified_window -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked --manifest-path wind-setting/Cargo.toml --lib completion_rules_ -- --test-threads=1
+          cargo test --locked --manifest-path wind-setting/Cargo.toml --profile $env:KUNKUN_SETTINGS_PROFILE --lib completion_rules_ -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked --manifest-path wind-setting/Cargo.toml --lib mcp_guide_ -- --test-threads=1
+          cargo test --locked --manifest-path wind-setting/Cargo.toml --profile $env:KUNKUN_SETTINGS_PROFILE --lib mcp_guide_ -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked --manifest-path wind-setting/Cargo.toml --lib windows_default_ime_ -- --test-threads=1
+          cargo test --locked --manifest-path wind-setting/Cargo.toml --profile $env:KUNKUN_SETTINGS_PROFILE --lib windows_default_ime_ -- --test-threads=1
+
+  publish:
+    name: Publish the verified Windows release
+    needs: [changes, windows, settings]
+    if: >-
+      needs.changes.outputs.release == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: publish-windows-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Download only this run's checked release archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name KunKunIME-Windows-release --dir release-assets
+      - name: Verify files, create a draft, upload, and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/publish-release.py --platform windows --assets release-assets

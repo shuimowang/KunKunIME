@@ -2,7 +2,7 @@
 
 Android 手机键盘与 Windows 版放在同一个仓库，使用同一份 Rust 拼音、双拼、英语核心和词库。Android 界面与系统输入接口独立位于本目录，电脑版的 TSF、候选窗口和设置程序保持原来的工程边界。
 
-这是 `0.1.0-preview.3` 试用版，尚未发布稳定版。按个人使用需求，最低要求提高到 **Android 16（API 36）**，不再维护旧系统兼容分支。`targetSdk` 保持 36，使用 Android 37.0 SDK 编译；最低安装版本与目标平台版本分别管理。手机包面向 ARM64，CI 另行构建 x86_64 用于模拟器验证。两个架构分别打包，手机无需下载模拟器的原生库。
+这是 `0.1.0-preview.4` 试用版，分发包使用**非调试 release 构建**，发布渠道仍为预览版。按个人使用需求，最低要求为 **Android 16（API 36）**，不再维护旧系统兼容分支。`targetSdk` 保持 36，使用 Android 37.0 SDK 编译；最低安装版本与目标平台版本分别管理。手机包面向 ARM64，CI 另行构建 x86_64 用于模拟器验证。两个架构分别打包，手机无需下载模拟器的原生库。
 
 ## 当前范围
 
@@ -12,7 +12,14 @@ Android 手机键盘与 Windows 版放在同一个仓库，使用同一份 Rust 
 - 按输入框类型处理密码、数字、回车动作和禁止个性化学习。
 - 字母页默认采用「123 · 逗句号合一 · 宽空格 · 中英 · 回车」底行，字母角标默认隐藏；候选与键盘共用浅灰背景、白色圆角键、蓝色强调色。
 
-### preview.3 的改进
+### preview.4 的发行构建
+
+- 使用 `versionCode = 4` 的非调试 release APK，保留 R8 代码与资源压缩；应用标识、共享核心和 API 36 基线不变。
+- CI 分别运行 debug 的 6 项控件测试和启动队列烟测，再安装实际 release APK，验证真实中文候选、退格、英语、密码、数字与键盘收起重开。release 没有启动门闩接口，其测试不声称覆盖人为暂停初始化的场景。
+- 校验实际 APK 的版本、非调试标志、非 test-only 标志、原生架构及两种架构共有的代码/资源/词库内容；只将验证通过的 release APK 输出为发行工件。
+- 同时提供与两个 Android 目标的锁定依赖匹配的 `Cargo-sources.zip`，包含原始 crate 归档、`Cargo.lock`、依赖索引和许可证文本。项目本身的源码对应同一发布标签。
+
+### preview.3 已包含的改进
 
 - 直接使用现代系统的窗口 Insets、输入法子类型、剪贴板敏感标记和振动接口，删除旧系统版本判断；保留不同手机的振动能力检查、编辑器能力回退及系统按钮避让。
 - 对实际分发和设备测试使用的预览包启用 R8 代码与资源压缩，保留必要的原生接口、反射入口和测试入口；CI 同时保存本次映射，便于诊断。它仍是可调试的预览版。
@@ -38,7 +45,7 @@ Android 手机键盘与 Windows 版放在同一个仓库，使用同一份 Rust 
 
 **从 preview.1 迁移：** 首版使用临时 CI 证书，与 preview.2 的固定签名不同，因此不能直接覆盖。已安装首版时，先在设置中导出个人词库，再卸载旧版并安装新版，之后导回词库。卸载会清除应用设置和未导出的本机数据。
 
-**从已签名 preview.2 更新到 preview.3：** 可以直接覆盖安装，保留设置与词库。自 preview.2 起，分发包继续使用同一把私有密钥并递增 Android `versionCode`。GitHub Actions 的原始 `debug` 产物仍用临时测试证书，与已签名分发包不能混装更新；原始产物主要用于开发和复核。固定签名不改变此版仍为调试预览包的性质。
+**从已签名 preview.2 / preview.3 更新到 preview.4：** 同一应用标识、同一固定签名、递增的 `versionCode` 支持覆盖安装并保留设置与词库。GitHub Releases 的分发包使用固定签名；Actions 的原始 release APK 使用临时测试证书，必须先完成固定私钥重签，才能作为已有安装的更新包。重签过程核对所有应用内容保持不变。
 
 本应用不申请网络权限。设置中的项目主页、反馈和版本下载由用户点击后交给浏览器打开。拼音候选、输入记录和学习数据在本机处理；其他系统输入法和应用的行为各自独立。
 
@@ -62,10 +69,15 @@ GitHub 工作流位于 [`../.github/workflows/android.yml`](../.github/workflows
 
 | 架构 | Gradle 输出 | Actions 产物 |
 |---|---|---|
-| ARM64 手机 | `app/build/outputs/apk/debug/app-arm64-v8a-debug.apk` | `KunKunIME-Android-arm64-debug` |
-| x86_64 模拟器 | `app/build/outputs/apk/debug/app-x86_64-debug.apk` | `KunKunIME-Android-x86_64-debug` |
+| ARM64 手机 | `app/build/outputs/apk/release/KunKunIME-Android-0.1.0-preview.4-arm64-v8a.apk` | `KunKunIME-Android-arm64-release` |
+| x86_64 模拟器 | `app/build/outputs/apk/release/KunKunIME-Android-0.1.0-preview.4-x86_64.apk` | `KunKunIME-Android-x86_64-release` |
+| 发行元数据与 Rust 依赖源码 | `app/build/release-support/release-info.json`、`Cargo-sources.zip` | `KunKunIME-Android-release-support` |
 
-设备测试安装带有真实 x86_64 核心的压缩 APK，先运行已有的 6 项无障碍和多指触控用例，再重启应用，通过触屏按键和候选验证中文上屏、英语空格、密码及数字输入，并检查拼音页、数字页的按键与系统底部按钮不重叠。冷启动测试在 debug 进程中短暂暂停真实核心的交接，验证早输、退格和切换输入框的顺序；它不替换核心，不依赖设备恰好足够慢。门闩默认不启用，没有外部触发入口，release 实现不等待。
+设备验证分成两轮，均使用带真实 x86_64 核心的压缩 APK 和系统输入连接。debug 轮先运行 6 项无障碍和多指触控用例，再短暂暂停真实核心的交接，验证早输、退格、换框取消与后续中文上屏；门闩默认不启用，也没有外部触发入口。release 轮清空专用模拟器中的应用数据，安装实际发行构建，确认其不可调试，等待正常初始化后通过触屏按键验证 `nihaox` 加退格产生“你好”，以及英语空格、密码、数字、收起重开和系统导航按钮避让。release 轮不使用门闩、不替换核心，也不通过测试直接调用原生按键接口。两轮报告分别保存在 `app/build/smoke-results/debug` 与 `release`。
+
+Gradle 默认测试 debug；`-PimeTestBuildType=release` 选择 release 的测试 APK，`-PciReleaseSigning=true` 只让 release 临时使用当前环境的测试证书。该参数不改变 release 的源码、优化规则或调试标志。release 不保留 debug 门闩与控件直调测试入口；两种构建保留独立测试 APK 所需的共享 Kotlin/AndroidX 运行时 ABI，避免应用压缩先移除测试框架需要的方法。输入测试台在 release 中不对其他应用导出，仍可在应用内部和同 UID 仪器测试中使用。
+
+`scripts/verify-apks.py` 从 APK 清单提取真实版本，与 Gradle `output-metadata.json` 交叉核对后输出 `release-info.json`。其中 `version_name`、`version_code`、`git_commit` 用于确定对应提交与发布标签；`apks` 和 `cargo_sources` 记录文件名与 SHA-256。源码归档复用仓库的 `scripts/collect-cargo-notices.py --crate-sources`，对 ARM64 与 x86_64 的 `wind-android` 依赖图取并集，逐个核对原始 crate 与 Android 锁文件中的校验和。
 
 本地构建需要 Python 3.11+、JDK 21、Android SDK `platforms;android-37.0` / `build-tools;37.0.0`、NDK `28.2.13676358`、Rust 和 cargo-ndk。依赖版本固定在 Gradle 配置、版本目录与 Cargo 锁文件中。
 
@@ -77,7 +89,17 @@ python3 scripts/prepare-assets.py
 rustup target add aarch64-linux-android x86_64-linux-android
 cargo install cargo-ndk --locked
 scripts/build-rust.sh release
-./gradlew :app:assembleDebug :app:testDebugUnitTest --no-daemon
+./gradlew :app:assembleRelease :app:testReleaseUnitTest --no-daemon
+```
+
+未配置个人签名时，上述 release 输出未签名。复现 CI 的两套仪器测试构建和专用模拟器验证：
+
+```bash
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
+./gradlew :app:testReleaseUnitTest :app:assembleRelease :app:assembleReleaseAndroidTest \
+  -PimeTestBuildType=release -PciReleaseSigning=true --no-daemon
+bash scripts/smoke-test.sh debug
+bash scripts/smoke-test.sh release
 ```
 
 Windows 开发机可用 `scripts/build-rust.ps1`，并配置 `ANDROID_NDK_HOME`。缺少 ARM64 Rust 核心时 Gradle 会拒绝打包，避免产生只有模拟候选的安装包。运行时初始化失败也会明确提示。
@@ -96,8 +118,8 @@ Windows 开发机可用 `scripts/build-rust.ps1`，并配置 `ANDROID_NDK_HOME`�
 
 ```bash
 python3 scripts/sign-apk.py \
-  --input /path/to/app-arm64-v8a-debug.apk \
-  --output /path/to/KunKunIME-Android-0.1.0-preview.3-arm64.apk \
+  --input /path/to/ci/KunKunIME-Android-0.1.0-preview.4-arm64-v8a.apk \
+  --output /path/to/distribution/KunKunIME-Android-0.1.0-preview.4-arm64-v8a.apk \
   --build-tools /path/to/android-sdk/build-tools/37.0.0 \
   --keystore /private/kunkun-android.p12 \
   --password-file /private/keystore-password.txt

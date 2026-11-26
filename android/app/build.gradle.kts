@@ -7,8 +7,19 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Instrument both builds in separate Gradle invocations. Selecting the tested
+// build never changes the app's source or shrinker rules.
+val imeTestBuildType = providers.gradleProperty("imeTestBuildType").orElse("debug").get()
+check(imeTestBuildType in setOf("debug", "release")) { "imeTestBuildType must be debug or release" }
+val ciReleaseSigning = providers.gradleProperty("ciReleaseSigning")
+    .map { it.toBooleanStrict() }.orElse(false).get()
+
 android {
     namespace = "com.windinput.ime"
+    testBuildType = imeTestBuildType
+    sourceSets.getByName("androidTest").java.srcDir(
+        if (imeTestBuildType == "release") "src/testSupportRelease/java" else "src/testSupportDebug/java",
+    )
     // miuix 0.9.3 要求 compileSdk ≥ 37；AGP 8.13 官方推荐上限 36，
     // 已在 gradle.properties 里 suppressUnsupportedCompileSdk 抑制告警
     //
@@ -24,8 +35,8 @@ android {
         // Personal-use baseline: Android 16 and newer.
         minSdk = 36
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.1.0-preview.3"
+        versionCode = 4
+        versionName = "0.1.0-preview.4"
         // 仪器测试（androidTest）：自绘控件的无障碍动作等要在真实 Android 运行时里验
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -46,7 +57,9 @@ android {
     // 显式配置个人签名时 debug 与 release 共用该签名，以便覆盖安装。
     // 密钥文件与密码放 local.properties（已 gitignore）的 signing.* 四项，绝不进仓库。
     // 没给这四项（别人 clone、CI）：debug 使用 Android 工具在当前环境生成的调试密钥，
-    // release 保持未签名。任何签名密钥都不提交源码仓库。
+    // release 默认未签名。CI 显式传 ciReleaseSigning=true，临时使用同一测试签名，
+    // 让仪器测试能运行实际 release 包；分发前再用外部固定私钥重签原包，不重新构建。
+    // 任何签名密钥都不提交源码仓库。
     val localProps = Properties().apply {
         val f = rootProject.file("local.properties")
         if (f.isFile) f.inputStream().use { load(it) }
@@ -69,14 +82,14 @@ android {
 
     buildTypes {
         debug {
-            // Ship the same optimized preview APK that the device smoke installs.
-            // It remains debuggable; this is not a release build or a new variant.
+            // Keep the debug-only startup queue and view-contract regression tests.
             isDebuggable = true
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
+                "proguard-instrumentation-runtime.pro",
                 "proguard-preview-entrypoints.pro",
             )
             // AGP applies this build's app mapping when processing androidTest.
@@ -84,14 +97,20 @@ android {
         }
         release {
             // R8 code/resource shrinking; JNA and UniFFI entry points are in proguard-rules.pro.
+            isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
+                "proguard-instrumentation-runtime.pro",
             )
-            // 同一把：有个人密钥才签 release
-            if (personalSigning != null) signingConfig = signingConfigs.getByName("debug")
+            // Only runtime ABI is retained for instrumentation; debug gate and
+            // direct view-test entry points are absent from release keep rules.
+            testProguardFiles("proguard-instrumentation-release.pro")
+            if (personalSigning != null || ciReleaseSigning) {
+                signingConfig = signingConfigs.getByName("debug")
+            }
         }
     }
 

@@ -2,6 +2,7 @@
 param(
     [ValidateSet('dev-variant','release')][string]$Profile='dev-variant',
     [string]$OutDir,
+    [string]$ReleaseDir,
     [switch]$PackageOnly,
     [switch]$Offline
 )
@@ -11,6 +12,19 @@ if(-not $OutDir){$OutDir=Join-Path $project 'dist\困困输入法'}
 $outputPath=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutDir)
 $engine=Join-Path $project 'WindInput'
 $version=(Get-Content -Raw -LiteralPath (Join-Path $engine 'docs\VERSION')).Trim()
+$releasePath=$null
+$sourceArchive=$null
+if($ReleaseDir){
+    if($Profile -ne 'release'){throw '-ReleaseDir 需要 -Profile release。'}
+    $releasePath=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ReleaseDir)
+    $packagePath=$outputPath.TrimEnd([char[]]@('\','/'))
+    $releaseRoot=$releasePath.TrimEnd([char[]]@('\','/'))
+    if($releaseRoot -eq $packagePath -or $releaseRoot.StartsWith($packagePath+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){
+        throw '发行附件目录必须位于程序输出目录之外。'
+    }
+    $null=New-Item -ItemType Directory -Path $releasePath -Force
+    $sourceArchive=Join-Path $releasePath "KunKunIME-$version-Cargo-sources.zip"
+}
 $targetRoot=Join-Path $project 'target'
 $native=Join-Path $project 'artifacts\windows'
 if(-not $PackageOnly){
@@ -27,6 +41,12 @@ $exe=Join-Path $targetRoot "$Profile\KunKunIME.exe"
 $payload=@($exe,(Join-Path $native 'kunkun_tsf.dll'),(Join-Path $native 'kunkun_tsf_x86.dll'))
 foreach($file in $payload){if(-not (Test-Path -LiteralPath $file -PathType Leaf)){throw "缺少构建产物 $file"}}
 if([Diagnostics.FileVersionInfo]::GetVersionInfo($exe).ProductName -notlike '*困困*'){throw 'EXE 产品标识不正确。'}
+if($releasePath){
+    foreach($file in $payload){
+        $actualVersion=[Diagnostics.FileVersionInfo]::GetVersionInfo($file).ProductVersion
+        if($actualVersion -ne $version){throw "发行文件版本不匹配：$file 为 $actualVersion，预期 $version。"}
+    }
+}
 $running=@(Get-Process -Name KunKunIME -ErrorAction SilentlyContinue | Where-Object {$_.Path -eq (Join-Path $outputPath 'KunKunIME.exe')})
 if($running.Count){throw "目标目录有运行中的困困输入法。可以先通过 -OutDir 构建到其他目录。"}
 $null=New-Item -Path $outputPath -ItemType Directory -Force
@@ -59,11 +79,22 @@ Copy-Item -LiteralPath (Join-Path $project 'licenses\THIRD-PARTY.md') -Destinati
 Copy-Item -LiteralPath (Join-Path $project 'licenses\data') -Destination $lic -Recurse -Force
 $python=(Get-Command python -ErrorAction Stop).Source
 $noticeArgs=@('-X','utf8','-B',(Join-Path $PSScriptRoot 'collect-cargo-notices.py'),'--output',(Join-Path $lic 'rust'))
+if($sourceArchive){$noticeArgs+=@('--crate-sources',$sourceArchive)}
 if($Offline){$noticeArgs+='--offline'}
 & $python @noticeArgs
 if($LASTEXITCODE -ne 0){throw 'Rust 第三方声明收集失败。'}
 Copy-Item -LiteralPath (Join-Path $project 'docs\使用说明.md') -Destination (Join-Path $outputPath '使用说明.md') -Force
 Copy-Item -LiteralPath (Join-Path $project 'docs\MCP.md') -Destination (Join-Path $outputPath 'MCP.md') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '卸载Windows输入法注册.md') -Destination $outputPath -Force
+if($releasePath){
+    $windowsArchive=Join-Path $releasePath "KunKunIME-$version-Windows-x64.zip"
+    Compress-Archive -LiteralPath $outputPath -DestinationPath $windowsArchive -CompressionLevel Optimal -Force
+    $checksums=@($windowsArchive,$sourceArchive) | ForEach-Object {
+        $digest=(Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant()
+        "$digest  $([IO.Path]::GetFileName($_))"
+    }
+    [IO.File]::WriteAllText((Join-Path $releasePath 'SHA256SUMS.txt'),($checksums -join "`n")+"`n",[Text.UTF8Encoding]::new($false))
+    Write-Host "Windows 发行附件已输出至 $releasePath"
+}
 Write-Host "困困输入法 $version 已输出至 $outputPath"
 

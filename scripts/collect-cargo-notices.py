@@ -1,4 +1,4 @@
-"""Collect the license texts for KunKunIME's locked Windows Cargo dependency graph."""
+"""Collect notices and source archives for a locked Cargo graph (Windows by default)."""
 import argparse
 import hashlib
 import json
@@ -42,25 +42,33 @@ def select_toolchain():
     return cargo, env
 
 
-def dependencies(cargo, env, offline):
-    flags = ["--manifest-path", str(MANIFEST), "--locked"]
+def dependencies(cargo, env, offline, manifest=MANIFEST, targets=(TARGET,), package="wind_service"):
+    flags = ["--manifest-path", str(manifest), "--locked"]
     if offline:
         flags.append("--offline")
-    metadata = json.loads(run([cargo, "metadata", *flags, "--format-version", "1",
-                               "--filter-platform", TARGET], env))
-    tree = run([cargo, "tree", *flags, "--target", TARGET, "-p", "wind_service",
-                "--edges", "normal,build", "--prefix", "none", "--format", "{p}"], env)
-    keys = set()
-    for line in tree.splitlines():
-        match = re.match(r"^([A-Za-z0-9_-]+) v([^\s]+)(?:\s|$)", line)
-        if match:
-            keys.add(match.groups())
-        elif line.strip() and not line.strip().startswith("["):
-            raise RuntimeError(f"Unrecognized Cargo package: {line}")
-    selected = [p for p in metadata["packages"] if (p["name"], p["version"]) in keys]
-    if len(selected) != len(keys):
-        raise RuntimeError("Ambiguous dependency source; review the resolved Cargo graph.")
-    return sorted(selected, key=lambda p: (p["name"], p["version"]))
+    selected = {}
+    for target in targets:
+        metadata = json.loads(run([cargo, "metadata", *flags, "--format-version", "1",
+                                   "--filter-platform", target], env))
+        tree = run([cargo, "tree", *flags, "--target", target, "-p", package,
+                    "--edges", "normal,build", "--prefix", "none", "--format", "{p}"], env)
+        keys = set()
+        for line in tree.splitlines():
+            match = re.match(r"^([A-Za-z0-9_-]+) v([^\s]+)(?:\s|$)", line)
+            if match:
+                keys.add(match.groups())
+            elif line.strip() and not line.strip().startswith("["):
+                raise RuntimeError(f"Unrecognized Cargo package: {line}")
+        resolved = [p for p in metadata["packages"] if (p["name"], p["version"]) in keys]
+        if len(resolved) != len(keys):
+            raise RuntimeError("Ambiguous dependency source; review the resolved Cargo graph.")
+        for item in resolved:
+            key = (item["name"], item["version"])
+            previous = selected.get(key)
+            if previous is not None and previous["id"] != item["id"]:
+                raise RuntimeError(f"Dependency source differs between targets: {key}")
+            selected[key] = item
+    return sorted(selected.values(), key=lambda p: (p["name"], p["version"]))
 
 
 def notice_files(package, folder):
@@ -79,11 +87,11 @@ def notice_files(package, folder):
     return sorted(files)
 
 
-def collect(output, archive_path, offline):
+def collect(output, archive_path, offline, manifest=MANIFEST, targets=(TARGET,), package="wind_service"):
     cargo, env = select_toolchain()
-    packages = dependencies(cargo, env, offline)
+    packages = dependencies(cargo, env, offline, manifest, targets, package)
     locked = {(p["name"], p["version"]): p.get("checksum") for p in
-              tomllib.loads(MANIFEST.with_name("Cargo.lock").read_text(encoding="utf-8"))["package"]}
+              tomllib.loads(manifest.with_name("Cargo.lock").read_text(encoding="utf-8"))["package"]}
     rows, archives = [], []
     texts = output / "texts"
     texts.mkdir(parents=True, exist_ok=True)
@@ -116,6 +124,8 @@ def collect(output, archive_path, offline):
                 files = [folder / "LICENSE"]
             elif folder == ROOT / "wind-ui-rust":
                 files = [folder / "LICENSE-APACHE", folder / "LICENSE-MIT"]
+            elif folder.is_relative_to(ROOT / "android/rust"):
+                files = [ROOT / "android/LICENSE"]
             else:
                 raise RuntimeError(f"Review local license for {row['source']}")
         override = None
@@ -149,10 +159,11 @@ def collect(output, archive_path, offline):
     std_dest.mkdir(exist_ok=True)
     shutil.copyfile(rust_docs / "COPYRIGHT-library.html", std_dest / "COPYRIGHT-library.html")
     shutil.copytree(rust_docs / "licenses", std_dest / "licenses", dirs_exist_ok=True)
-    index = dict(target=TARGET, root_package="wind_service",
+    index = dict(target=targets[0] if len(targets) == 1 else list(targets), root_package=package,
                  rust_compiler=run([rustc, "-vV"], env), crates=rows)
     (output / "index.json").write_text(json.dumps(index, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    lines = ["# Rust third-party notices", "", f"Windows target: {TARGET}.",
+    target_description = f"Windows target: {TARGET}." if targets == (TARGET,) else f"Cargo targets: {', '.join(targets)}."
+    lines = ["# Rust third-party notices", "", target_description,
              "This inventory includes normal and build dependencies of the locked application, including procedural macros.",
              "The index records their declared licenses, sources, and original notice file names. Identical notice texts are shared.",
              "Published crate versions link to their exact source archives, including MPL-covered sources.",
@@ -177,7 +188,7 @@ def collect(output, archive_path, offline):
                     if hashlib.sha256(data).hexdigest() != sha:
                         raise RuntimeError(f"Registry archive checksum mismatch: {f.name}")
                     z.writestr("crates/" + f.name, data)
-                z.write(MANIFEST.with_name("Cargo.lock"), "Cargo.lock")
+                z.write(manifest.with_name("Cargo.lock"), "Cargo.lock")
                 z.write(output / "index.json", "index.json")
             staged.replace(archive_path)
         finally:
@@ -190,6 +201,10 @@ if __name__ == "__main__":
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--crate-sources", type=Path, help="also archive locked registry source files")
+    parser.add_argument("--manifest", type=Path, default=MANIFEST, help="workspace Cargo.toml containing Cargo.lock")
+    parser.add_argument("--target", action="append", help="target triple; repeat to archive the union of both APK graphs")
+    parser.add_argument("--package", default="wind_service", help="root Cargo package")
     args = parser.parse_args()
-    collect(args.output.resolve(), args.crate_sources, args.offline)
+    collect(args.output.resolve(), args.crate_sources, args.offline, args.manifest.resolve(),
+            tuple(args.target or (TARGET,)), args.package)
 
