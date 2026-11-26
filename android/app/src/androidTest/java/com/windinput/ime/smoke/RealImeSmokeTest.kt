@@ -235,8 +235,12 @@ class RealImeSmokeTest {
         assertTrue(remove.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK))
         tap(anyText("删除"))
         eventually("deleted phrase removed from panel") {
-            findImeNode { it.text?.toString() == "已修改常用语456" } == null
+            val deleteAction: (AccessibilityNodeInfo) -> Boolean = { it.text?.toString() == "删除" }
+            findImeNode { it.text?.toString() == "好的谢谢。" } != null &&
+                findAppNode(deleteAction) == null && findImeNode(deleteAction) == null &&
+                findImeNode { it.text?.toString() == "已修改常用语456" } == null
         }
+        instrumentation.waitForIdleSync()
         capture("quick-phrases.png")
         tap(awaitImeNode("sample phrase") { it.text?.toString() == "好的谢谢。" })
         awaitText("已修改常用语456好的谢谢。")

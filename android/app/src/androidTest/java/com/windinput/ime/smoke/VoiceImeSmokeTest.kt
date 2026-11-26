@@ -84,21 +84,30 @@ class VoiceImeSmokeTest {
             val before = bounds(awaitKey("空格"))
             holdSpace()
             awaitPartial()
+            val completedRequest = newestReadyRequest()
             assertEquals("The voice strip must not move the held space key", before, bounds(awaitKey("空格")))
             assertEquals("Partial speech must not enter the host", "", editorText())
             capture("voice-ipc-listening.png")
             releaseSpace(cancel = false)
             eventually("final speech text reaches the real editor") { editorText() == ControlledRecognitionService.FINAL }
-            assertTrue("Stopping must cross real Android recognizer IPC", "STOP:" in probeLog())
-            assertTrue("A final response must come from the controlled test provider", "FINAL:" in probeLog())
+            assertTrue("Stopping must cross real Android recognizer IPC", "STOP: request=$completedRequest " in probeLog())
+            assertTrue("A final response must come from the controlled test provider", "FINAL: request=$completedRequest " in probeLog())
             capture("voice-ipc-final.png")
 
             clearEditor()
             holdSpace()
             awaitPartial()
+            val cancelledRequest = newestReadyRequest()
+            assertTrue("The cancellation probe must use a new recognizer request", cancelledRequest > completedRequest)
             assertEquals("Second partial speech must also stay outside the host", "", editorText())
             releaseSpace(cancel = true)
-            eventually("the provider observes cancellation") { "CANCEL:" in probeLog() }
+            eventually("the current provider request terminates and the voice strip closes") {
+                val log = probeLog()
+                val terminal = "CANCEL: request=$cancelledRequest " in log ||
+                    "DISCONNECTED: request=$cancelledRequest " in log
+                terminal && findNode(ime = true) { it.contentDescription?.toString() == "语音取消" } == null &&
+                    editorText().isEmpty()
+            }
             val password = awaitNode(ime = false) {
                 it.text?.toString() == "密码" && it.className?.toString() != "android.widget.EditText"
             }
@@ -107,8 +116,10 @@ class VoiceImeSmokeTest {
             listOf("a", "b", "c").forEach { tap(awaitKey(it)) }
             eventually("the new password editor receives only typed keys") { editorText() == "abc" }
             // Deliver the cancelled callback only after the real editor changed.
-            shell("am broadcast -n $testId/com.windinput.ime.smoke.ControlledRecognitionReleaseReceiver")
-            eventually("the provider attempts its late cancelled callback") { "LATE_ATTEMPT:" in probeLog() }
+            shell("am broadcast -n $testId/com.windinput.ime.smoke.ControlledRecognitionReleaseReceiver --ei request_id $cancelledRequest")
+            eventually("the provider attempts this request's late cancelled callback") {
+                "LATE_ATTEMPT: request=$cancelledRequest " in probeLog()
+            }
             val until = SystemClock.uptimeMillis() + 800
             while (SystemClock.uptimeMillis() < until) {
                 assertEquals("Cancelled speech must not reach the new password editor", "abc", editorText())
@@ -180,13 +191,16 @@ class VoiceImeSmokeTest {
     private fun awaitNode(ime: Boolean, match: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo {
         var found: AccessibilityNodeInfo? = null
         eventually(if (ime) "the expected IME control" else "the expected editor control", 15_000) {
-            found = automation.windows.filter {
-                it.type == if (ime) AccessibilityWindowInfo.TYPE_INPUT_METHOD else AccessibilityWindowInfo.TYPE_APPLICATION
-            }.firstNotNullOfOrNull { find(it.root, match) }
+            found = findNode(ime, match)
             found != null
         }
         return requireNotNull(found)
     }
+
+    private fun findNode(ime: Boolean, match: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? =
+        automation.windows.filter {
+            it.type == if (ime) AccessibilityWindowInfo.TYPE_INPUT_METHOD else AccessibilityWindowInfo.TYPE_APPLICATION
+        }.firstNotNullOfOrNull { find(it.root, match) }
 
     private fun find(node: AccessibilityNodeInfo?, match: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
         if (node == null) return null
@@ -216,6 +230,10 @@ class VoiceImeSmokeTest {
     }
 
     private fun probeLog() = shell("logcat -d -v brief -s KunKunVoiceProbe:I")
+
+    private fun newestReadyRequest(): Int =
+        Regex("""READY: request=(\d+)\b""").findAll(probeLog()).lastOrNull()?.groupValues?.get(1)?.toInt()
+            ?: throw AssertionError("The controlled provider must identify the active request")
 
     private fun shell(command: String): String =
         ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command))

@@ -10,10 +10,12 @@ import android.os.Looper;
 public final class ControlledRecognitionReleaseReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
+        int requestId = intent.getIntExtra("request_id", -1);
+        if (requestId < 1) return;
         PendingResult pending = goAsync();
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
             try {
-                ControlledRecognitionService.releaseCancelledResults();
+                ControlledRecognitionService.releasePendingResult(requestId);
             } finally {
                 pending.finish();
             }
