@@ -116,7 +116,25 @@ jobs:
           packages: platforms;android-37.0 build-tools;37.0.0 platform-tools ndk;28.2.13676358
 
       - name: Resolve Android build tools before compiling native libraries
-        run: ./gradlew help --no-daemon
+        run: |
+          resolve_log=$(mktemp)
+          trap 'rm -f "$resolve_log"' EXIT
+          for attempt in 1 2 3; do
+            if ./gradlew help --no-daemon 2>&1 | tee "$resolve_log"; then
+              exit 0
+            else
+              resolve_status=$?
+            fi
+            # Maven Central can rate-limit a fresh runner before any app code
+            # is compiled. Retry that response only, never accept a failed build.
+            if [ "$attempt" -eq 3 ] || ! grep -Fq \
+                'Received status code 429 from server: Too Many Requests' "$resolve_log"; then
+              exit "$resolve_status"
+            fi
+            retry_delay=$((attempt * 20))
+            echo "Maven Central returned HTTP 429; retrying Gradle dependency resolution in ${retry_delay}s."
+            sleep "$retry_delay"
+          done
 
       - name: Select the same Rust version as Windows
         run: |
