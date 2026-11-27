@@ -99,7 +99,9 @@ class OfflineVoiceSmokeTest {
                 ),
             )
             awaitNode(ime = false, timeoutMs = 60_000) {
-                it.text?.toString() == "语音包已安装 · 当前使用此方式"
+                // Compose/Miuix may merge a card's Text children into one node.
+                // Require the complete READY + selected phrase within that text.
+                it.text?.toString()?.contains("语音包已安装 · 当前使用此方式") == true
             }
             capture("offline-model-ready.png")
             shell("settings put secure show_ime_with_hard_keyboard 1")
@@ -147,6 +149,7 @@ class OfflineVoiceSmokeTest {
             assertEquals(imeId, shell("settings get secure default_input_method").trim())
             Log.i(TAG, "PASS: real CPU/JNI Chinese and English samples; real IME local AudioRecord start/cancel; no system recognition call. Physical microphone accuracy not measured.")
         } catch (failure: Throwable) {
+            runCatching { captureAccessibilityTree("offline-voice-failure-a11y.txt") }
             runCatching { capture("offline-voice-failure.png") }
             throw failure
         } finally {
@@ -348,6 +351,23 @@ class OfflineVoiceSmokeTest {
                 assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
             }
         } finally { bitmap.recycle() }
+    }
+
+    private fun captureAccessibilityTree(name: String) {
+        val tree = buildString {
+            var remaining = 2_000
+            fun appendNode(node: AccessibilityNodeInfo?, depth: Int) {
+                if (node == null || depth > 64 || remaining-- <= 0) return
+                // Retain package, bounds, merged text and descriptions for diagnosis.
+                append("  ".repeat(depth)).append("visible=${node.isVisibleToUser} ").appendLine(node.toString())
+                for (index in 0 until node.childCount) appendNode(node.getChild(index), depth + 1)
+            }
+            for (window in automation.windows) {
+                appendLine("window id=${window.id} type=${window.type} active=${window.isActive}")
+                appendNode(window.root, 0)
+            }
+        }
+        File(requireNotNull(context.getExternalFilesDir("smoke")), name).writeText(tree)
     }
 
     private fun eventually(description: String, timeoutMs: Long = 12_000, check: () -> Boolean) {
