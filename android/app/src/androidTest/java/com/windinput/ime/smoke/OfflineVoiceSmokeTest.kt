@@ -14,6 +14,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.InputDevice
 import android.view.MotionEvent
+import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -68,6 +69,9 @@ class OfflineVoiceSmokeTest {
         assertFalse("The test must start with a clear provider log", "START:" in probeLog())
         automation.serviceInfo = automation.serviceInfo.apply {
             flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            eventTypes = eventTypes or AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOWS_CHANGED or
+                AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
         }
         val preferences = context.getSharedPreferences("voice_input", 0)
         val previousBooleans = listOf("configured", "system_fallback").associateWith { key ->
@@ -99,9 +103,7 @@ class OfflineVoiceSmokeTest {
                 ),
             )
             awaitNode(ime = false, timeoutMs = 60_000) {
-                // Compose/Miuix may merge a card's Text children into one node.
-                // Require the complete READY + selected phrase within that text.
-                it.text?.toString()?.contains("语音包已安装 · 当前使用此方式") == true
+                it.text?.toString() == "语音包已安装 · 当前使用此方式"
             }
             capture("offline-model-ready.png")
             shell("settings put secure show_ime_with_hard_keyboard 1")
@@ -149,6 +151,7 @@ class OfflineVoiceSmokeTest {
             assertEquals(imeId, shell("settings get secure default_input_method").trim())
             Log.i(TAG, "PASS: real CPU/JNI Chinese and English samples; real IME local AudioRecord start/cancel; no system recognition call. Physical microphone accuracy not measured.")
         } catch (failure: Throwable) {
+            runCatching { captureAccessibilityTree("offline-voice-failure-a11y-cached.txt", refresh = false) }
             runCatching { captureAccessibilityTree("offline-voice-failure-a11y.txt") }
             runCatching { capture("offline-voice-failure.png") }
             throw failure
@@ -306,10 +309,14 @@ class OfflineVoiceSmokeTest {
         return requireNotNull(found)
     }
 
-    private fun findNode(ime: Boolean, match: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? =
-        automation.windows.filter {
+    private fun findNode(ime: Boolean, match: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
+        // UiAutomation can retain the initial Compose tree after the screen has
+        // changed. Refresh every query, including IME status and editor checks.
+        assertTrue("Accessibility queries require a fresh snapshot", automation.clearCache())
+        return automation.windows.filter {
             it.type == if (ime) AccessibilityWindowInfo.TYPE_INPUT_METHOD else AccessibilityWindowInfo.TYPE_APPLICATION
         }.firstNotNullOfOrNull { find(it.root, match) }
+    }
 
     private fun find(node: AccessibilityNodeInfo?, match: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
         if (node == null) return null
@@ -353,8 +360,10 @@ class OfflineVoiceSmokeTest {
         } finally { bitmap.recycle() }
     }
 
-    private fun captureAccessibilityTree(name: String) {
+    private fun captureAccessibilityTree(name: String, refresh: Boolean = true) {
+        val cacheCleared = if (refresh) automation.clearCache() else null
         val tree = buildString {
+            appendLine("cacheCleared=$cacheCleared; serviceInfo=${automation.serviceInfo}")
             var remaining = 2_000
             fun appendNode(node: AccessibilityNodeInfo?, depth: Int) {
                 if (node == null || depth > 64 || remaining-- <= 0) return
