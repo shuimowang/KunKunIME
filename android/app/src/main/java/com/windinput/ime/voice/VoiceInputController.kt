@@ -10,21 +10,26 @@ import android.speech.RecognitionSupport
 import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import com.windinput.ime.settings.VoiceEngine
+import com.windinput.ime.settings.VoicePreferences
+import com.windinput.ime.voice.model.OfflineModelStore
 
 /**
- * SpeechRecognizer owns audio capture. This app does not store recordings,
- * include a cloud SDK, or pass surrounding editor text to a recognizer.
+ * The selected local model owns an in-memory recorder, or SpeechRecognizer owns
+ * capture for an explicitly selected system service. Neither path stores audio
+ * or receives surrounding editor text.
  *
- * Default recognition is strictly the on-device factory. A system service may
- * send audio off-device, so [start]'s fallback flag must come from explicit
- * consent in voice settings, never from service availability alone.
+ * The local model never falls back to a system service. A system service may
+ * send audio off-device, so fallback must also have explicit consent.
  */
 class VoiceInputController(context: Context, listener: Listener) {
     interface Listener : VoiceInputListener
 
+    private val applicationContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
+    private val factory = SelectedVoiceBackendFactory(applicationContext)
     private val session = VoiceInputSession(
-        AndroidVoiceBackendFactory(context.applicationContext),
+        factory,
         VoiceScheduler { delay, action ->
             val runnable = Runnable(action)
             handler.postDelayed(runnable, delay)
@@ -37,7 +42,10 @@ class VoiceInputController(context: Context, listener: Listener) {
 
     fun start(languageTag: String, allowSystemFallback: Boolean = false): Boolean {
         requireMainThread()
-        return session.start(languageTag, allowSystemFallback)
+        if (session.isActive) return false
+        val engine = VoicePreferences.engine(applicationContext)
+        factory.engine = engine
+        return session.start(languageTag, allowSystemFallback && engine == VoiceEngine.SYSTEM_ALLOWED)
     }
 
     fun stop() {
@@ -53,6 +61,7 @@ class VoiceInputController(context: Context, listener: Listener) {
     fun destroy() {
         requireMainThread()
         session.destroy()
+        OfflineRecognizerWorker.releaseWhenIdle()
     }
 
     private fun requireMainThread() {
@@ -65,15 +74,30 @@ class VoiceInputController(context: Context, listener: Listener) {
             system = runCatching { SpeechRecognizer.isRecognitionAvailable(context) }.getOrDefault(false),
         )
 
-        fun hasAnyRecognition(context: Context): Boolean = availability(context).let { it.onDevice || it.system }
+        fun hasAnyRecognition(context: Context): Boolean = when (VoicePreferences.engine(context)) {
+            VoiceEngine.LOCAL_MODEL -> OfflineModelStore.get(context).isReady()
+            VoiceEngine.SYSTEM_ON_DEVICE -> availability(context).onDevice
+            VoiceEngine.SYSTEM_ALLOWED -> availability(context).let { it.onDevice || it.system }
+        }
     }
 }
 
-private class AndroidVoiceBackendFactory(private val context: Context) : VoiceBackendFactory {
-    override fun availability() = VoiceInputController.availability(context)
+private class SelectedVoiceBackendFactory(private val context: Context) : VoiceBackendFactory {
+    var engine: VoiceEngine = VoiceEngine.LOCAL_MODEL
 
-    override fun create(onDevice: Boolean, events: VoiceBackend.Events): VoiceBackend =
-        AndroidVoiceBackend(context, onDevice, events)
+    override fun availability(): VoiceAvailability = when (engine) {
+        VoiceEngine.LOCAL_MODEL -> VoiceAvailability(OfflineModelStore.get(context).isReady(), system = false)
+        VoiceEngine.SYSTEM_ON_DEVICE -> VoiceInputController.availability(context).copy(system = false)
+        VoiceEngine.SYSTEM_ALLOWED -> VoiceInputController.availability(context)
+    }
+
+    override fun create(onDevice: Boolean, events: VoiceBackend.Events): VoiceBackend = when (engine) {
+        VoiceEngine.LOCAL_MODEL -> {
+            check(onDevice) { "The local model cannot use a network recognizer" }
+            OfflineVoiceBackend(context, events)
+        }
+        else -> AndroidVoiceBackend(context, onDevice, events)
+    }
 }
 
 private class AndroidVoiceBackend(

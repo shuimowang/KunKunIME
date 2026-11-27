@@ -1,0 +1,312 @@
+{
+  "format": 1,
+  "description": "License text provenance for KunKunIME Android offline voice. These are notice sources, not a claim of byte-for-byte reproducible native builds.",
+  "files": [
+    {
+      "file": "sherpa-onnx-LICENSE.txt",
+      "component": "sherpa-onnx",
+      "version": "2.0.3",
+      "source": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v2.0.3/LICENSE",
+      "size": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "file": "onnxruntime-LICENSE.txt",
+      "component": "ONNX Runtime",
+      "version": "1.28.2.202609030142",
+      "source": "https://files.pythonhosted.org/packages/42/91/bdf0e32845618e1ef2fd065f907e4090648b3928630acd17e20a19abad72/onnxruntime_windowsml-1.28.2.202609030142-cp311-cp311-win_amd64.whl",
+      "size": 1094,
+      "sha256": "c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674",
+      "archive_entry": "onnxruntime/LICENSE",
+      "scope": "Microsoft WindowsML release license; not extracted from the Android binary archive"
+    },
+    {
+      "file": "onnxruntime-ThirdPartyNotices.txt",
+      "component": "ONNX Runtime",
+      "version": "1.28.2.202609030142",
+      "source": "https://files.pythonhosted.org/packages/42/91/bdf0e32845618e1ef2fd065f907e4090648b3928630acd17e20a19abad72/onnxruntime_windowsml-1.28.2.202609030142-cp311-cp311-win_amd64.whl",
+      "size": 331175,
+      "sha256": "fb0af774b4d7cffc5b9d046f2aaeade2f37df2f80abf8033c95dfffcc77a8866",
+      "archive_entry": "onnxruntime/ThirdPartyNotices.txt",
+      "scope": "Complete Microsoft WindowsML release notices; may include platform components not used by Android"
+    },
+    {
+      "file": "SenseVoice-FunASR-MODEL-LICENSE.txt",
+      "component": "SenseVoiceSmall model weights",
+      "version": "FunASR Model Open Source License Agreement 1.1",
+      "source": "https://raw.githubusercontent.com/modelscope/FunASR/58830eca4012644aac0c3218c3ccc7d98f003fda/MODEL_LICENSE",
+      "size": 5306,
+      "sha256": "7dba975a2069691db4992b0592d70828b330d2f8a30a71450f4e152a554e84f8"
+    },
+    {
+      "file": "SenseVoice-archive-LICENSE.txt",
+      "component": "SenseVoiceSmall converted model",
+      "version": "2024-07-17",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2",
+      "size": 71,
+      "sha256": "221c6df10b0931a5629adad671ea48fb7747e034c414b6d2bfa275bc3dd4ea17",
+      "archive_entry": "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/LICENSE",
+      "scope": "71-byte reference to the FunASR repository license section, not an Apache license"
+    },
+    {
+      "file": "native/csukuangfj_kaldi-native-fbank-v1.23.1-LICENSE.txt",
+      "component": "csukuangfj/kaldi-native-fbank",
+      "version": "v1.23.1",
+      "source": "https://raw.githubusercontent.com/csukuangfj/kaldi-native-fbank/v1.23.1/LICENSE",
+      "size": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "file": "native/csukuangfj_kaldi_native_io-v1.23.2-LICENSE.txt",
+      "component": "csukuangfj/kaldi_native_io",
+      "version": "v1.23.2",
+      "source": "https://raw.githubusercontent.com/csukuangfj/kaldi_native_io/v1.23.2/LICENSE",
+      "size": 11728,
+      "sha256": "a682d6efd1ee5dee08a8e405c233c2c198ea70ae0718129daa83ab58cfe31c5d"
+    },
+    {
+      "file": "native/mborgerding_kissfft-febd4caeed32e33ad8b2e0bb5ea77542c40f18ec-COPYING.txt",
+      "component": "mborgerding/kissfft",
+      "version": "febd4caeed32e33ad8b2e0bb5ea77542c40f18ec",
+      "source": "https://raw.githubusercontent.com/mborgerding/kissfft/febd4caeed32e33ad8b2e0bb5ea77542c40f18ec/COPYING",
+      "size": 246,
+      "sha256": "a2840585f8411be8e6826a31ef15ae65c950bd74a2437a73b013398a934ad0c6"
+    },
+    {
+      "file": "native/csukuangfj_openfst-v1.8.5-2026-07-09-COPYING.txt",
+      "component": "csukuangfj/openfst",
+      "version": "v1.8.5-2026-07-09",
+      "source": "https://raw.githubusercontent.com/csukuangfj/openfst/v1.8.5-2026-07-09/COPYING",
+      "size": 559,
+      "sha256": "4300529197035fd3452350718a0b8cee984e9412c9932d7f35fcde849fc97a4b"
+    },
+    {
+      "file": "native/JuliaStrings_utf8proc-v2.12.0-LICENSE.md.txt",
+      "component": "JuliaStrings/utf8proc",
+      "version": "v2.12.0",
+      "source": "https://raw.githubusercontent.com/JuliaStrings/utf8proc/v2.12.0/LICENSE.md",
+      "size": 5125,
+      "sha256": "3b510150d34f248a221bb88e1d811238d6c6c18b51231822c42974c39bb07256"
+    },
+    {
+      "file": "native/k2-fsa_kaldifst-v1.9.0-LICENSE.txt",
+      "component": "k2-fsa/kaldifst",
+      "version": "v1.9.0",
+      "source": "https://raw.githubusercontent.com/k2-fsa/kaldifst/v1.9.0/LICENSE",
+      "size": 11728,
+      "sha256": "a682d6efd1ee5dee08a8e405c233c2c198ea70ae0718129daa83ab58cfe31c5d"
+    },
+    {
+      "file": "native/k2-fsa_kaldi-decoder-v0.4.0-LICENSE.txt",
+      "component": "k2-fsa/kaldi-decoder",
+      "version": "v0.4.0",
+      "source": "https://raw.githubusercontent.com/k2-fsa/kaldi-decoder/v0.4.0/LICENSE",
+      "size": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "file": "native/csukuangfj_kaldi-hmm-gmm-v1.2.1-LICENSE.txt",
+      "component": "csukuangfj/kaldi-hmm-gmm",
+      "version": "v1.2.1",
+      "source": "https://raw.githubusercontent.com/csukuangfj/kaldi-hmm-gmm/v1.2.1/LICENSE",
+      "size": 11728,
+      "sha256": "a682d6efd1ee5dee08a8e405c233c2c198ea70ae0718129daa83ab58cfe31c5d"
+    },
+    {
+      "file": "native/pkufool_simple-sentencepiece-v0.7-LICENSE.txt",
+      "component": "pkufool/simple-sentencepiece",
+      "version": "v0.7",
+      "source": "https://raw.githubusercontent.com/pkufool/simple-sentencepiece/v0.7/LICENSE",
+      "size": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "file": "native/nlohmann_json-v3.12.0-LICENSE.MIT.txt",
+      "component": "nlohmann/json",
+      "version": "v3.12.0",
+      "source": "https://raw.githubusercontent.com/nlohmann/json/v3.12.0/LICENSE.MIT",
+      "size": 1076,
+      "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603"
+    },
+    {
+      "file": "native/csukuangfj_hclust-cpp-2026-02-25-LICENSE.txt",
+      "component": "csukuangfj/hclust-cpp",
+      "version": "2026-02-25",
+      "source": "https://raw.githubusercontent.com/csukuangfj/hclust-cpp/2026-02-25/LICENSE",
+      "size": 1483,
+      "sha256": "e361d842da1d290351860ad6dcce2673a1e42e4f873a3ae1ff4eb92c6adaa882"
+    },
+    {
+      "file": "native/kissfft-BSD-3-Clause.txt",
+      "component": "mborgerding/kissfft",
+      "version": "febd4caeed32e33ad8b2e0bb5ea77542c40f18ec",
+      "source": "https://raw.githubusercontent.com/mborgerding/kissfft/febd4caeed32e33ad8b2e0bb5ea77542c40f18ec/LICENSES/BSD-3-Clause",
+      "size": 1830,
+      "sha256": "4d6bcab46f27d6d0c878e8305d4bdcfe040d52bf6656b9771f04c9fb9902c0ed"
+    },
+    {
+      "file": "native/LLVM-LICENSE.txt",
+      "component": "LLVM Project / LLVM",
+      "version": "llvmorg-21.1.0",
+      "source": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-21.1.0/LICENSE.TXT",
+      "size": 15141,
+      "sha256": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee",
+      "scope": "Supplemental upstream runtime license text; does not identify the exact NDK version used for the prebuilt AAR"
+    },
+    {
+      "file": "native/libcxx-LICENSE.txt",
+      "component": "LLVM Project / libcxx",
+      "version": "llvmorg-21.1.0",
+      "source": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-21.1.0/libcxx/LICENSE.TXT",
+      "size": 16703,
+      "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b",
+      "scope": "Supplemental upstream runtime license text; does not identify the exact NDK version used for the prebuilt AAR"
+    },
+    {
+      "file": "commons/commons-compress-LICENSE.txt",
+      "component": "org.apache.commons:commons-compress",
+      "version": "1.28.0",
+      "source": "https://repo.maven.apache.org/maven2/org/apache/commons/commons-compress/1.28.0/commons-compress-1.28.0.jar",
+      "size": 11358,
+      "sha256": "51b88fd3e9e24edcdce1dd145a4fca2dcd12911407f00b06dfa6ff600f9733c1",
+      "archive_entry": "META-INF/LICENSE.txt"
+    },
+    {
+      "file": "commons/commons-compress-NOTICE.txt",
+      "component": "org.apache.commons:commons-compress",
+      "version": "1.28.0",
+      "source": "https://repo.maven.apache.org/maven2/org/apache/commons/commons-compress/1.28.0/commons-compress-1.28.0.jar",
+      "size": 178,
+      "sha256": "0d98967f0ab328af8d9d536aa9a5c684b5dd665657245f6ee6b5915affe811c0",
+      "archive_entry": "META-INF/NOTICE.txt"
+    },
+    {
+      "file": "commons/commons-io-LICENSE.txt",
+      "component": "commons-io:commons-io",
+      "version": "2.20.0",
+      "source": "https://repo.maven.apache.org/maven2/commons-io/commons-io/2.20.0/commons-io-2.20.0.jar",
+      "size": 11360,
+      "sha256": "c1d1a38c99c48ccad170890ade6066e2e240bb6ce59861d4eb7f672eddd2a4c6",
+      "archive_entry": "META-INF/LICENSE.txt"
+    },
+    {
+      "file": "commons/commons-io-NOTICE.txt",
+      "component": "commons-io:commons-io",
+      "version": "2.20.0",
+      "source": "https://repo.maven.apache.org/maven2/commons-io/commons-io/2.20.0/commons-io-2.20.0.jar",
+      "size": 172,
+      "sha256": "b54b0db6c617273efff79ba193bb01b05eadcddfff55c24063b38b2acef714c3",
+      "archive_entry": "META-INF/NOTICE.txt"
+    },
+    {
+      "file": "commons/commons-lang3-LICENSE.txt",
+      "component": "org.apache.commons:commons-lang3",
+      "version": "3.18.0",
+      "source": "https://repo.maven.apache.org/maven2/org/apache/commons/commons-lang3/3.18.0/commons-lang3-3.18.0.jar",
+      "size": 11359,
+      "sha256": "b1d2870f1a00e4d7f56576e5f0870cba109e041f8af66866cf5b499478e654e7",
+      "archive_entry": "META-INF/LICENSE.txt"
+    },
+    {
+      "file": "commons/commons-lang3-NOTICE.txt",
+      "component": "org.apache.commons:commons-lang3",
+      "version": "3.18.0",
+      "source": "https://repo.maven.apache.org/maven2/org/apache/commons/commons-lang3/3.18.0/commons-lang3-3.18.0.jar",
+      "size": 174,
+      "sha256": "64bc8696af3f6c770521412b85d3a733fa44b2ef5b0f4bd739e0c4d02eca492a",
+      "archive_entry": "META-INF/NOTICE.txt"
+    },
+    {
+      "file": "commons/commons-codec-LICENSE.txt",
+      "component": "commons-codec:commons-codec",
+      "version": "1.19.0",
+      "source": "https://repo.maven.apache.org/maven2/commons-codec/commons-codec/1.19.0/commons-codec-1.19.0.jar",
+      "size": 11359,
+      "sha256": "b1d2870f1a00e4d7f56576e5f0870cba109e041f8af66866cf5b499478e654e7",
+      "archive_entry": "META-INF/LICENSE.txt"
+    },
+    {
+      "file": "commons/commons-codec-NOTICE.txt",
+      "component": "commons-codec:commons-codec",
+      "version": "1.19.0",
+      "source": "https://repo.maven.apache.org/maven2/commons-codec/commons-codec/1.19.0/commons-codec-1.19.0.jar",
+      "size": 175,
+      "sha256": "b64933ee1d36d14659156223a2604edadb60bffdd465d5368ff422d7689db5fb",
+      "archive_entry": "META-INF/NOTICE.txt"
+    }
+  ],
+  "artifacts": [
+    {
+      "name": "sherpa-onnx-2.0.3.aar",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.3/sherpa-onnx-2.0.3.aar",
+      "size": 52411426,
+      "sha256": "4c766e2e74c9d33d595338c21fe3b305c73ba45d47e96a235675c33142a2ec50"
+    },
+    {
+      "name": "onnxruntime-android-1.28.2.zip",
+      "url": "https://github.com/csukuangfj/onnxruntime-libs/releases/download/v1.28.2/onnxruntime-android-1.28.2.zip",
+      "size": 33765715,
+      "sha256": "01518867f78241138b6aa25925802e843a4fa9085af8d303d49e35bbb52aff4d"
+    },
+    {
+      "name": "onnxruntime_windowsml-1.28.2.202609030142-cp311-cp311-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/42/91/bdf0e32845618e1ef2fd065f907e4090648b3928630acd17e20a19abad72/onnxruntime_windowsml-1.28.2.202609030142-cp311-cp311-win_amd64.whl",
+      "size": 26775682,
+      "sha256": "ad15d7f8d2c57325a4b5e7003c4dba31207288bffeeff7ce97ba429eff389362"
+    },
+    {
+      "name": "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2",
+      "size": 163002883,
+      "sha256": "7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e"
+    },
+    {
+      "name": "commons-compress-1.28.0.jar",
+      "url": "https://repo.maven.apache.org/maven2/org/apache/commons/commons-compress/1.28.0/commons-compress-1.28.0.jar",
+      "size": 1117221,
+      "sha256": "e1522945218456f3649a39bc4afd70ce4bd466221519dba7d378f2141a4642ca"
+    },
+    {
+      "name": "commons-compress-1.28.0.pom",
+      "url": "https://repo.maven.apache.org/maven2/org/apache/commons/commons-compress/1.28.0/commons-compress-1.28.0.pom",
+      "size": 25308,
+      "sha256": "033f4c78d632da88d0eb8ead974fc14a264392cebf12ab6c68d6cea7adf0c64a"
+    },
+    {
+      "name": "commons-io-2.20.0.jar",
+      "url": "https://repo.maven.apache.org/maven2/commons-io/commons-io/2.20.0/commons-io-2.20.0.jar",
+      "size": 563971,
+      "sha256": "df90bba0fe3cb586b7f164e78fe8f8f4da3f2dd5c27fa645f888100ccc25dd72"
+    },
+    {
+      "name": "commons-io-2.20.0.pom",
+      "url": "https://repo.maven.apache.org/maven2/commons-io/commons-io/2.20.0/commons-io-2.20.0.pom",
+      "size": 20477,
+      "sha256": "bdbdf81072c190ee9a8b181a5c58f5bd917a750fb13a256debbf53f5dbd33a2a"
+    },
+    {
+      "name": "commons-lang3-3.18.0.jar",
+      "url": "https://repo.maven.apache.org/maven2/org/apache/commons/commons-lang3/3.18.0/commons-lang3-3.18.0.jar",
+      "size": 702952,
+      "sha256": "4eeeae8d20c078abb64b015ec158add383ac581571cddc45c68f0c9ae0230720"
+    },
+    {
+      "name": "commons-lang3-3.18.0.pom",
+      "url": "https://repo.maven.apache.org/maven2/org/apache/commons/commons-lang3/3.18.0/commons-lang3-3.18.0.pom",
+      "size": 32038,
+      "sha256": "aa254b373b6f6d46bc9dca86331b072a8ab86eb25ea9921fd439618392e98a16"
+    },
+    {
+      "name": "commons-codec-1.19.0.jar",
+      "url": "https://repo.maven.apache.org/maven2/commons-codec/commons-codec/1.19.0/commons-codec-1.19.0.jar",
+      "size": 374716,
+      "sha256": "5c3881e4f556855e9c532927ee0c9dfde94cc66760d5805c031a59887070af5f"
+    },
+    {
+      "name": "commons-codec-1.19.0.pom",
+      "url": "https://repo.maven.apache.org/maven2/commons-codec/commons-codec/1.19.0/commons-codec-1.19.0.pom",
+      "size": 18008,
+      "sha256": "e0f3269fa23de0c83130c5659f5f9514cc5422c0bcdf45f2eae004a78b9fca34"
+    }
+  ]
+}

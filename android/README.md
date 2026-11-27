@@ -2,7 +2,7 @@
 
 Android 手机键盘与 Windows 版放在同一个仓库，使用同一份 Rust 拼音、双拼、英语核心和词库。Android 界面与系统输入接口独立位于本目录，电脑版的 TSF、候选窗口和设置程序保持原来的工程边界。
 
-当前为 `0.1.0` 正式版，分发包使用**非调试 release 构建**。按个人使用需求，最低要求为 **Android 16（API 36）**，不再维护旧系统兼容分支。`targetSdk` 保持 36，使用 Android 37.0 SDK 编译；最低安装版本与目标平台版本分别管理。手机包面向 ARM64，CI 另行构建 x86_64 用于模拟器验证。两个架构分别打包，手机无需下载模拟器的原生库。
+当前版本为 `0.1.1`，分发包使用**非调试 release 构建**。按个人使用需求，最低要求为 **Android 16（API 36）**，不再维护旧系统兼容分支。`targetSdk` 保持 36，使用 Android 37.0 SDK 编译；最低安装版本与目标平台版本分别管理。手机包面向 ARM64，CI 另行构建 x86_64 用于模拟器验证。两个架构分别打包，手机无需下载模拟器的原生库。
 
 ## 当前范围
 
@@ -11,11 +11,20 @@ Android 手机键盘与 Windows 版放在同一个仓库，使用同一份 Rust 
 - 剪贴板与常用语双页；常用语独立保存，可新增、编辑、移到顶部与删除，点选只填入输入框。
 - 浅色与深色、单手、按键振动、高度调整、长按与上滑符号。
 - 按输入框类型处理密码、数字、回车动作和禁止个性化学习。
-- 长按空格语音输入，松手结束、上滑取消；优先设备端识别，可能联网的系统语音服务需明确选择。
+- 长按空格语音输入，松手结束、上滑取消；按需下载 SenseVoiceSmall INT8 语音包后，可在应用内离线识别，不依赖系统语音服务。原系统识别选项保留，可能联网的系统服务仍需明确选择。
 - 在「关于 → 应用更新」主动检查安卓正式版、下载并校验 APK，随后交系统确认安装。
 - 字母页默认采用「123 · 逗句号合一 · 宽空格 · 中英 · 回车」底行，字母角标默认隐藏；候选与键盘共用浅灰背景、白色圆角键、蓝色强调色。
 
-### 0.1.0：语音输入、常用语、应用内更新与正式发行
+### 0.1.1：应用内离线语音
+
+- `versionCode = 6`，版本名为 `0.1.1`。沿用相同应用标识和固定证书，可覆盖升级 `0.1.0`，保留设置、个人词库与常用语。
+- 集成 sherpa-onnx `v2.0.3`，使用按需下载的 SenseVoiceSmall INT8 `2024-07-17` 模型。中文、英文为主要使用场景；模型还支持粤语、日语和韩语，具体效果需按语种与手机实测。
+- 下载、进度、取消、失败重试、校验和删除均在「语音输入」设置内完成。只有点「使用离线语音」才选择该引擎并请求麦克风权限；下载完成不会自动录音，也不会强行改变已有系统语音选择。
+- 麦克风音频只保存在内存中，模型加载和识别在后台执行；录音前先等待模型准备完成，松手后处理整句。取消、收起键盘或切换输入框后停止本次录音并丢弃迟到结果，密码框仍禁用语音。
+- 单次语音最长 60 秒。长录音可能按不超过 15 秒的片段识别后拼接；分段处上下文不足可能影响文字或标点，不能把支持手机运行等同于所有机型上都有相同速度与准确度。
+- 语音包从固定的上游 GitHub 发行附件下载，按固定大小与 SHA-256 校验；位于 `noBackupFilesDir/offline-voice`，不进入系统备份。离线识别不访问网络，也不调用商业云端语音接口。
+
+### 0.1.0 已包含：语音输入、常用语、应用内更新与正式发行
 
 - `versionCode = 5`，版本名为 `0.1.0`，沿用固定证书，可覆盖升级已签名的 preview.2 / preview.3 / preview.4。
 - 默认长按空格开始语音输入，短按仍为空格或选首选候选；开始长按前的左右滑动仍用于移动光标。设置中仍可选择长按切换输入法或不执行动作，已有明确设置会保留。
@@ -48,7 +57,7 @@ Android 手机键盘与 Windows 版放在同一个仓库，使用同一份 Rust 
 - ARM64 手机包与 x86_64 模拟器包分开；构建检查原生库架构及两包的代码、资源、词库一致性。
 - 分发包开始使用固定的私有签名，公开仓库只保存证书。具体迁移和构建方式见下文。
 
-布局方向参考[豆包输入法官方界面图](https://play.google.com/store/apps/details?id=com.bytedance.android.doubaoime&hl=zh-CN)，使用困困自己的图标和源码。未包含豆包的程序、图标、语音模型或服务。此版没有九键拼音或桌面手机自动同步；九宫数字页只输入数字。语音识别可用性、支持的语言与识别效果取决于手机上的 Android 识别服务和语言模型。
+布局方向参考[豆包输入法官方界面图](https://play.google.com/store/apps/details?id=com.bytedance.android.doubaoime&hl=zh-CN)，使用困困自己的图标和源码。未包含豆包的程序、图标、语音模型或服务。此版没有九键拼音或桌面手机自动同步；九宫数字页只输入数字。应用内离线语音使用单独下载的 SenseVoice 模型；选择原系统识别方式时，可用性和语言支持仍取决于手机提供的 Android 识别服务。
 
 ## 安装与试用
 
@@ -58,9 +67,9 @@ Android 手机键盘与 Windows 版放在同一个仓库，使用同一份 Rust 
 
 **从 preview.1 迁移：** 首版使用临时 CI 证书，与 preview.2 的固定签名不同，因此不能直接覆盖。已安装首版时，先在设置中导出个人词库，再卸载旧版并安装新版，之后导回词库。卸载会清除应用设置和未导出的本机数据。
 
-**从已签名 preview.2 / preview.3 / preview.4 更新到 0.1.0：** 同一应用标识、同一固定签名、递增的 `versionCode` 支持覆盖安装并保留设置与词库。GitHub Releases 的分发包使用固定签名；Actions 的原始 release APK 使用临时测试证书，必须先完成固定私钥重签，才能作为已有安装的更新包。重签过程核对所有应用内容保持不变。
+**从已签名 preview.2 / preview.3 / preview.4 / 0.1.0 更新到 0.1.1：** 同一应用标识、同一固定签名、递增的 `versionCode` 支持覆盖安装并保留设置、词库与常用语。已装 `0.1.0` 可从「关于 → 应用更新」下载安装新版。GitHub Releases 的分发包使用固定签名；Actions 的原始 release APK 使用临时测试证书，必须先完成固定私钥重签，才能作为已有安装的更新包。重签过程核对所有应用内容保持不变。升级不会覆盖已有系统语音选择；要使用新引擎，请进入「语音输入」下载并启用离线语音包。
 
-拼音候选、输入记录和学习数据在本机处理。应用仅在用户主动检查或下载更新时连接 GitHub，不后台检查，也不上传输入文字、个人词库或录音；项目主页和反馈链接仍交给浏览器打开。语音默认优先使用设备端识别，只有用户明确允许后才可调用可能联网的系统语音服务；该服务的声音处理由其提供者管理。本应用不保存录音，拒绝麦克风权限不会影响普通键盘输入。
+拼音候选、输入记录和学习数据在本机处理。应用仅在用户主动检查或下载更新、下载离线语音包时连接 GitHub 及其文件分发服务，不后台检查，也不上传输入文字、个人词库或录音；项目主页和反馈链接仍交给浏览器打开。应用内离线语音只在手机上识别，缺少模型时不会擅自改用联网识别。只有用户明确允许后才可调用原有的系统语音服务；该服务可能联网处理声音，数据处理由其提供者管理。本应用不保存录音，拒绝麦克风权限不会影响普通键盘输入。
 
 ### 在应用内更新
 
@@ -70,9 +79,13 @@ Android 手机键盘与 Windows 版放在同一个仓库，使用同一份 Rust 
 
 ### 使用语音输入
 
-在普通文本框中长按空格，首次按提示选择识别方式并允许麦克风。回到原输入框后，再长按空格并说话；松手后等待最终文字，上滑后松手则取消。短按空格的选词和空格功能不变，长按开始前横滑仍可以移动光标。
+推荐在「设置 → 语音输入」下载 **SenseVoiceSmall INT8 离线语音包**，下载完成并通过校验后点「使用离线语音」，按系统提示允许麦克风。下载需要网络，之后的识别无需联网，也无需另装系统语音服务。模型包与词表保存在应用私有目录，不占用剪贴板或用户词库；可在同一页面删除，重新使用时再下载。
 
-设备端模式不自动改用可能联网的服务。若手机没有所选识别服务或中文模型，可在语音设置中检查可用方式，再决定是否允许系统服务处理声音。系统的语音输入法子类型与语音识别服务是不同接口：安装了另一个输入法，不代表一定提供可供本应用调用的识别服务。
+回到普通文本框，再长按空格。首次加载模型时先等待准备状态结束，再开始说话；松手后等待整句识别结果，上滑后松手则取消。加载尚未结束就松手或取消，不会在之后突然打开麦克风。短按空格的选词和空格功能不变，长按开始前横滑仍可以移动光标。单次录音最长 60 秒，实际耗时与效果取决于手机、语言、环境和录音长度。
+
+升级保留用户原来明确选择的识别方式，下载模型也不会自动切换；需要手动点「使用离线语音」。语音包不进入系统备份，换机后重新下载并选择。
+
+兼容选项仍包括「系统设备端识别」和用户明确允许的系统语音服务。系统的语音输入法子类型与语音识别服务是不同接口：安装了另一个输入法，不代表一定提供可供本应用调用的识别服务。应用内离线模型不受该条件限制；本版本没有新增云端语音 API。
 
 ### 使用常用语
 
@@ -100,13 +113,17 @@ GitHub 工作流位于 [`../.github/workflows/android.yml`](../.github/workflows
 
 | 架构 | Gradle 输出 | Actions 产物 |
 |---|---|---|
-| ARM64 手机 | `app/build/outputs/apk/release/KunKunIME-Android-0.1.0-arm64-v8a.apk` | `KunKunIME-Android-arm64-release` |
-| x86_64 模拟器 | `app/build/outputs/apk/release/KunKunIME-Android-0.1.0-x86_64.apk` | `KunKunIME-Android-x86_64-release` |
+| ARM64 手机 | `app/build/outputs/apk/release/KunKunIME-Android-0.1.1-arm64-v8a.apk` | `KunKunIME-Android-arm64-release` |
+| x86_64 模拟器 | `app/build/outputs/apk/release/KunKunIME-Android-0.1.1-x86_64.apk` | `KunKunIME-Android-x86_64-release` |
 | 发行元数据与 Rust 依赖源码 | `app/build/release-support/release-info.json`、`Cargo-sources.zip` | `KunKunIME-Android-release-support` |
 
 设备验证分成 debug 与 release 两轮，均使用带真实 x86_64 核心的压缩 APK 和系统输入连接。debug 轮先运行 18 项无障碍、多指触控与空格语音手势用例，再短暂暂停真实核心的交接，验证早输、退格、换框取消与后续中文上屏；门闩默认不启用，也没有外部触发入口。release 轮清空专用模拟器中的应用数据，安装实际发行构建，确认其不可调试，等待正常初始化后通过触屏按键验证 `nihaox` 加退格产生“你好”，以及英语空格、密码、数字、收起重开和系统导航按钮避让。两轮还覆盖常用语新增、编辑、选用、删除和更新页面。release 轮不使用门闩、不替换核心，也不通过测试直接调用原生按键接口。
 
 两轮各有一项独立的语音 IPC 流程测试：仅在测试 APK 中声明受控 `RecognitionService`，临时设为专用模拟器的识别服务，用真实长按空格、松手和上滑手势验证中间结果不上屏、最终结果进入当前输入框、语音状态栏不移动键盘，以及取消后切到密码框时迟到结果不会串入。测试服务只返回固定文字，不采集音频；生产 APK 不包含该服务。测试结束恢复识别服务、麦克风权限与临时语音偏好设置。报告分别保存在 `app/build/smoke-results/debug` 与 `release`，保留输入、语音的独立日志和截图。模拟器未提供真实麦克风音频，这些结果不代表语音识别准确率测试。
+
+两轮还各运行一项独立的离线语音测试：模型和上游中英 WAV 仅放进测试 APK，复制到本机私有目录后，用正式 sherpa CPU/JNI 接口推理并检查实际转写关键词。随后通过真实 IME 长按等待模型准备，检查 Android 报告本地录音已开始，再上滑取消，检查录音停止、输入框未收到文字、系统测试识别服务从未启动。生产 APK 不包含测试模型或录音，也没有离线识别测试后门。独立的 `offline-voice` 日志、状态截图及 `offline-native-results.txt` 保留样例实际转写。
+
+单元检查另覆盖下载校验及取消、旧偏好迁移、录音与推理取消后的结果隔离。样例推理能够验证引擎确实执行识别，不能替代用户手机麦克风、噪声环境或不同口音的效果测试。实际通过项及对应提交以本次 Actions 日志和发行说明为准。
 
 Gradle 默认测试 debug；`-PimeTestBuildType=release` 选择 release 的测试 APK，`-PciReleaseSigning=true` 只让 release 临时使用当前环境的测试证书。该参数不改变 release 的源码、优化规则或调试标志。release 不保留 debug 门闩与控件直调测试入口；两种构建保留独立测试 APK 所需的共享 Kotlin/AndroidX 运行时 ABI，避免应用压缩先移除测试框架需要的方法。输入测试台在 release 中不对其他应用导出，仍可在应用内部和同 UID 仪器测试中使用。
 
@@ -128,12 +145,15 @@ scripts/build-rust.sh release
 未配置个人签名时，上述 release 输出未签名。复现 CI 的两套仪器测试构建和专用模拟器验证：
 
 ```bash
+python3 scripts/prepare-offline-voice.py --test-model
 ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
 ./gradlew :app:testReleaseUnitTest :app:assembleRelease :app:assembleReleaseAndroidTest \
   -PimeTestBuildType=release -PciReleaseSigning=true --no-daemon
 bash scripts/smoke-test.sh debug
 bash scripts/smoke-test.sh release
 ```
+
+`prepare-offline-voice.py` 按 `voice-dependencies.json` 的固定大小和 SHA-256 获取官方推理 AAR；`--test-model` 另外准备仅供仪器测试的模型和上游样例。生成文件不提交 Git，模型与 WAV 不进入生产 APK。正常应用构建只需要推理引擎，用户语音包始终在应用中按需下载。
 
 Windows 开发机可用 `scripts/build-rust.ps1`，并配置 `ANDROID_NDK_HOME`。缺少 ARM64 Rust 核心时 Gradle 会拒绝打包，避免产生只有模拟候选的安装包。运行时初始化失败也会明确提示。
 
@@ -151,8 +171,8 @@ Windows 开发机可用 `scripts/build-rust.ps1`，并配置 `ANDROID_NDK_HOME`�
 
 ```bash
 python3 scripts/sign-apk.py \
-  --input /path/to/ci/KunKunIME-Android-0.1.0-arm64-v8a.apk \
-  --output /path/to/distribution/KunKunIME-Android-0.1.0-arm64-v8a.apk \
+  --input /path/to/ci/KunKunIME-Android-0.1.1-arm64-v8a.apk \
+  --output /path/to/distribution/KunKunIME-Android-0.1.1-arm64-v8a.apk \
   --build-tools /path/to/android-sdk/build-tools/37.0.0 \
   --keystore /private/kunkun-android.p12 \
   --password-file /private/keystore-password.txt
@@ -168,6 +188,7 @@ Android 外壳基于 [huanfeng/WindInputAndroid](https://github.com/huanfeng/Win
 
 其他实现参考：
 
+- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)：集成的 Android 本地语音推理引擎，代码为 Apache-2.0；按需下载的 [SenseVoice](https://github.com/FunAudioLLM/SenseVoice) 模型权重使用独立的 FunASR 模型许可，不能视为同一许可。
 - [Fcitx5 Android](https://github.com/fcitx5-android/fcitx5-android)：系统输入框、预编辑和候选交互。
 - [同文 Trime](https://github.com/osfans/trime)：中文输入方案与候选流程。
 - [HeliBoard](https://github.com/HeliBorg/HeliBoard)：触屏键盘、输入框类型和按键交互。

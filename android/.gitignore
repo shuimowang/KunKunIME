@@ -17,6 +17,7 @@ app/src/main/assets/data/
 app/src/main/jniLibs/
 app/src/main/java/uniffi/
 rust/target/
+app/src/androidTest/assets/offline-voice/
 
 # OMC/会话运行时产物
 .omc/

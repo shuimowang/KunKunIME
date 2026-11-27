@@ -47,6 +47,7 @@ old_ime="$(adb_device shell settings get secure default_input_method | tr -d '\r
 old_hardware_ime="$(adb_device shell settings get secure show_ime_with_hard_keyboard | tr -d '\r')"
 old_recognizer="$(adb_device shell settings get secure voice_recognition_service | tr -d '\r')"
 voice_probe_configured=false
+smoke_stage="typing"
 old_app_microphone=false
 old_test_microphone=false
 
@@ -58,7 +59,8 @@ collect_results() {
     adb_device exec-out screencap -p > "$smoke_results/screenshot.png" 2>/dev/null || true
     adb_device pull "/sdcard/Android/data/$app_id/files/smoke/." "$smoke_results/" >/dev/null 2>&1 || true
     if [[ "$voice_probe_configured" == true ]]; then
-        cp "$smoke_results/logcat.txt" "$smoke_results/voice-ipc-logcat.txt" || true
+        # A later offline run clears logcat; keep each stage's own evidence.
+        cp "$smoke_results/logcat.txt" "$smoke_results/$smoke_stage-logcat.txt" || true
         if [[ -z "$old_recognizer" || "$old_recognizer" == null ]]; then
             adb_device shell settings delete secure voice_recognition_service >/dev/null 2>&1 || true
         else
@@ -151,6 +153,7 @@ print("true" if re.search(r"android\.permission\.RECORD_AUDIO: granted=true\b", 
 old_app_microphone="$(microphone_granted "$app_id")"
 old_test_microphone="$(microphone_granted "$app_id.test")"
 voice_probe_configured=true
+smoke_stage="voice-ipc"
 adb_device shell settings put secure voice_recognition_service \
     "$app_id.test/com.windinput.ime.smoke.ControlledRecognitionService"
 adb_device shell pm grant "$app_id" android.permission.RECORD_AUDIO
@@ -162,13 +165,32 @@ adb_device shell am instrument -w -r \
     "$app_id.test/androidx.test.runner.AndroidJUnitRunner" \
     | tr -d '\r' | tee "$smoke_results/voice-ipc-instrumentation.txt"
 verify_instrumentation "$smoke_results/voice-ipc-instrumentation.txt" 1
+adb_device logcat -d -v threadtime > "$smoke_results/voice-ipc-logcat.txt"
 for screenshot in voice-ipc-listening.png voice-ipc-final.png voice-ipc-cancelled.png; do
     adb_device pull "/sdcard/Android/data/$app_id/files/smoke/$screenshot" "$smoke_results/$screenshot"
     test -s "$smoke_results/$screenshot"
 done
 
+# Only the instrumentation APK contains the model and public sample recordings.
+# This independent cold process validates real CPU/JNI Chinese/English inference,
+# then real local AudioRecord start/cancellation through the IME. Keep the system
+# fixture configured so the test can prove the local path never called it.
+smoke_stage="offline-voice"
+adb_device shell am force-stop "$app_id"
+adb_device logcat -c
+adb_device shell am instrument -w -r \
+    -e class com.windinput.ime.smoke.OfflineVoiceSmokeTest \
+    "$app_id.test/androidx.test.runner.AndroidJUnitRunner" \
+    | tr -d '\r' | tee "$smoke_results/offline-voice-instrumentation.txt"
+verify_instrumentation "$smoke_results/offline-voice-instrumentation.txt" 1
+adb_device logcat -d -v threadtime > "$smoke_results/offline-voice-logcat.txt"
+for result in offline-model-ready.png offline-voice-listening.png offline-voice-cancelled.png offline-native-results.txt; do
+    adb_device pull "/sdcard/Android/data/$app_id/files/smoke/$result" "$smoke_results/$result"
+    test -s "$smoke_results/$result"
+done
+
 if [[ "$smoke_variant" == debug ]]; then
-    echo 'KunKunIME debug smoke passed: startup queue/cancellation, eighteen view tests, real IME/phrases, controlled speech IPC. No audio accuracy claim.'
+    echo 'KunKunIME debug smoke passed: startup queue/cancellation, eighteen view tests, real IME/phrases, controlled speech IPC, real native Chinese/English samples and local AudioRecord cancellation. Physical microphone accuracy not measured.'
 else
-    echo 'KunKunIME release smoke passed: non-debuggable app, real IME/phrases, controlled speech IPC. No startup gate or audio accuracy claim.'
+    echo 'KunKunIME release smoke passed: non-debuggable app, real IME/phrases, controlled speech IPC, real native Chinese/English samples and local AudioRecord cancellation. No startup gate; physical microphone accuracy not measured.'
 fi

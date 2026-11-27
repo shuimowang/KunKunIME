@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import struct
 import subprocess
 from zipfile import ZipFile
 
@@ -60,8 +61,10 @@ def inspect_apk(path: Path, expected_abi: str) -> dict[str, str]:
         if actual_abis != {expected_abi}:
             raise ValueError(f"{path.name}: expected only {expected_abi}, found {sorted(actual_abis)}")
 
-        # The engine and its JNA bridge must both exist for this architecture.
-        for library in ("libwind_android.so", "libjnidispatch.so"):
+        # Both text input and the app-owned speech recognizer must be usable on
+        # the phone ABI, not merely on the CI emulator ABI.
+        for library in ("libwind_android.so", "libjnidispatch.so", "libonnxruntime.so",
+                        "libsherpa-onnx-jni.so"):
             if f"lib/{expected_abi}/{library}" not in names:
                 raise ValueError(f"{path.name}: missing {library} for {expected_abi}")
         for name in native_names:
@@ -69,13 +72,34 @@ def inspect_apk(path: Path, expected_abi: str) -> dict[str, str]:
                 raise ValueError(f"{path.name}: unexpected native-library entry {name}")
             if re.fullmatch(r"libredb(?:-.*)?\.so", Path(name).name):
                 raise ValueError(f"{path.name}: unused redb cdylib was packaged: {name}")
-            with apk.open(name) as library:
-                header = library.read(20)
-            if len(header) != 20 or header[:4] != b"\x7fELF" or header[4] != 2:
+            library = apk.read(name)
+            header = library[:64]
+            if len(header) != 64 or header[:4] != b"\x7fELF" or header[4] != 2:
                 raise ValueError(f"{path.name}: not a 64-bit ELF library: {name}")
             byteorder = {1: "little", 2: "big"}.get(header[5])
             if byteorder is None or int.from_bytes(header[18:20], byteorder) != ELF_MACHINE[expected_abi]:
                 raise ValueError(f"{path.name}: ELF architecture does not match {expected_abi}: {name}")
+            endian = "<" if byteorder == "little" else ">"
+            program_offset = struct.unpack_from(endian + "Q", header, 32)[0]
+            entry_size, entry_count = struct.unpack_from(endian + "HH", header, 54)
+            if entry_size < 56 or not entry_count or program_offset + entry_size * entry_count > len(library):
+                raise ValueError(f"{path.name}: invalid ELF program headers: {name}")
+            load_count = 0
+            for index in range(entry_count):
+                program = program_offset + index * entry_size
+                kind = struct.unpack_from(endian + "I", library, program)[0]
+                if kind == 1:  # PT_LOAD; Android 16 may use 16 KiB memory pages.
+                    load_count += 1
+                    offset, address = struct.unpack_from(endian + "QQ", library, program + 8)
+                    alignment = struct.unpack_from(endian + "Q", library, program + 48)[0]
+                    if alignment < 16384 or alignment & (alignment - 1) or (address - offset) % 16384:
+                        raise ValueError(f"{path.name}: library is not 16 KiB page compatible: {name}")
+            if not load_count:
+                raise ValueError(f"{path.name}: no loadable native segments: {name}")
+
+        if any(name.startswith("assets/offline-voice/") or "/test_wavs/" in name or name.endswith(".onnx")
+               for name in names):
+            raise ValueError(f"{path.name}: test speech model/audio must not enter the production APK")
 
         if "classes.dex" not in names or "resources.arsc" not in names:
             raise ValueError(f"{path.name}: app code or resources are missing")

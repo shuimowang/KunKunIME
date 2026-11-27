@@ -35,8 +35,8 @@ android {
         // Personal-use baseline: Android 16 and newer.
         minSdk = 36
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.1.0"
+        versionCode = 6
+        versionName = "0.1.1"
         // 仪器测试（androidTest）：自绘控件的无障碍动作等要在真实 Android 运行时里验
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -175,8 +175,23 @@ val verifyNativeCore by tasks.registering {
     }
 }
 
+// Upstream's official AAR is pinned by version, length and SHA-256. The model
+// itself is never bundled into the production app; it is an explicit download.
+val prepareOfflineVoiceEngine by tasks.registering(Exec::class) {
+    workingDir(rootProject.projectDir)
+    val python = providers.environmentVariable("PYTHON").orNull
+        ?: if (System.getProperty("os.name").startsWith("Windows")) "python" else "python3"
+    commandLine(python, "scripts/prepare-offline-voice.py")
+    inputs.file(rootProject.file("voice-dependencies.json"))
+    inputs.file(rootProject.file("scripts/prepare-offline-voice.py"))
+    outputs.file(rootProject.layout.buildDirectory.file("offline-voice/sherpa-onnx-2.0.3.aar"))
+}
+
+val offlineVoiceEngine = files(rootProject.layout.buildDirectory.file("offline-voice/sherpa-onnx-2.0.3.aar"))
+    .builtBy(prepareOfflineVoiceEngine)
+
 tasks.named("preBuild") {
-    dependsOn(prepareCoreAssets, verifyNativeCore)
+    dependsOn(prepareCoreAssets, verifyNativeCore, prepareOfflineVoiceEngine)
 }
 
 // 单测直接读 src/main/assets 下的清单、布局、词库（BundledSchemasTest、LayoutParserTest…），
@@ -210,6 +225,8 @@ dependencies {
     // UniFFI 生成绑定的运行时依赖（JNA 需 @aar 变体）
     implementation(libs.jna) { artifact { type = "aar" } }
     implementation(libs.kotlinx.coroutines)
+    implementation(offlineVoiceEngine)
+    implementation(libs.commons.compress)
 
     testImplementation(libs.junit)
     // android.jar 里的 org.json 在 JVM 单测中只是桩（方法全抛异常）；词库统计的格式化要真解析

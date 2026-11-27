@@ -8,7 +8,8 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
-    <!-- 仅在用户检查/下载更新时连接 GitHub；语音交给用户选择的系统识别服务。 -->
+    <!-- 用户检查/下载更新或下载离线语音包时连接 GitHub；应用内模型在本机识别。
+         系统识别服务只用于用户明确选择的兼容方式，不由离线模式自动回退。 -->
     <queries>
         <intent>
             <action android:name="android.speech.RecognitionService" />

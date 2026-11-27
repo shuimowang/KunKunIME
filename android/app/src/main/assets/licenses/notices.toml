@@ -192,3 +192,59 @@ name = "UniFFI"
 usage = "生成核心与界面之间的调用接口"
 license = "MPL-2.0"
 url = "https://github.com/mozilla/uniffi-rs"
+
+[[notice]]
+group = "离线语音"
+name = "sherpa-onnx 2.0.3"
+usage = "应用内离线语音推理引擎，使用上游官方 Android AAR；保留 k2-fsa 项目版权及许可"
+license = "sherpa-onnx · Apache-2.0"
+url = "https://github.com/k2-fsa/sherpa-onnx/releases/tag/v2.0.3"
+
+[[notice]]
+group = "离线语音"
+name = "ONNX Runtime 1.28.2"
+usage = "随 sherpa-onnx 原生库提供的模型推理运行时；保留 Microsoft 版权及 MIT 许可"
+license = "ONNX Runtime · MIT"
+url = "https://github.com/microsoft/onnxruntime"
+
+[[notice]]
+group = "离线语音"
+name = "ONNX Runtime 第三方声明"
+usage = "与运行时版本对应的完整 ThirdPartyNotices，分别保留其第三方组件的许可与归属"
+license = "ONNX Runtime 第三方许可"
+url = "https://github.com/microsoft/onnxruntime"
+
+[[notice]]
+group = "离线语音"
+name = "sherpa-onnx 原生依赖"
+usage = "随推理库使用的原生依赖原始许可与声明；各组件分别遵守其条款"
+license = "原生依赖许可与声明"
+url = "https://github.com/k2-fsa/sherpa-onnx"
+
+[[notice]]
+group = "离线语音"
+name = "SenseVoiceSmall INT8 2024-07-17"
+usage = "FunAudioLLM / FunASR 的 SenseVoice 离线语音模型，用户主动下载；模型权重使用独立许可，不属于引擎的 Apache-2.0 许可"
+license = "FunASR Model Open Source License Agreement v1.1"
+url = "https://github.com/FunAudioLLM/SenseVoice"
+
+[[notice]]
+group = "离线语音"
+name = "SenseVoice 模型归档随附声明"
+usage = "原样保留模型下载归档附带的 LICENSE 引用，其中指向 FunASR 的许可说明；完整模型许可另列于上方"
+license = "SenseVoice 归档许可引用"
+url = "https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models"
+
+[[notice]]
+group = "离线语音"
+name = "Apache Commons Compress / IO / Lang3 / Codec"
+usage = "语音包解压与归档处理：Compress 1.28.0、IO 2.20.0、Lang3 3.18.0、Codec 1.19.0；完整保留 Apache 软件基金会的 LICENSE 与 NOTICE"
+license = "Apache Commons · Apache-2.0 与 NOTICE"
+url = "https://commons.apache.org/"
+
+[[notice]]
+group = "离线语音"
+name = "离线语音来源与版本清单"
+usage = "引擎、模型、原生依赖和解压组件的固定来源、归属及许可材料说明"
+license = "离线语音来源与归属"
+url = "https://github.com/shuimowang/KunKunIME"

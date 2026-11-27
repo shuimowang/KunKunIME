@@ -30,6 +30,12 @@ class VoiceInputSessionTest {
     }
 
     private class Backend(val local: Boolean, val events: VoiceBackend.Events) : VoiceBackend {
+        var stopBeforeReady = false
+        override val canStopBeforeReady: Boolean get() = stopBeforeReady
+        var prepareDeadline = 5_000L
+        override val supportTimeoutMillis: Long get() = prepareDeadline
+        var resultDeadline = 10_000L
+        override val resultTimeoutMillis: Long get() = resultDeadline
         var support: ((Boolean, String?) -> Unit)? = null
         var starts = 0
         var stops = 0
@@ -188,6 +194,50 @@ class VoiceInputSessionTest {
         assertEquals(1, backend.stops)
         backend.events.onResult("早到的录音")
         assertEquals(listOf("早到的录音"), rig.results)
+        assertEquals(1, rig.finished)
+    }
+
+    @Test
+    fun appOwnedRecorderIsStoppedBeforeItsAsynchronousReadyCallback() {
+        val rig = Rig()
+        rig.afterCreate = { it.stopBeforeReady = true }
+        rig.session.start("zh-CN", false)
+        val backend = rig.backends.single()
+        backend.support!!(true, null)
+        rig.session.stop()
+        assertEquals("The recorder receives stop before it could start later", 1, backend.stops)
+        backend.events.onReady()
+        backend.events.onReady()
+        assertEquals(1, backend.stops)
+        assertEquals(VoicePhase.PROCESSING, rig.states.last().phase)
+        backend.events.onError("没有听到声音")
+        assertEquals(1, rig.finished)
+        assertTrue(rig.results.isEmpty())
+    }
+
+    @Test
+    fun localModelDeadlinesAllowColdLoadAndDecodeButStillCancelLateResults() {
+        val rig = Rig()
+        rig.afterCreate = {
+            it.prepareDeadline = 45_000L
+            it.resultDeadline = 60_000L
+            it.stopBeforeReady = true
+        }
+        rig.session.start("zh-CN", false)
+        val backend = rig.backends.single()
+        rig.clock.advance(6_000)
+        assertTrue(rig.session.isActive)
+        backend.support!!(true, null)
+        backend.events.onReady()
+        rig.session.stop()
+        rig.clock.advance(11_000)
+        assertTrue(rig.session.isActive)
+        rig.clock.advance(49_000)
+        assertFalse(rig.session.isActive)
+        backend.events.onResult("迟到的离线文字")
+        assertTrue(rig.results.isEmpty())
+        assertEquals(1, backend.cancels)
+        assertEquals(1, backend.destroys)
         assertEquals(1, rig.finished)
     }
 

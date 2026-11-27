@@ -24,9 +24,11 @@ class PrivacyPolicyTest {
     }
 
     @Test
-    fun policyDistinguishesLocalTypingFromRequestedUpdatesAndSystemServices() {
+    fun policyDistinguishesLocalTypingFromRequestedDownloadsAndSystemServices() {
         val network = PRIVACY_POLICY.single { it.first == "联网" }.second
         assertTrue(network.contains("主动检查或下载更新"))
+        assertTrue(network.contains("下载离线语音包"))
+        assertTrue(network.contains("不需要联网识别"))
         assertTrue(network.contains("不会在后台自动检查更新"))
         assertTrue(network.contains("GitHub"))
         assertTrue(network.contains("浏览器"))
@@ -36,7 +38,7 @@ class PrivacyPolicyTest {
     @Test
     fun policyCoversRequiredTopics() {
         val titles = PRIVACY_POLICY.map { it.first }
-        for (t in listOf("联网", "下载与更新", "启用时的系统提示", "数据只存本地", "语音输入", "权限用途", "删除数据")) {
+        for (t in listOf("联网", "下载与更新", "离线语音包", "启用时的系统提示", "数据只存本地", "语音输入", "权限用途", "删除数据")) {
             assertTrue("隐私政策缺「$t」", t in titles)
         }
     }
@@ -60,5 +62,20 @@ class PrivacyPolicyTest {
         assertTrue(updates.contains("系统界面交给你确认"))
         assertTrue(updates.contains("不会静默安装"))
         assertTrue(updates.contains("不需要存储权限"))
+    }
+
+    @Test
+    fun policyExplainsLocalModelDownloadStorageAndDeletion() {
+        val model = PRIVACY_POLICY.single { it.first == "离线语音包" }.second
+        assertTrue(model.contains("点「下载离线语音包」"))
+        assertTrue(model.contains("不上传录音、输入文字、个人词库或常用语"))
+        assertTrue(model.contains("不进入系统备份"))
+        assertTrue(model.contains("不需要存储权限"))
+        val voice = PRIVACY_POLICY.single { it.first == "语音输入" }.second
+        assertTrue(voice.contains("本机内存中临时处理"))
+        assertTrue(voice.contains("不联网识别、不保存录音"))
+        val removal = PRIVACY_POLICY.single { it.first == "删除数据" }.second
+        assertTrue(removal.contains("删除语音包"))
+        assertTrue(removal.contains("不会自动改用联网识别"))
     }
 }

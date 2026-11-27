@@ -18,3 +18,7 @@
 
 根目录 LICENSE 包含 GPL-3.0 全文，WindInput/data/emoji/LICENSE 包含 LGPL-3.0 全文；Windows 软件包内也提供这两份文件。历史 WindInput/NOTICE.md 记录上游项目曾使用的更多数据，其中部分材料不属于困困的公开发行内容。
 
+## Android 离线语音
+
+Android 新增的 sherpa-onnx 推理引擎、ONNX Runtime、其他本地依赖和 Apache Commons 解包库，其原始许可、版权声明、固定版本与来源摘要见 [offline-voice/SOURCES.md](offline-voice/SOURCES.md)。按需下载的 SenseVoiceSmall 模型权重适用独立的 FunASR 模型协议，归属为 FunAudioLLM / Alibaba Group，ONNX 转换由 sherpa-onnx / Fangjun Kuang 提供；不将模型权重许可与推理引擎的 Apache-2.0 许可混用。
+

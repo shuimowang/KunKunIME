@@ -31,6 +31,12 @@ internal fun interface VoiceScheduler {
 
 /** Small adapter boundary: tests can drive real callback order without a microphone. */
 internal interface VoiceBackend {
+    /** Native model preparation and decoding can take longer than a system IPC call. */
+    val supportTimeoutMillis: Long get() = 5_000
+    val resultTimeoutMillis: Long get() = 10_000
+    /** An app-owned recorder can cancel an asynchronous start before onReady. */
+    val canStopBeforeReady: Boolean get() = false
+
     interface Events {
         fun onReady()
         fun onSpeechEnded()
@@ -121,7 +127,7 @@ internal class VoiceInputSession(
             fail(request, "语音还未准备好，请重新长按空格")
             return
         }
-        if (request.ready) {
+        if (request.ready || request.backend?.canStopBeforeReady == true) {
             stopBackend(request)
         } else {
             // onReadyForSpeech may arrive after the finger was released. Keep
@@ -164,8 +170,8 @@ internal class VoiceInputSession(
             startBackend(request, attempt)
             return
         }
-        stageTimeout(request, 5_000) {
-            fallback(request, "设备端语音服务响应超时，请检查语音设置后重试")
+        stageTimeout(request, backend.supportTimeoutMillis) {
+            fallback(request, "离线语音准备超时，请检查语音设置后重试")
         }
         try {
             backend.checkLocalSupport(request.language) { supported, message ->
@@ -216,7 +222,7 @@ internal class VoiceInputSession(
             if (!current(request, attempt) || !request.started || request.result != null || request.stopSent) return
             request.stopSent = true
             update(request, request.state.copy(phase = VoicePhase.PROCESSING, level = 0f))
-            stageTimeout(request, 10_000) { fail(request, "识别结果等待超时，请重新长按空格") }
+            resultTimeout(request)
         }
 
         override fun onPartial(text: String) {
@@ -259,7 +265,7 @@ internal class VoiceInputSession(
         request.stopSent = true
         update(request, request.state.copy(phase = VoicePhase.PROCESSING, level = 0f))
         if (active !== request) return
-        stageTimeout(request, 10_000) { fail(request, "识别结果等待超时，请重新长按空格") }
+        resultTimeout(request)
         try {
             request.backend?.stop()
         } catch (_: RuntimeException) {
@@ -268,6 +274,12 @@ internal class VoiceInputSession(
     }
 
     private fun current(request: Request, attempt: Int) = active === request && request.attempt == attempt
+
+    private fun resultTimeout(request: Request) {
+        stageTimeout(request, request.backend?.resultTimeoutMillis ?: 10_000) {
+            fail(request, "识别结果等待超时，请重新长按空格")
+        }
+    }
 
     private fun update(request: Request, state: VoiceState) {
         if (active !== request) return

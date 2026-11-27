@@ -59,12 +59,14 @@ class VoiceImeSmokeTest {
         val previous = keys.associateWith { key ->
             if (preferences.contains(key)) preferences.getBoolean(key, false) else null
         }
+        val previousEngine = preferences.getString("engine", null)
         val onboarding = context.getSharedPreferences("ime_onboarding", 0)
         val previousOnboarding = if (onboarding.contains("first_pick_shown")) {
             onboarding.getBoolean("first_pick_shown", false)
         } else null
         try {
-            preferences.edit().putBoolean("configured", true).putBoolean("system_fallback", true).commit()
+            preferences.edit().putBoolean("configured", true).putBoolean("system_fallback", true)
+                .putString("engine", "system_allowed").commit()
             onboarding.edit().putBoolean("first_pick_shown", true).commit()
             shell("settings put secure show_ime_with_hard_keyboard 1")
             shell("ime enable $imeId")
@@ -138,6 +140,7 @@ class VoiceImeSmokeTest {
                 for ((key, value) in previous) {
                     if (value == null) remove(key) else putBoolean(key, value)
                 }
+                if (previousEngine == null) remove("engine") else putString("engine", previousEngine)
             }.commit()
             onboarding.edit().apply {
                 if (previousOnboarding == null) remove("first_pick_shown")

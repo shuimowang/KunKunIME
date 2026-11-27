@@ -1,0 +1,3 @@
+# Preserve the original notice bytes recorded in SOURCES.json, including CRLF
+# and intentional upstream spacing; application source keeps normal checks.
+*.txt -text -whitespace

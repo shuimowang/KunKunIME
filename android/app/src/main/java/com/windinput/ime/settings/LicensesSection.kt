@@ -30,14 +30,27 @@ object Notices {
     /** assets 下的目录：notices.toml、各许可证全文（<id>.txt）、Rust 依赖清单 */
     const val DIR = "licenses"
 
-    /** 有全文的许可证 id；共享词库原始许可由 fullTextAsset 定位。 */
-    val FULL_TEXTS = setOf("GPL-3.0", "LGPL-3.0", "Apache-2.0", "MIT", "MPL-2.0", "ISC", "Unicode-3.0", "CC-BY-SA-4.0", "CC-BY-4.0", "BSD-3-Clause", "CMUdict", "CC0-1.0")
+    /** 原文件随共享许可目录复制；不另存一份省略版权或 NOTICE 的通用文本。 */
+    private val OFFLINE_TEXTS = mapOf(
+        "sherpa-onnx · Apache-2.0" to "sherpa-onnx-LICENSE.txt",
+        "ONNX Runtime · MIT" to "onnxruntime-LICENSE.txt",
+        "ONNX Runtime 第三方许可" to "onnxruntime-ThirdPartyNotices.txt",
+        "原生依赖许可与声明" to "NATIVE-LICENSES.txt",
+        "FunASR Model Open Source License Agreement v1.1" to "SenseVoice-FunASR-MODEL-LICENSE.txt",
+        "SenseVoice 归档许可引用" to "SenseVoice-archive-LICENSE.txt",
+        "Apache Commons · Apache-2.0 与 NOTICE" to "APACHE-COMMONS-LICENSES.txt",
+        "离线语音来源与归属" to "SOURCES.md",
+    )
+
+    /** 有全文的许可证 id；共享数据和语音许可由 fullTextAsset 定位。 */
+    val FULL_TEXTS = setOf("GPL-3.0", "LGPL-3.0", "Apache-2.0", "MIT", "MPL-2.0", "ISC", "Unicode-3.0", "CC-BY-SA-4.0", "CC-BY-4.0", "BSD-3-Clause", "CMUdict", "CC0-1.0") + OFFLINE_TEXTS.keys
 
     /** 共享数据许可由 prepare-assets.py 原样复制，避免另维护一份版权文本。 */
-    fun fullTextAsset(id: String): String = when (id) {
-        "CMUdict", "CC0-1.0" -> "data/licenses/data/$id.txt"
-        else -> "$DIR/$id.txt"
-    }
+    fun fullTextAsset(id: String): String = OFFLINE_TEXTS[id]?.let { "data/licenses/offline-voice/$it" }
+        ?: when (id) {
+            "CMUdict", "CC0-1.0" -> "data/licenses/data/$id.txt"
+            else -> "$DIR/$id.txt"
+        }
 
     /** 政府发布的公开标准保留来源链接。 */
     val NO_TEXT = setOf("公开标准")

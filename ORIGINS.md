@@ -15,3 +15,14 @@
 
 Android 配套版保留上游外壳的版权及许可，改为引用本仓现有核心与词库，并适配本仓 0.132 系列核心的数据目录接口。应用身份、产品图标、更新链接、手机默认布局及 CI 在本仓维护；手机词库在构建时从共享目录生成，未另建一份长期维护的副本。布局方向参考豆包输入法官方截图，未分发其代码、图像资源或模型。Android 与 Windows 的用户数据默认均在各自设备本地，当前没有自动同步服务。
 
+## Android 离线语音
+
+从 Android `0.1.1` 起，应用可独立使用 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) `v2.0.3` 推理引擎，按需下载 **SenseVoiceSmall INT8** 模型进行本地语音识别。模型不放入 Git 源码或主 APK，只有用户在语音设置中点击下载才会获取；下载与安装文件的大小、SHA-256 由应用内固定清单核对。离线语音不调用商业云端 API，也不保存用户录音。
+
+| 材料 | 固定来源 | 许可与归属 |
+|---|---|---|
+| sherpa-onnx Android 推理引擎 | [`v2.0.3`](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v2.0.3) 的 Android AAR | Apache-2.0；其随附原生依赖分别保留版权和许可 |
+| SenseVoiceSmall INT8 模型 | sherpa-onnx [`asr-models`](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) 中 `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2`，模型原项目为 [SenseVoice](https://github.com/FunAudioLLM/SenseVoice) | **FunASR Model Open Source License Agreement v1.1**；保留 SenseVoice 模型名称、作者归属与来源 |
+
+引擎代码许可与模型权重许可不同，不能将模型权重统一标为 Apache-2.0 或本仓 GPL。许可证文本和依赖说明见 [第三方材料清单](licenses/THIRD-PARTY.md)。下载后的模型位于 Android 应用的 `noBackupFilesDir/offline-voice` 私有目录，不随系统备份迁移；用户可在语音设置中删除并按需重新下载。
+
