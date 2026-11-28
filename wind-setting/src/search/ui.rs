@@ -279,11 +279,7 @@ pub fn build_search_box(
     let clear_st = st.clone();
     let click_st = st.clone();
 
-    let hint = st.open.map(|open| {
-        if *open { "" } else { "搜索设置（Ctrl+F）" }.to_string()
-    });
     let input = Element::text_input(query, "搜索设置")
-        .tooltip(hint)
         // 前置图标区留白，图标本身由下面的 SVG 叠上去（见 `icon` 的说明）。
         .leading_icon(' ')
         .width(BOX_W)
