@@ -1,4 +1,13 @@
 # Embedded in KunKunIME.exe. Dot-source for the isolated file-cleanup tests.
+function Get-PackageHash([string]$Path) {
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { return [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','') }
+        finally { $sha.Dispose() }
+    } finally { $stream.Dispose() }
+}
+
 function Assert-PlainPath([string]$Path) {
     $full = [IO.Path]::GetFullPath($Path)
     $current = $full
@@ -46,11 +55,11 @@ function Get-PackagePlan([string]$Exe) {
         if (-not $entries.ContainsKey($owned)) { throw "卸载清单不完整，缺少：$owned" }
     }
     if (-not $entries.ContainsKey('KunKunIME.exe') -or -not $entries.ContainsKey('data_custom/custom.toml') -or
-        (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash -ne $entries['KunKunIME.exe'].Hash) {
+        (Get-PackageHash $exePath) -ne $entries['KunKunIME.exe'].Hash) {
         throw '卸载清单与当前程序不匹配，请重新解压同一版本的完整程序包。'
     }
     [pscustomobject]@{ Root=$root; Exe=$exePath; Manifest=$manifest;
-        ManifestHash=(Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash; Entries=$entries }
+        ManifestHash=(Get-PackageHash $manifest); Entries=$entries }
 }
 
 function Remove-EmptyDirectory([string]$Path) {
@@ -72,7 +81,7 @@ function Remove-OwnedResources($Plan) {
             $dir = [IO.Path]::GetDirectoryName($dir)
         }
         if (-not [IO.File]::Exists($path)) { continue }
-        $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+        $actual = Get-PackageHash $path
         if ($actual -eq $entry.Hash -and (-not $entry.TrustedHash -or $actual -in @($entry.TrustedHash))) {
             [IO.File]::Delete($path)
         } else { $kept += $rel }
@@ -184,8 +193,8 @@ function Get-UninstallRegistryParent {
 }
 
 function Confirm-PackageIdentity($Plan) {
-    if ((Get-FileHash -LiteralPath (Assert-PlainPath $Plan.Exe) -Algorithm SHA256).Hash -ne $Plan.Entries['KunKunIME.exe'].Hash -or
-        (Get-FileHash -LiteralPath (Assert-PlainPath $Plan.Manifest) -Algorithm SHA256).Hash -ne $Plan.ManifestHash) {
+    if ((Get-PackageHash (Assert-PlainPath $Plan.Exe)) -ne $Plan.Entries['KunKunIME.exe'].Hash -or
+        (Get-PackageHash (Assert-PlainPath $Plan.Manifest)) -ne $Plan.ManifestHash) {
         throw '卸载期间程序或清单已更新，请从当前安装目录重新打开向导。'
     }
 }

@@ -170,7 +170,6 @@ try {
             'system uninstall --stop-service' { return }
             'system register-ime unregister-user' { return }
             'system register-ime unregister-associations' { return }
-            'system register-ime forget-uninstall-entry' { return }
             default { throw "Unexpected subprocess operation: $operation" }
         }
     }

@@ -70,6 +70,7 @@ fn dispatch(args: &[String]) -> Result<()> {
         .args(["-NoProfile", "-NonInteractive", "-STA", "-Command",
             "[Console]::InputEncoding=[Text.UTF8Encoding]::new($false); & ([ScriptBlock]::Create([Console]::In.ReadToEnd()))"])
         .env("KUNKUN_UNINSTALL_EXE", &exe)
+        .env_remove("PSModulePath")
         .current_dir(std::env::temp_dir())
         .creation_flags(0x08000000)
         .stdin(Stdio::piped())
