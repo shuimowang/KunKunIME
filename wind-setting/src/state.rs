@@ -1466,7 +1466,7 @@ impl AppState {
         self.update_notes.set(String::new());
         self.update_progress.set(0.0);
         self.update_progress_text.set(String::new());
-        // Windows 关于页明确说明本次手动检查会访问 GitHub；不写入自动联网偏好。
+        // Windows 的版本检查使用困困自己的 GitHub 发行渠道。
         if cfg!(windows) || self.setting_config.update.network_consent {
             self.begin_update_check();
         } else {

@@ -152,7 +152,40 @@ fn settings_window_content(app: &Rc<RefCell<state::AppState>>) -> Element {
             ),
         )
         .visible_when(move || conn.get() == state::ConnState::Loading);
-    Element::stack().fill().child(form).child(loading)
+    let mut root = Element::stack().fill().child(form).child(loading);
+    if update::update_check_supported() {
+        let current = app.clone();
+        let watcher = on_about_entry(&app.borrow(), move || {
+            let state = current.borrow();
+            if !state.manifest.feature_hidden("update_check") {
+                state.begin_update_check();
+            }
+        });
+        root = root.child(watcher);
+    }
+    root
+}
+
+/// Watch the visible page, including direct launches and switching back from the dictionary.
+fn on_about_entry(state: &state::AppState, mut enter: impl FnMut() + 'static) -> Element {
+    let about = cli::page_to_index("about").expect("registered About page");
+    let (tab, dictionary, connection, closed) = (
+        state.tab,
+        state.dictionary_visible,
+        state.conn,
+        state.main_window_closed,
+    );
+    let visible = move || {
+        tab.get() == about && !dictionary.get() && !closed.get()
+            && connection.get() != state::ConnState::Loading
+    };
+    let mut check = move || {
+        if visible() {
+            enter();
+        }
+    };
+    check();
+    pages::dict::reactive::reactive_effect(move || u64::from(visible()), check)
 }
 
 fn autosave_settings(app: &Rc<RefCell<state::AppState>>) {
@@ -508,7 +541,7 @@ pub fn run() {
     });
     *app_state.borrow().log_pack_tx.borrow_mut() = Some(log_pack_tx);
 
-    // Windows 的 ZIP 发行版只在用户点击「检查更新」时请求 GitHub。
+    // Windows 的 ZIP 发行版在进入「关于」时检查，并支持手动重试。
     // 其他平台沿用原安装器的静默检查门控。
     // 无更新或失败都不打扰用户，只有确实有新版本且未被「跳过此版本」屏蔽才弹对话框。
     if !cfg!(windows) {
@@ -755,6 +788,40 @@ fn route_protocol(raw: &str, state: &Rc<RefCell<state::AppState>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_update_runs_on_entry_to_visible_about_page() {
+        use std::cell::Cell;
+        use windui::{core::Tree, geometry::Size};
+
+        let state = state::AppState::empty();
+        let about = cli::page_to_index("about").unwrap();
+        let calls = Rc::new(Cell::new(0));
+        state.tab.set(about);
+        let observed = calls.clone();
+        let effect = on_about_entry(&state, move || observed.set(observed.get() + 1));
+        let mut tree = Tree::new();
+        tree.root = Some(effect.build(&mut tree));
+        let mut frame = || tree.layout_root(Size::new(10, 10), &mut windui::text::NullTextEngine);
+        frame();
+        assert_eq!(calls.get(), 0);
+        state.conn.set(state::ConnState::Ready);
+        frame();
+        frame();
+        assert_eq!(calls.get(), 1);
+        state.dictionary_visible.set(true);
+        frame();
+        state.tab.set(0);
+        state.dictionary_visible.set(false);
+        frame();
+        assert_eq!(calls.get(), 1);
+        state.tab.set(about);
+        frame();
+        assert_eq!(calls.get(), 2);
+        let observed = calls.clone();
+        let _reopened = on_about_entry(&state, move || observed.set(observed.get() + 1));
+        assert_eq!(calls.get(), 3);
+    }
 
     /// ★ 重建出来的主窗必须自己挂快捷键：`App::on_shortcut` 只归首个主窗，子窗（含关掉后
     /// 重开的设置窗）只认自己的 `Window::on_shortcut`。漏挂的后果是关窗再从托盘 / 二次实例

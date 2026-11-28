@@ -1250,11 +1250,11 @@ fn about_page(app: &Rc<RefCell<AppState>>, state: &AppState) -> Element {
         .child(crate::widgets::app_icon(64))
         .child(Element::col().spacing(4)
             .child(Element::label("困困输入法").font_size(22.0).font_weight(700).fg_role(Role::Text))
-            .child(Element::label(format!("版本 {}", env!("CARGO_PKG_VERSION"))).fg_role(Role::TextMuted)));
-    let source = Element::button("上游项目 WindInput")
-        .small()
-        .outline_soft()
-        .on_click(|ctx| ctx.open_url("https://github.com/huanfeng/WindInput"));
+            .child(Element::label(format!("版本 {}", env!("CARGO_PKG_VERSION"))).fg_role(Role::TextMuted)))
+        .child(Element::button("困困输入法 GitHub 主页")
+            .small()
+            .outline_soft()
+            .on_click(|ctx| ctx.open_url("https://github.com/shuimowang/KunKunIME")));
     let mut panel = crate::widgets::flat_panel()
         .width_match()
         .padding(24)
@@ -1262,12 +1262,22 @@ fn about_page(app: &Rc<RefCell<AppState>>, state: &AppState) -> Element {
         .child(header);
     if crate::update::update_check_supported() && !state.manifest.feature_hidden("update_check") {
         let app = Rc::clone(app);
-        let row = setting_row(
-            "软件更新",
-            Some("从 GitHub 检查困困输入法的 Windows 正式版"),
-            Element::button("检查更新")
+        let phase = state.update_phase;
+        let dialog = state.update_dialog_visible;
+        let available = move || phase.get() == crate::update::UpdatePhase::HasUpdate;
+        let actions = Element::stack()
+            .child(Element::button("检查更新")
                 .small()
-                .on_click(move |_| app.borrow().open_update_dialog()),
+                .visible_when(move || !available())
+                .on_click(move |_| app.borrow().open_update_dialog()))
+            .child(Element::button("查看新版")
+                .small()
+                .visible_when(available)
+                .on_click(move |_| dialog.set(true)));
+        let row = crate::widgets::setting_row_desc_signal(
+            "软件更新",
+            state.update_message,
+            actions,
         );
         panel = panel.child(crate::search::anchor::wrap(row, "about:update", state.jump));
     }
@@ -1295,8 +1305,7 @@ fn about_page(app: &Rc<RefCell<AppState>>, state: &AppState) -> Element {
     let panel = panel
         .child(Element::divider())
         .child(Element::label("基于 WindInput、wind-setting 和 WindUI 开源项目开发。").fg_role(Role::Text))
-        .child(Element::label("软件采用 GPL-3.0-or-later 许可。词库和第三方组件许可随程序提供。").fg_role(Role::TextMuted))
-        .child(Element::row().child(source));
+        .child(Element::label("软件采用 GPL-3.0-or-later 许可。词库和第三方组件许可随程序提供。").fg_role(Role::TextMuted));
     let tab = state.tab;
     let mcp_tab = crate::cli::page_to_index("mcp").expect("MCP page is registered");
     let connect = Element::button("查看 MCP 接入指南")
@@ -1336,6 +1345,25 @@ fn nav_feature(
 mod about_tests {
     use super::custom_edition_badge;
     use serde_json::json;
+
+    #[test]
+    fn windows_update_about_header_opens_kunkun_repository() {
+        use windui::core::Tree;
+        use windui::event::{MouseButton, PointerEvent, PointerKind};
+        use windui::geometry::{Point, Size};
+        let app = std::rc::Rc::new(std::cell::RefCell::new(crate::state::AppState::empty()));
+        let mut tree = Tree::new();
+        tree.root = Some(super::about_page(&app, &app.borrow()).width(760).height(670).build(&mut tree));
+        tree.layout_root(Size::new(760, 670), &mut windui::text::NullTextEngine);
+        let button = tree.focusable_order()[0];
+        let b = tree.abs_bounds(button);
+        let at = Point::new(b.x + b.w / 2, b.y + b.h / 2);
+        let (mut hover, mut capture) = (None, None);
+        let mut click = |kind| tree.dispatch_pointer(
+            PointerEvent::single(kind, at, MouseButton::Left), &mut hover, &mut capture);
+        click(PointerKind::Down);
+        assert_eq!(click(PointerKind::Up).open_url.as_deref(), Some("https://github.com/shuimowang/KunKunIME"));
+    }
 
     #[test]
     fn mcp_guide_about_entry_navigates_in_place() {

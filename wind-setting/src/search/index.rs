@@ -451,7 +451,7 @@ const HANDWRITTEN: &[Handwritten] = &[
     Handwritten { id: "advanced:memory", anchor: "advanced:memory", page: "advanced", title: "内存占用", section: "性能与诊断", keywords: "内存 诊断 复制 反馈 占用 方案 memory", feature: "memory" },
     Handwritten { id: "advanced:diagnostics", anchor: "advanced:memory", page: "advanced", title: "诊断信息", section: "性能与诊断", keywords: "内存 复制 反馈 自动刷新 排查 diagnostics", feature: "memory" },
     // ── 关于 / AI 助手 ──
-    Handwritten { id: "about:version", anchor: "about:main", page: "about", title: "版本信息", section: "关于", keywords: "版本号 内部版本 构建", feature: "" },
+    Handwritten { id: "about:version", anchor: "about:main", page: "about", title: "版本信息与项目主页", section: "关于", keywords: "版本号 内部版本 构建 GitHub 项目主页 困困输入法 源码 仓库", feature: "" },
     #[cfg(windows)]
     Handwritten { id: "about:update", anchor: "about:update", page: "about", title: "检查更新", section: "软件更新", keywords: "升级 Windows 正式版 新版本 下载 GitHub", feature: "update_check" },
     #[cfg(windows)]
