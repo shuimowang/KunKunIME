@@ -3320,7 +3320,7 @@ impl DictManagerState {
                 if let Some((old_code, old_text)) = orig {
                     params.insert("oldCode".into(), json!(old_code));
                     params.insert("oldText".into(), json!(old_text));
-                    Ok((vec![("dict.editEntry", Value::Object(params))], "已更新"))
+                    Ok((vec![(spec.rpc.update, Value::Object(params))], "已更新"))
                 } else {
                     Ok((vec![(spec.rpc.add, Value::Object(params))], "已添加"))
                 }

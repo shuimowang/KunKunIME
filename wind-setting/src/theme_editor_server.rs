@@ -1330,14 +1330,17 @@ mod route_tests {
             )
             .unwrap();
             let chunk = vec![b'x'; 1024 * 1024];
-            for _ in 0..(MAX_THEME_PACKAGE_BYTES / chunk.len() + 1) {
-                write!(s, "{:x}\r\n", chunk.len()).unwrap();
-                s.write_all(&chunk).unwrap();
+            for offset in (0..MAX_THEME_PACKAGE_BYTES).step_by(chunk.len()) {
+                let n = (MAX_THEME_PACKAGE_BYTES - offset).min(chunk.len());
+                write!(s, "{n:x}\r\n").unwrap();
+                s.write_all(&chunk[..n]).unwrap();
                 s.write_all(b"\r\n").unwrap();
             }
-            s.write_all(b"0\r\n\r\n").unwrap();
+            // 送出越界的一个字节及结束标记就读回执，避免服务端已拒绝后仍在写整块正文。
+            s.write_all(b"1\r\nx\r\n0\r\n\r\n").unwrap();
             let r = read_reply(&mut s);
             assert_eq!(r.status, 413);
+            assert_eq!(r.json()["error"], THEME_PKG.too_large);
         });
         assert!(is_empty(&dir), "超限的半截文件要删");
         let _ = std::fs::remove_dir_all(&dir);

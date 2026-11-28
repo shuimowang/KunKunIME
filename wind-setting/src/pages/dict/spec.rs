@@ -1045,7 +1045,7 @@ const SPEC_USERDICT: CategorySpec = CategorySpec {
     rpc: RpcNames {
         list: "dict.listPaged",
         add: "dict.add",
-        update: "dict.update",
+        update: "dict.editEntry",
         remove: "dict.remove",
         clear: "dict.clear",
         encode: "dict.encode",
@@ -1074,9 +1074,9 @@ const SPEC_USERLIB: CategorySpec = CategorySpec {
     },
     rpc: RpcNames {
         list: "userDicts.entries",
-        // 加与改同一个接口：按 (词, 编码) upsert，改权重也走它。
+        // 新增接受给定键；编辑携带原键并校验目标。
         add: "userDicts.addEntry",
-        update: "userDicts.addEntry",
+        update: "dict.editEntry",
         remove: "userDicts.removeEntry",
         clear: "userDicts.clear",
         encode: "dict.encode",
@@ -1663,7 +1663,7 @@ const SPEC_SYS_ENTRIES: CategorySpec = CategorySpec {
     rpc: RpcNames {
         list: "sysDict.entries",
         add: "dict.add",
-        update: "dict.update",
+        update: "dict.editEntry",
         encode: "dict.encode",
         ..RpcNames::EMPTY
     },
