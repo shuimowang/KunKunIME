@@ -183,6 +183,8 @@ jobs:
   publish:
     name: Publish the verified Windows release
     needs: [changes, windows, settings]
+    outputs:
+      published_tag: ${{ steps.publication.outputs.tag }}
     if: >-
       needs.changes.outputs.release == 'true' &&
       github.ref == 'refs/heads/main' &&
@@ -204,6 +206,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name KunKunIME-Windows-release --dir release-assets
       - name: Verify files, create a draft, upload, and publish
+        id: publication
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/publish-release.py --platform windows --assets release-assets
+        run: |
+          python3 scripts/publish-release.py --platform windows --assets release-assets
+          echo "tag=v$(cat WindInput/docs/VERSION)" >> "$GITHUB_OUTPUT"
+
+  # Publishing with GITHUB_TOKEN does not trigger a release.published workflow.
+  sync-downloads:
+    needs: publish
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-downloads.yml
+    with:
+      published_tag: ${{ needs.publish.outputs.published_tag }}

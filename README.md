@@ -1,17 +1,23 @@
 # 困困输入法 · KunKunIME
 
-困困输入法是一款面向 Windows 的开源拼音与英语输入法。默认使用全拼，也提供小鹤双拼和英文补全。设置与词库管理共用一个窗口和固定的左侧导航。点“词库管理”后，可以随时从左侧切回其他设置页。Quicker 可直接打开拼音主词库，窗口已经打开时会切到相应页面。后台输入服务与管理界面共用一个 `KunKunIME.exe`。
+困困输入法是一款支持 **Windows 和 Android** 的开源拼音与英语输入法。电脑和手机共用输入核心与词库，支持全拼、小鹤双拼和英文补全。
 
-## 安装与使用
+**[下载困困输入法 · Windows 和 Android](https://github.com/shuimowang/KunKunIME/releases/latest)**。打开后按设备选择 Windows x64 压缩包或 Android ARM64 安装包，两个入口旁分别标出当前正式版号。
 
-**Android 手机版**支持 Android 16 及以上的 ARM64 手机，与 Windows 共用拼音、英语核心和词库。安卓版 `0.1.2` 修复了拼音组词时移动光标、编辑表情和管理个人词库的问题。进入设置的「关于」即可查看有没有新版。0.1.2 启用新的发行签名，旧版用户需先导出词库，再卸载旧版、安装新版。离线语音包可在「语音输入」里按需下载，启用后长按空格说话、松手在本机识别。[Android 正式版](https://github.com/shuimowang/KunKunIME/releases/tag/android-v0.1.2) · [手机安装与使用说明](android/README.md)
+## Android 安装与使用
 
-1. 从 [GitHub Releases](https://github.com/shuimowang/KunKunIME/releases) 下载 Windows x64 压缩包，将**整个文件夹**解压到长期使用的位置。
+在 Android 16 及以上的 ARM64 手机上安装 APK，打开「困困输入法」，按引导启用并选择键盘。进入设置的「关于」即可检查更新。从 0.1.1 或更早版本迁移时，请先导出个人词库，再卸载旧版、安装新版。离线语音包可在「语音输入」里下载，启用后长按空格说话，松手在手机上识别。[手机安装与使用说明](android/README.md)
+
+## Windows 安装与使用
+
+1. 在[下载页](https://github.com/shuimowang/KunKunIME/releases/latest)选择 Windows x64 压缩包，将**整个文件夹**解压到长期使用的位置。
 2. 双击 **KunKunIME.exe**，点击 **注册输入法** 并确认 Windows 管理员授权。
 3. 按 **Win + 空格** 选择 **困困输入法**。如果希望每次登录 Windows 后默认使用困困，到 **设置 → 输入规则 → 默认状态 → Windows 登录默认输入法** 点 **设为默认输入法**。同一处可恢复 Windows 自动选择。
 4. 平时调整输入法设置会自动保存，可以直接关闭窗口继续打字。
 
 打开 **设置 → 关于** 会自动检查 Windows 正式版更新，页首的 **困困输入法 GitHub 主页** 可直达本仓库。同页可以打开卸载向导，选择保留个人词库和设置或一并清除。已注册的安装同时提供 Windows「已安装的应用」卸载入口。
+
+后台输入服务与管理界面共用一个 `KunKunIME.exe`。设置与词库管理共用一个窗口和左侧导航，Quicker 动作也可直接打开拼音主词库。
 
 | 我想输入什么 | 怎么用 |
 |---|---|
@@ -70,6 +76,8 @@ Cargo 的 `release` 配置决定二进制的优化方式，GitHub Release 提供
 手动运行 Windows 工作流并勾选 `publish_release` 可以请求当前版本的发行构建。上传中断时只重试发布 job，可复用原构建的附件；已有公开版本不允许被新构建覆盖。发行标签必须指向实际通过检查的提交，版本对应的说明保存在 `releases/v<版本>.md`。
 
 Android 工作流分别验证 debug 的初始化暂存流程和非 debug release 的真实输入流程，成功后为新版本准备独立的发行草稿。`android-v0.1.0` 等稳定版本创建正式版草稿，带 `-preview.…` 等后缀的版本仍标为预览版；Android 草稿不自动替换仓库的 Latest。维护者按 [Android 签名说明](android/README.md#分发签名)使用固定私钥签名，上传手机 APK、对应依赖源码和最终校验文件，再公开草稿；CI 的临时证书 APK 不自动成为用户下载包。私钥和恢复密码不进入仓库或工作流产物。
+
+任一平台发布正式版后，[下载链接同步工作流](.github/workflows/release-downloads.yml)会更新两个当前发行页顶部的下载入口。要对外分享电脑和手机的下载，使用固定地址 [Releases/latest](https://github.com/shuimowang/KunKunIME/releases/latest)。每个程序包、校验文件和发行说明都可以追溯到对应的平台标签。
 
 | 开发入口 | 源码 |
 |---|---|
