@@ -8,7 +8,7 @@
 
 [查看 GitHub 源码](https://github.com/shuimowang/KunKunIME) · [从源码构建](https://github.com/shuimowang/KunKunIME#%E4%BB%8E%E6%BA%90%E7%A0%81%E6%9E%84%E5%BB%BA) · [组件与词库的来源和许可](https://github.com/shuimowang/KunKunIME/blob/main/ORIGINS.md)
 
-[在 Quicker 安装动作](https://getquicker.net/Sharedaction?code=97a34a52-d2fd-4505-ab9b-0961e7718c53) · [手动下载动作 JSON](https://111.229.149.25/public/share/5KrzfvBkWjZPTnTEFXtodg) · [下载 Windows x64 程序包](https://github.com/shuimowang/KunKunIME/releases/download/v0.1.12/KunKunIME-0.1.12-Windows-x64.zip)
+[在 Quicker 安装动作](https://getquicker.net/Sharedaction?code=97a34a52-d2fd-4505-ab9b-0961e7718c53) · [手动下载动作 JSON](https://111.229.149.25/public/share/5KrzfvBkWjZPTnTEFXtodg) · [下载 Windows x64 程序包](https://111.229.149.25/public/share/MlVs1Jzzt79ladNCR6QZKA)
 
 ## 用 AI 助手管理词库
 
