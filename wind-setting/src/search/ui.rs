@@ -53,7 +53,8 @@ const OVERLAY_LEFT: i32 = 8;
 const SIDEBAR_W: i32 = crate::shell::NAV_W;
 const OVERLAY_TOP: i32 = 89;
 const OVERLAY_W: i32 = 320;
-const OVERLAY_MAX_H: i32 = 380;
+// Reserve the panel's padding below the search box even at the minimum window height.
+const OVERLAY_MAX_H: i32 = crate::MAIN_MIN_H - OVERLAY_TOP - 10;
 
 /// 结果列表里的一行。
 #[derive(Clone)]
@@ -197,6 +198,9 @@ impl SearchState {
 
     /// 当前高亮项的跳转目标。
     fn selected_target(&self) -> Option<JumpTarget> {
+        if !self.open.get() {
+            return None;
+        }
         let i = self.selected.get();
         self.rows.with(|r| r.get(i).map(|row| row.target.clone()))
     }
@@ -232,7 +236,7 @@ pub fn build_jump_sink(
     jmp: Signal<Option<JumpRequest>>,
     hint: Signal<String>,
     fields: std::rc::Rc<crate::state::FieldRegistry>,
-    show_dictionary: impl Fn(Option<crate::pages::dict::spec::LogicalTab>) + 'static,
+    show_dictionary: impl Fn(super::index::DictionaryTarget) + 'static,
 ) -> Element {
     crate::pages::dict::reactive::reactive_effect(
         move || jmp.version(),
@@ -275,8 +279,7 @@ pub fn build_search_box(
     let clear_st = st.clone();
     let click_st = st.clone();
 
-    let input = Element::text_input(query, "搜索设置")
-        .tooltip("搜索设置（Ctrl+F）")
+    let input = Element::text_input(query, "搜索设置  Ctrl+F")
         // 前置图标区留白，图标本身由下面的 SVG 叠上去（见 `icon` 的说明）。
         .leading_icon(' ')
         .width(BOX_W)
@@ -286,11 +289,11 @@ pub fn build_search_box(
         // （与 Windows 11 设置一致）。
         .autofocus()
         .on_nav_key(move |_ctx, ev| match ev.key {
-            Key::Up => {
+            Key::Up if nav_st.open.get() => {
                 nav_st.move_selection(-1);
                 true
             }
-            Key::Down => {
+            Key::Down if nav_st.open.get() => {
                 nav_st.move_selection(1);
                 true
             }
@@ -561,10 +564,60 @@ fn build_result_row(
         commit(&click_st, tab, jmp, target.clone());
     });
 
+    let follow = Element::leaf()
+        .widget(FollowSelection {
+            row: i,
+            selected,
+            open: st.open,
+            seen: None,
+            waiting_for_layout: false,
+        })
+        .reactive()
+        .align(Align::Stretch);
     Element::stack()
         .width_match()
         .child(highlight)
+        .child(follow)
         .child(content)
+}
+
+/// Keyboard focus stays in the search box. Scroll only when the highlighted result changes,
+/// so the user can still scroll the list independently with the mouse.
+struct FollowSelection {
+    row: usize,
+    selected: Signal<usize>,
+    open: Signal<bool>,
+    seen: Option<(u64, u64)>,
+    waiting_for_layout: bool,
+}
+
+impl Widget for FollowSelection {
+    fn on_update(&mut self, ctx: &mut EventCtx) {
+        if !self.open.get() || self.selected.get() != self.row {
+            return;
+        }
+        let version = (self.selected.version(), self.open.version());
+        if self.seen == Some(version) {
+            return;
+        }
+        let id = ctx.id();
+        let tree = ctx.tree_mut();
+        if tree.abs_bounds(id).h == 0 {
+            if !self.waiting_for_layout {
+                self.waiting_for_layout = true;
+                windui::anim::request_relayout();
+            }
+            return;
+        }
+        self.waiting_for_layout = false;
+        self.seen = Some(version);
+        if tree.scroll_into_view(id) {
+            windui::anim::request_relayout();
+        }
+    }
+    fn hit_opaque(&self) -> bool {
+        false
+    }
 }
 
 /// 透明的全窗捕获层：吃掉一次点击并回调，自己什么都不画。
@@ -712,6 +765,50 @@ mod tests {
         assert!(!st.open.get());
     }
 
+    #[test]
+    fn dismissed_results_have_no_keyboard_target() {
+        let st = state();
+        st.query.set("默认输入法".into());
+        st.refresh();
+        assert!(st.selected_target().is_some());
+        st.dismiss();
+        assert!(st.selected_target().is_none());
+        assert!(st.reopen());
+        assert!(st.selected_target().is_some());
+    }
+
+    #[test]
+    fn keyboard_selection_scrolls_last_result_into_view_then_returns_to_first() {
+        use windui::core::{NodeId, Tree};
+        use windui::geometry::Size;
+        fn scroll_offset(tree: &Tree, id: NodeId) -> i32 {
+            let node = tree.get(id).unwrap();
+            node.children.iter().map(|child| scroll_offset(tree, *child))
+                .fold(node.scroll_y, i32::max)
+        }
+        let st = state();
+        st.query.set("候选".into());
+        st.refresh();
+        assert_eq!(st.rows.with(Vec::len), DEFAULT_LIMIT);
+        let (_, overlay) = build_results_overlay(&st, signal(0), signal(None));
+        let mut tree = Tree::new();
+        let root = overlay.build(&mut tree);
+        tree.root = Some(root);
+        let layout = |tree: &mut Tree| {
+            for _ in 0..3 {
+                tree.layout_root(Size::new(760, crate::MAIN_MIN_H), &mut windui::text::NullTextEngine);
+            }
+        };
+        layout(&mut tree);
+        assert_eq!(scroll_offset(&tree, root), 0);
+        st.move_selection(-1);
+        layout(&mut tree);
+        assert!(scroll_offset(&tree, root) > 0);
+        st.move_selection(1);
+        layout(&mut tree);
+        assert_eq!(scroll_offset(&tree, root), 0);
+    }
+
     /// 确认一条结果后浮层收起、页面切到目标页。
     #[test]
     fn commit_switches_tab_and_closes() {
@@ -730,14 +827,15 @@ mod tests {
 
     #[test]
     fn unified_window_dictionary_search_preserves_settings_tab() {
+        use super::super::index::DictionaryTarget;
         let st = state();
         let tab = signal(3usize);
         let jmp = signal(None);
-        commit(&st, tab, jmp, JumpTarget::Dictionary(None));
+        commit(&st, tab, jmp, JumpTarget::Dictionary(DictionaryTarget::Current));
         assert_eq!(tab.get(), 3);
         assert!(matches!(
             jmp.get().map(|req| req.target),
-            Some(JumpTarget::Dictionary(None))
+            Some(JumpTarget::Dictionary(DictionaryTarget::Current))
         ));
         assert!(!st.open.get());
     }
@@ -767,6 +865,22 @@ mod tests {
             rows.iter()
                 .any(|r| matches!(r.target, JumpTarget::Dictionary(_)))
         }));
+    }
+
+    #[test]
+    fn dictionary_search_results_keep_their_individual_destinations() {
+        use super::super::index::DictionaryTarget::*;
+        let st = state();
+        for (query, destination) in [
+            ("添加词条", AddWord),
+            ("导入主词库", ImportMain),
+            ("系统词库", System),
+            ("用户短语", Category("phrase", crate::pages::dict::spec::LogicalTab::PhraseUser)),
+        ] {
+            st.query.set(query.into());
+            st.refresh();
+            assert_eq!(st.selected_target(), Some(JumpTarget::Dictionary(destination)), "{query}");
+        }
     }
 
     /// 结果行带上「需先选方案」标记的，正是方案级条目。

@@ -685,6 +685,25 @@ impl Store {
         Ok(true)
     }
 
+    pub fn edit_user_dict_entry(
+        &self,
+        ds: &str,
+        name: &str,
+        edit: &crate::WordEdit<'_>,
+    ) -> anyhow::Result<()> {
+        self.ensure_writable()?;
+        let _guard = self.lock_user_dict_writes();
+        let path = self.existing_lib(ds, name)?;
+        self.check_not_editing(&path)?;
+        let (bytes, _) =
+            fold::read_text(&path)?.ok_or_else(|| anyhow::anyhow!("分库不存在：{name}"))?;
+        let edited = edit.apply(&bytes, &path, false)?;
+        if bytes != edited {
+            fold::commit_text(&path, &edited, Some(&fold::fingerprint(Some(&bytes))))?;
+        }
+        Ok(())
+    }
+
     /// 清空分库：保留文件头（含说明行）及紧跟其后、仍在注释区的注释行（`# no comment` 之后 `#`
     /// 开头的是词条），删掉全部词条。返回删掉的条数。
     pub fn clear_user_dict(&self, ds: &str, name: &str) -> anyhow::Result<usize> {

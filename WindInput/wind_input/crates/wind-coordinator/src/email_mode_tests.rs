@@ -123,6 +123,43 @@ fn disabled_email_mode_never_hijacks() {
 // ───────────────────────── 缓冲与光标 ─────────────────────────
 
 #[test]
+fn email_separator_uses_the_typed_case_and_actual_caret() {
+    use wind_keys::keymap::{VK_BACK, VK_HOME, VK_RETURN, VK_RIGHT};
+    let mut cfg = email_cfg();
+    cfg.input.temp_english.enabled = false;
+    let (c, _s) = coord_with("insert_at_caret", cfg);
+    press_letter(&c, 'a');
+    c.handle_key_event(&key(u32::from(b'B'), MOD_SHIFT));
+    press_letter(&c, 'c');
+    press(&c, VK_HOME);
+    press(&c, VK_RIGHT);
+    assert!(matches!(press_at(&c),
+        KeyAction::UpdateComposition { text, caret_pos: 2 } if text == "a@Bc"));
+    assert_eq!(composition(&press_letter(&c, 'x')).as_deref(), Some("a@xBc"));
+    press(&c, VK_BACK);
+    press(&c, VK_BACK);
+    assert_eq!(c.debug_active_mode(), None);
+    press_letter(&c, 'q');
+    assert_eq!(committed(&press(&c, VK_RETURN)).as_deref(), Some("aqBc"));
+}
+
+#[test]
+fn backspace_away_from_the_activation_caret_edits_the_address_in_place() {
+    use wind_keys::keymap::{VK_BACK, VK_HOME, VK_RETURN, VK_RIGHT};
+    let (c, _s) = coord_with("edit_before_at", email_cfg());
+    for ch in "abc".chars() {
+        press_letter(&c, ch);
+    }
+    press_at(&c);
+    press(&c, VK_HOME);
+    press(&c, VK_BACK);
+    assert_eq!(c.debug_active_mode(), Some("email"));
+    press(&c, VK_RIGHT);
+    assert_eq!(composition(&press(&c, VK_BACK)).as_deref(), Some("bc@"));
+    assert_eq!(committed(&press(&c, VK_RETURN)).as_deref(), Some("bc@"));
+}
+
+#[test]
 fn suffix_accumulates_including_digits_and_dots() {
     let (c, _s) = coord_with("accum", email_cfg());
     press_letter(&c, 'a');

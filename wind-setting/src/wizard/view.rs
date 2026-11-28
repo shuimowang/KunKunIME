@@ -530,8 +530,11 @@ fn frame(app: &Rc<RefCell<AppState>>, phase: Signal<WizardPhase>, c: Controls) -
         .child(page(confirm_body(c.confirm_text), WizardPhase::Confirm))
         .child(page(result_body(c.result_text), WizardPhase::Result));
     Element::col()
-        .width(DIALOG_W)
-        .height(DIALOG_H)
+        .place_fn(|available| {
+            let width = DIALOG_W.min((available.w - 16).max(0));
+            let height = DIALOG_H.min((available.h - 16).max(0));
+            windui::geometry::Rect::new(0, 0, width, height)
+        })
         .bg_role(Role::Surface)
         .border_role(Role::Border, 1)
         .corner(12.0)
@@ -1667,6 +1670,30 @@ mod tests {
             assert_eq!(tree.get(panel).unwrap().measured.h, DIALOG_H);
             let (h, content_h) = page_scroll(&tree, panel, WizardPhase::Step(4));
             assert!(content_h > h, "长摘要应可滚动：{content_h} <= {h}");
+        });
+    }
+
+    #[test]
+    fn short_window_keeps_navigation_visible_in_the_actual_dialog() {
+        with_mock(|| {
+            let app = mock_app();
+            open_wizard(&app);
+            let phase = app.borrow().wizard_phase;
+            let mut tree = Tree::new();
+            let dialog = build_wizard_dialog(&app).build(&mut tree);
+            tree.root = Some(dialog);
+            for height in [440, 640] {
+                for step in [WizardPhase::Welcome, WizardPhase::Step(1), WizardPhase::Step(3)] {
+                    phase.set(step);
+                    tree.layout_root(Size::new(760, height), &mut windui::text::NullTextEngine);
+                    let wrapper = tree.get(dialog).unwrap().children[0];
+                    let panel = tree.get(wrapper).unwrap().children[0];
+                    let footer = tree.get(panel).unwrap().children[4];
+                    let bounds = tree.abs_bounds(footer);
+                    assert!(bounds.h > 0 && bounds.y >= 0 && bounds.y + bounds.h <= height,
+                            "{step:?}: {bounds:?}, window height {height}");
+                }
+            }
         });
     }
 

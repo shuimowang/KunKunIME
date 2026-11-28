@@ -208,7 +208,7 @@ impl Coordinator {
         // 恰恰是 `has_code_prefix(combined) == false`，判据说「这里没东西」，回退目标却偏要
         // 退到那里。且 `combined` 这一帧用户从没见过（按下该键的同一帧就被夺取了），退过去
         // 看起来就像「退格没生效、只是候选窗闪没了」，得再按一次才回到有候选的那一帧。
-        let snapshot = state.input_buffer.clone();
+        let snapshot = crate::preedit_cursor::cased_or_buffer(&state.input_buffer, &state.input_buffer_cased).to_owned();
 
         // 按目标模式装载残余码。门卫没过一律返回 None（不夺取，落正常码表），
         // 与首键进入点同策略——绝不能吞键。
@@ -277,11 +277,7 @@ impl Coordinator {
             _ => return None,
         };
 
-        state.rewind = Some(Rewind {
-            snapshot,
-            host_text: residual,
-            origin: RewindOrigin::Normal, // z 夺取抢的是正常码表输入流
-        });
+        state.rewind = Some(Rewind::at_ends(snapshot, residual, RewindOrigin::Normal));
         state.input_buffer.clear();
         state.candidates.clear();
         match state.active {
@@ -1839,6 +1835,7 @@ impl Coordinator {
                 // 判据是整串比较（`缓冲 + 本键 == 某前缀`）而不是「首字符是不是 U」：前缀由
                 // 用户配置，写死字母就与配置脱了节。
                 if self.rt().config.input.unicode.enabled
+                    && state.temp_english_cursor == state.temp_english_buffer.len()
                     && let Some(ch) = printable_char(data.key_code, shift)
                 {
                     let probe = format!("{}{}", state.temp_english_buffer, ch);
@@ -1859,12 +1856,7 @@ impl Coordinator {
                     && !state.temp_english_buffer.is_empty()
                     && printable_char(data.key_code, shift) == Some(crate::handle_email::EMAIL_AT)
                 {
-                    let buffer = format!(
-                        "{}{}",
-                        state.temp_english_buffer,
-                        crate::handle_email::EMAIL_AT
-                    );
-                    return self.enter_email_mode(state, buffer, RewindOrigin::TempEnglish);
+                    return self.enter_email_mode(state, RewindOrigin::TempEnglish);
                 }
                 // 二三候选键（默认 `;` `'`）→ 选候选。临英此前是**唯一**没接
                 // `select_key_offset` 的模式处理器（主流程 / 临拼 / 特殊 / mix 都接了），

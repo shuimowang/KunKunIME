@@ -111,6 +111,119 @@ fn weight_in(line: &str, weight_col: Option<usize>) -> i32 {
         .unwrap_or(0)
 }
 
+/// Explicit edit of the selected dictionary key; both representations may name the same row.
+pub struct WordEdit<'a> {
+    pub old: (&'a str, &'a str),
+    pub new: (&'a str, &'a str),
+    pub boundary: u64,
+    pub weight: i32,
+}
+
+impl WordEdit<'_> {
+    /// Edit a parsed row in place, preserving its position, unrelated columns and line endings.
+    pub fn apply(&self, bytes: &[u8], path: &Path, lowercase: bool) -> anyhow::Result<Vec<u8>> {
+        let (code, _, text) = normalize_key(self.new.0, self.new.1, lowercase);
+        anyhow::ensure!(!code.is_empty() && !text.is_empty(), "编码和词条都不能为空");
+        anyhow::ensure!(
+            !code.contains(['\t', '\r', '\n']),
+            "编码不能包含换行或制表符"
+        );
+        anyhow::ensure!(
+            code.chars().count() <= crate::runtime::USER_CODE_MAX_CHARS
+                && text.chars().count() <= crate::runtime::USER_TEXT_MAX_CHARS,
+            "词条或编码过长"
+        );
+        let dict =
+            parse(bytes, path, lowercase).map_err(|e| anyhow::anyhow!("读取原词条失败：{e:?}"))?;
+        let (old_code, _, old_text) = normalize_key(self.old.0, self.old.1, lowercase);
+        let key_changed = old_code != code || old_text != text;
+        anyhow::ensure!(
+            !key_changed
+                || !dict
+                    .entries
+                    .iter()
+                    .any(|e| e.code == code && e.text == text),
+            "目标编码下已有该词条，请编辑已有的那一条"
+        );
+        let body = std::str::from_utf8(bytes)?;
+        let layout = wind_dict::rime_layout(body.trim_start_matches('\u{feff}'), path)
+            .ok_or_else(|| anyhow::anyhow!("无法读取词库列定义"))?;
+        anyhow::ensure!(
+            layout.weight_col.is_some() || self.weight == 0,
+            "该词库没有权重列"
+        );
+        let encoded_text = if dict.header.escape {
+            wind_wdict::escape_text_field(&text)
+        } else {
+            anyhow::ensure!(
+                !text.contains(['\t', '\r', '\n']),
+                "该词库不支持多行词条或制表符"
+            );
+            text.clone()
+        };
+        let mut lines: Vec<_> = body.split('\n').map(str::to_owned).collect();
+        let mut found = false;
+        for entry in dict
+            .entries
+            .iter()
+            .filter(|e| e.code == old_code && e.text == old_text)
+        {
+            found = true;
+            let line = &mut lines[entry.line];
+            if code != old_code
+                || (dict.header.syllable_codes
+                    && self.boundary != 0
+                    && self.boundary != entry.boundary)
+            {
+                let display = wind_wdict::join_code_by_boundary(&code, self.boundary);
+                *line = with_col(line, layout.code_col, &display);
+            }
+            if text != old_text {
+                *line = with_col(line, layout.text_col, &encoded_text);
+            }
+            if let Some(column) = layout.weight_col
+                && entry.weight != self.weight
+            {
+                *line = with_weight(line, column, self.weight);
+            }
+            if line.starts_with('#') {
+                let start: usize = body
+                    .trim_start_matches('\u{feff}')
+                    .split_inclusive('\n')
+                    .take(entry.line)
+                    .map(str::len)
+                    .sum();
+                if layout.comment_cutoff.is_none_or(|cut| start <= cut) {
+                    // A leading '#' in the comment zone must go after the no-comment marker.
+                    let old = PatchOp::Delete {
+                        code: old_code,
+                        text: old_text,
+                    };
+                    let new = PatchOp::Upsert {
+                        code,
+                        text,
+                        boundary: self.boundary,
+                        weight: self.weight,
+                    };
+                    return patch_with_banner(
+                        bytes,
+                        path,
+                        lowercase,
+                        &[old, new],
+                        0,
+                        "",
+                        dict.header.syllable_codes,
+                        None,
+                    )
+                    .map_err(|e| anyhow::anyhow!("无法写回词条：{e:?}"));
+                }
+            }
+        }
+        anyhow::ensure!(found, "原词条已被修改或删除，请刷新词库");
+        Ok(lines.join("\n").into_bytes())
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn patch(
     original: &[u8],

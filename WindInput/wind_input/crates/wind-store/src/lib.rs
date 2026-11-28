@@ -32,6 +32,7 @@ pub mod store;
 pub mod store_layer;
 pub mod temp_words;
 pub mod user_dicts;
+pub use wind_userdata::text::patch::WordEdit;
 pub mod user_words;
 pub use wind_userdata::engine::check_schema_id;
 pub use wind_userdata::issues;

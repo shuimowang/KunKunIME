@@ -104,8 +104,23 @@ pub struct Rewind {
     pub snapshot: String,
     /// 夺取瞬间的模式 buffer（「是否退到边界」判定：当前模式 buffer == 此值即在边界）。
     pub host_text: String,
+    /// 两侧缓冲的字节光标。邮箱分隔符可以插在原缓冲中间。
+    pub source_cursor: usize,
+    pub host_cursor: usize,
     /// `snapshot` 该回放到哪条输入流。见 [`RewindOrigin`]。
     pub origin: RewindOrigin,
+}
+
+impl Rewind {
+    pub(crate) fn at_ends(snapshot: String, host_text: String, origin: RewindOrigin) -> Self {
+        Self {
+            source_cursor: snapshot.len(),
+            host_cursor: host_text.len(),
+            snapshot,
+            host_text,
+            origin,
+        }
+    }
 }
 
 /// 夺取的**来源流** —— 决定 `Coordinator::rewind_hijack` 把 `snapshot` 放回哪里。

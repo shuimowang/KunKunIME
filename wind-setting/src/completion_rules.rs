@@ -39,7 +39,9 @@ impl Rule {
                 crate::search::jump::request(
                     tab,
                     jump,
-                    crate::search::JumpTarget::Dictionary(Some(target)),
+                    crate::search::JumpTarget::Dictionary(
+                        crate::search::index::DictionaryTarget::Category("completion", target),
+                    ),
                 );
             })
     }

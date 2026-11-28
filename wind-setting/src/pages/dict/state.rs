@@ -327,7 +327,7 @@ pub struct DictManagerState {
     /// 导入导出的 wdict 短语段一直带这一列，此前设置页却只能写死 0。
     pub edit_position: Signal<String>,
     /// 编辑模式的原始键 (code, text)；None = 新增模式。
-    editing_orig: Rc<RefCell<Option<(String, String)>>>,
+    editing_orig: Rc<RefCell<Option<(String, String, DictionaryScope)>>>,
     /// 自动出码状态（词条一变即反查编码）。所有**外部改写** `edit_code`/`edit_text` 的地方
     /// 都要跟一句 `auto_encode.reseed()`，否则那次改写会被判成「用户手改编码」而停掉自动。
     pub auto_encode: AutoEncode,
@@ -1987,7 +1987,7 @@ impl DictManagerState {
     /// 归属：判据在 `row_ops` 一处，菜单与操作列都读它——两处各判一遍迟早漂移，
     /// 而症状是「菜单里能点、点了报错」。
     pub fn open_quick_edit(&self, row: &WordRow) {
-        *self.editing_orig.borrow_mut() = Some((row.kind.clone(), row.code.clone()));
+        *self.editing_orig.borrow_mut() = Some((row.kind.clone(), row.code.clone(), self.current_scope()));
         let opts = self.quick_kind_options();
         self.quick_kind_idx
             .set(opts.iter().position(|k| *k == row.kind).unwrap_or(0));
@@ -3076,41 +3076,43 @@ impl DictManagerState {
         }
     }
 
-    /// 预填加词对话框（供加词小窗/快捷键使用）：定位 schema 所属域 → 用户词库子标签，
-    /// 预填 词/编码/权重(1200)，`editing_orig=None`（新增），打开对话框。
-    /// schema 命中规则：先精确匹配 rep_schema_id；未命中且为拼音变体时落拼音域；
-    /// 命中域若无「用户词库」子标签（如混输仅候选调整），回退到首个含用户词库的域。
-    pub fn open_add_word_prefilled(&self, text: &str, code: &str, schema: &str) {
-        // 1) 目标域：走统一解析，另加「未知方案即拼音」的宽松兜底。
-        //    这里的 schema 由 core 透传（可能是尚未列入已启用列表的双拼变体），
-        //    与命令行深链不同——猜错只是落错域，不猜则连对话框都开不出来。
-        let domain = self.resolve_domain(schema).or_else(|| {
-            if schema.trim().is_empty() {
-                None
-            } else {
-                self.folded_domains()
-                    .iter()
-                    .position(|d| d.kind == "pinyin")
-                    .map(|i| i + 1)
-            }
-        });
-
-        // 2) 该域是否含用户词库子标签；无则回退到首个含用户词库的方案域。
-        let userdict_sub = |d: usize| -> Option<usize> {
-            self.tabs_for_domain_at(d)
-                .iter()
-                .position(|t| t.category() == WordCategory::UserDict)
+    /// 先用指定方案，再找拼音，最后尝试其他支持用户词条的已启用方案。
+    fn select_word_library(&self, preferred: Option<usize>) -> bool {
+        let target = preferred.into_iter()
+            .chain(self.resolve_domain("pinyin"))
+            .chain(GLOBAL_DOMAINS..self.domain_count())
+            .find_map(|domain| {
+                self.tabs_for_domain_at(domain).iter()
+                    .position(|t| *t == LogicalTab::UserDict)
+                    .map(|sub| (domain, sub))
+            });
+        let Some((domain, sub)) = target else {
+            self.notify_err("请先在「输入方案」中启用支持个人词库的方案。");
+            return false;
         };
-        let (domain, sub) = domain
-            .and_then(|d| userdict_sub(d).map(|s| (d, s)))
-            .or_else(|| {
-                (GLOBAL_DOMAINS..self.domain_count()).find_map(|d| userdict_sub(d).map(|s| (d, s)))
-            })
-            // 无任何方案域：退化到短语域，仍打开对话框（提交会因类别不支持而报错）
-            .unwrap_or((0, 0));
-
+        self.cats.close();
         self.navigate_to(domain, Some(sub));
-        self.prefill_add_word(text, code);
+        self.sync_lib_selection();
+        true
+    }
+
+    pub(crate) fn open_personal_word(&self) {
+        if self.select_word_library(Some(self.domain.get())) {
+            self.open_add();
+        }
+    }
+
+    pub(crate) fn open_main_word_import(&self) {
+        if self.select_word_library(Some(self.domain.get())) {
+            self.select_lib(None);
+            self.open_import_dialog();
+        }
+    }
+
+    pub fn open_add_word_prefilled(&self, text: &str, code: &str, schema: &str) {
+        if self.select_word_library(self.resolve_domain(schema)) {
+            self.prefill_add_word(text, code);
+        }
     }
 
     /// 加词对话框预填词与编码（新增模式）并打开；不动导航。编码空着就当场出一次。
@@ -3149,7 +3151,7 @@ impl DictManagerState {
             WordCategory::PhraseUser => ("编辑短语", "编码", "短语"),
             _ => return,
         };
-        *self.editing_orig.borrow_mut() = Some((code.into(), text.into()));
+        *self.editing_orig.borrow_mut() = Some((code.into(), text.into(), self.current_scope()));
         self.edit_code.set(code.into());
         self.edit_text.set(text.into());
         self.edit_weight.set(weight.to_string());
@@ -3301,14 +3303,18 @@ impl DictManagerState {
     }
 
     /// 计算"保存"要执行的 RPC 调用序列（纯函数，便于单测）。
-    /// 用户词库：改键走删旧+加新，仅权重变走 update；短语：走 add / update。
+    /// 用户词库：编辑时带上原始键，由后端按实际存储键一次提交；短语：走 add / update。
     #[allow(clippy::type_complexity)]
     pub fn save_calls(&self) -> Result<(Vec<(&'static str, Value)>, &'static str), String> {
         let spec = self.current_spec();
         let cat = spec.category;
         let code = self.edit_code.get();
         let text = self.edit_text.get();
-        let orig = self.editing_orig.borrow().clone();
+        let orig = match self.editing_orig.borrow().clone() {
+            Some((code, text, scope)) if scope == self.current_scope() => Some((code, text)),
+            Some(_) => return Err("词库位置已改变，请在目标词库重新打开词条。".into()),
+            None => None,
+        };
         // 快捷输入在解析权重**之前**分流：这一类没有权重维度，`edit_weight` 从来不被设置，
         // 让它先跑下面那个 parse 会得到「权重需为整数」——一个与用户所做之事毫无关系的报错。
         if cat == WordCategory::QuickFormat {
@@ -3342,41 +3348,16 @@ impl DictManagerState {
                 if code.trim().is_empty() {
                     return Err("编码不能为空".into());
                 }
-                match orig {
-                    // 仅权重变更 → update（upsert 改权重）
-                    Some((oc, ot)) if oc == code && ot == text => {
-                        let mut p = self.scoped_params();
-                        p.insert("code".into(), json!(code));
-                        p.insert("text".into(), json!(text));
-                        p.insert("weight".into(), json!(weight));
-                        Ok((vec![(spec.rpc.update, Value::Object(p))], "已更新"))
-                    }
-                    // 编码/词条变更 → 删旧 + 加新
-                    Some((oc, ot)) => {
-                        let mut rem = self.scoped_params();
-                        rem.insert("code".into(), json!(oc));
-                        rem.insert("text".into(), json!(ot));
-                        let mut add = self.scoped_params();
-                        add.insert("code".into(), json!(code));
-                        add.insert("text".into(), json!(text));
-                        add.insert("weight".into(), json!(weight));
-                        // 先加新再删旧：add 失败则旧词条完好（避免删成功/加失败丢词）；
-                        // 最坏 add 成功、remove 失败仅留一条重复，可再删。
-                        Ok((
-                            vec![
-                                (spec.rpc.add, Value::Object(add)),
-                                (spec.rpc.remove, Value::Object(rem)),
-                            ],
-                            "已更新",
-                        ))
-                    }
-                    None => {
-                        let mut p = self.scoped_params();
-                        p.insert("code".into(), json!(code));
-                        p.insert("text".into(), json!(text));
-                        p.insert("weight".into(), json!(weight));
-                        Ok((vec![(spec.rpc.add, Value::Object(p))], "已添加"))
-                    }
+                let mut params = self.scoped_params();
+                params.insert("code".into(), json!(code));
+                params.insert("text".into(), json!(text));
+                params.insert("weight".into(), json!(weight));
+                if let Some((old_code, old_text)) = orig {
+                    params.insert("oldCode".into(), json!(old_code));
+                    params.insert("oldText".into(), json!(old_text));
+                    Ok((vec![("dict.editEntry", Value::Object(params))], "已更新"))
+                } else {
+                    Ok((vec![(spec.rpc.add, Value::Object(params))], "已添加"))
                 }
             }
             WordCategory::PhraseUser => {
@@ -3416,15 +3397,16 @@ impl DictManagerState {
     }
 
     /// 顺序执行一组写调用；全部成功才刷新并置反馈，任一失败即停并报错。
-    fn run_calls(&self, calls: Vec<(&str, Value)>, ok_msg: &str) {
+    fn run_calls(&self, calls: Vec<(&str, Value)>, ok_msg: &str) -> bool {
         for (m, p) in &calls {
             if let Err(e) = rpc::call_core(m, p) {
                 self.notify_err(&format!("操作失败: {e}"));
-                return;
+                return false;
             }
         }
         self.reload();
         self.notify_ok(ok_msg);
+        true
     }
 
     /// 把一条系统短语转为用户短语（原样复制其编码/内容/权重/次序）。
@@ -3453,13 +3435,15 @@ impl DictManagerState {
     pub fn submit_word(&self) {
         match self.save_calls() {
             Ok((calls, ok)) => {
+                if !self.run_calls(calls, ok) {
+                    return;
+                }
                 // 三个对话框共用 edit_* 字段与本提交路径，各有自己的可见性信号。
                 // 无条件关掉全部，比在这里再判一次当前类别更不容易错（判错的症状是
                 // 「保存成功了但窗口不关」）。
                 self.edit_visible.set(false);
                 self.quick_edit_visible.set(false);
                 self.common_edit_visible.set(false);
-                self.run_calls(calls, ok);
             }
             Err(e) => self.notify_err(&e),
         }
@@ -4952,6 +4936,25 @@ mod tests {
         // core 传来的双拼 id 归一到拼音域代表
         st.open_add_word_prefilled("好", "hao", "shuangpin_ziranma");
         assert_eq!(st.current_category(), WordCategory::UserDict);
+    }
+
+    #[test]
+    fn personal_add_from_email_and_unknown_schema_pick_a_writable_pinyin_library() {
+        let st = DictManagerState::new();
+        with_schemas(&st, vec![
+            schema("other", "其他方案", "codetable"),
+            schema_s("quanpin", "全拼", "pinyin", "full"),
+        ]);
+        st.domain.set(DOMAIN_COMPLETION);
+        st.open_personal_word();
+        assert!(st.edit_visible.get() && !st.completion_add_visible.get());
+        assert_eq!(st.current_schema_id().as_deref(), Some("quanpin"));
+        st.open_add_word_prefilled("你好", "nihao", "not-listed");
+        assert_eq!(st.current_schema_id().as_deref(), Some("quanpin"));
+
+        let empty = DictManagerState::new();
+        empty.open_personal_word();
+        assert!(!empty.edit_visible.get());
     }
 
     // ── 程序化定位（命令行深链）──────────────────────────────
@@ -7726,7 +7729,7 @@ mod tests {
         st.edit_weight.set("9".into());
         let (calls, _) = st.save_calls().unwrap();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "dict.update");
+        assert_eq!(calls[0].0, "dict.editEntry");
     }
 
     #[test]
@@ -7757,12 +7760,12 @@ mod tests {
         st.edit_weight.set("9".into()); // 仅改权重
         let (calls, _) = st.save_calls().unwrap();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "dict.update");
+        assert_eq!(calls[0].0, "dict.editEntry");
         assert_eq!(calls[0].1["weight"], json!(9));
     }
 
     #[test]
-    fn save_calls_dict_edit_changed_key_removes_then_adds() {
+    fn save_calls_dict_edit_changed_key_submits_original_and_new_keys_once() {
         let st = DictManagerState::new();
         with_schemas(&st, vec![schema("wb", "五笔", "codetable")]);
         st.domain.set(GLOBAL_DOMAINS);
@@ -7770,12 +7773,31 @@ mod tests {
         st.open_edit("aaaa", "工", 0, 0);
         st.edit_text.set("工人".into()); // 词条变更
         let (calls, _) = st.save_calls().unwrap();
-        assert_eq!(calls.len(), 2);
-        // 先加新、再删旧（避免删成功/加失败丢词）
-        assert_eq!(calls[0].0, "dict.add");
-        assert_eq!(calls[0].1["text"], json!("工人")); // 加新
-        assert_eq!(calls[1].0, "dict.remove");
-        assert_eq!(calls[1].1["text"], json!("工")); // 删旧
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "dict.editEntry");
+        assert_eq!(calls[0].1["text"], json!("工人"));
+        assert_eq!(calls[0].1["oldText"], json!("工"));
+        assert_eq!(calls[0].1["oldCode"], json!("aaaa"));
+    }
+
+    #[test]
+    fn rejected_dictionary_edit_keeps_the_form_open_for_correction() {
+        with_mock(|| {
+            let st = DictManagerState::new();
+            with_schemas(&st, vec![schema("pinyin", "拼音", "pinyin")]);
+            st.domain.set(GLOBAL_DOMAINS);
+            st.sub_tab.set(0);
+            st.open_edit("xue yao", "薛瑶", 88, 0);
+            st.edit_text.set("雪遥".into());
+            crate::rpc::force_mock_error("dict.editEntry", Some("目标编码下已有该词条"));
+            st.submit_word();
+            crate::rpc::force_mock_error("dict.editEntry", None);
+            assert!(st.edit_visible.get());
+            assert_eq!(st.edit_text.get(), "雪遥");
+            assert!(st.feedback.get().unwrap().1.contains("已有"));
+            st.sub_tab.set(1);
+            assert!(st.save_calls().unwrap_err().contains("词库位置已改变"));
+        });
     }
 
     #[test]

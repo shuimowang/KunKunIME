@@ -373,6 +373,17 @@ impl Store {
         Ok(user.len() + temp.len())
     }
 
+    pub fn edit_user_word(
+        &self,
+        schema: &str,
+        edit: &wind_userdata::text::patch::WordEdit<'_>,
+    ) -> anyhow::Result<()> {
+        self.ensure_user_text(schema);
+        self.runtime().data().edit_user_word(schema, edit)?;
+        self.bump_words_gen(schema);
+        Ok(())
+    }
+
     /// 更新用户词权重（不存在返回 false，不创建）
     pub fn update_user_word_weight(
         &self,

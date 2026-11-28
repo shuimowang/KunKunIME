@@ -994,12 +994,11 @@ impl Coordinator {
         {
             return None;
         }
-        let buffer = format!("{}{}", state.mix_buffer, at);
         let origin = RewindOrigin::Mix {
             idx: state.mix_id,
             prefix: state.mix_prefix.clone(),
         };
-        Some(self.enter_email_mode(state, buffer, origin))
+        Some(self.enter_email_mode(state, origin))
     }
 
     /// 缓冲是否像邮箱用户名：非空，首字符是 ASCII 字母或数字，其余只含字母、数字与 `._-`。
@@ -4056,11 +4055,9 @@ mod exit_clears_rewind_tests {
         ];
         let mut st = c.state.lock().unwrap();
         for (name, exit) in exits {
-            st.rewind = Some(crate::pipeline::Rewind {
-                snapshot: "z".into(),
-                host_text: "l".into(),
-                origin: crate::pipeline::RewindOrigin::Normal,
-            });
+            st.rewind = Some(crate::pipeline::Rewind::at_ends(
+                "z".into(), "l".into(), crate::pipeline::RewindOrigin::Normal,
+            ));
             exit(&c, &mut st);
             assert!(st.rewind.is_none(), "{name} 退出后夺取回退登记不得残留");
         }

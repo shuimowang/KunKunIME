@@ -1135,7 +1135,7 @@ impl UserData {
         target: Target,
         schema: &str,
     ) -> anyhow::Result<()> {
-        self.fold_text_with_deletes_locked(b, target, schema, &BTreeSet::new())?;
+        self.fold_text_changes_locked(b, target, schema, &BTreeSet::new(), None)?;
         Ok(())
     }
 
@@ -1158,7 +1158,7 @@ impl UserData {
         if let Some(b) = self.text_binding(target, schema) {
             let _f = self.fold_lock.lock().unwrap_or_else(|e| e.into_inner());
             self.check_not_held(&b, target, schema)?;
-            return self.fold_text_with_deletes_locked(&b, target, schema, &selected);
+            return self.fold_text_changes_locked(&b, target, schema, &selected, None);
         }
         let mut removed = 0;
         self.fold_with(target, schema, &mut |mut entries| {
@@ -1170,12 +1170,36 @@ impl UserData {
         Ok(removed)
     }
 
-    fn fold_text_with_deletes_locked(
+    /// Edit against the same pending operations and file fingerprint as a bulk deletion.
+    pub fn edit_user_word(
+        &self,
+        schema: &str,
+        edit: &crate::text::patch::WordEdit<'_>,
+    ) -> anyhow::Result<()> {
+        check_schema_id(schema)?;
+        anyhow::ensure!(!self.readonly(), "只读模式");
+        let binding = self
+            .text_binding(Target::User, schema)
+            .ok_or_else(|| anyhow::anyhow!("用户词库未绑定"))?;
+        let _guard = self.fold_lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.check_not_held(&binding, Target::User, schema)?;
+        self.fold_text_changes_locked(
+            &binding,
+            Target::User,
+            schema,
+            &BTreeSet::new(),
+            Some(edit),
+        )?;
+        Ok(())
+    }
+
+    fn fold_text_changes_locked(
         &self,
         b: &TextBinding,
         target: Target,
         schema: &str,
         selected: &BTreeSet<(&str, &str)>,
+        edit: Option<&crate::text::patch::WordEdit<'_>>,
     ) -> anyhow::Result<usize> {
         use crate::text::PatchOp;
         if let TextFormat::Table(spec) = b.format {
@@ -1188,7 +1212,7 @@ impl UserData {
             .into_iter()
             .filter(|e| e.seq <= upto)
             .collect();
-        if pending.is_empty() && selected.is_empty() {
+        if pending.is_empty() && selected.is_empty() && edit.is_none() {
             return Ok(0);
         }
         let mut ops: Vec<PatchOp> = pending
@@ -1241,7 +1265,7 @@ impl UserData {
                 text: e.text,
             }));
         }
-        if ops.is_empty() && self.text_fp(target, schema).as_deref() == Some(fp_before.as_str()) {
+        if edit.is_none() && ops.is_empty() && self.text_fp(target, schema).as_deref() == Some(fp_before.as_str()) {
             // 只有计数 / 时间、文件也没被手改：段不变，只摘 delta、推进水位
             {
                 let _g = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -1260,8 +1284,8 @@ impl UserData {
             return Ok(0);
         }
         let (bytes, mtime) = cur.unwrap_or((Vec::new(), 0));
-        let changed = !ops.is_empty();
-        let new_bytes = if ops.is_empty() {
+        let mut changed = !ops.is_empty();
+        let mut new_bytes = if ops.is_empty() {
             bytes
         } else {
             let out = crate::text::patch(
@@ -1280,6 +1304,11 @@ impl UserData {
             })?;
             out
         };
+        if let Some(edit) = edit {
+            let edited = edit.apply(&new_bytes, &b.path, b.lowercase)?;
+            changed |= edited != new_bytes;
+            new_bytes = edited;
+        }
         // 先确认补丁输出可读，再复核指纹并提交；由新文本重建段。
         let entries = if new_bytes.is_empty() {
             Vec::new()

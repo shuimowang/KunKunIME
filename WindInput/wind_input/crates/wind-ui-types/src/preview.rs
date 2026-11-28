@@ -7,7 +7,7 @@ use crate::{CandidateItem, ToolbarItem, ToolbarState};
 
 /// 预览渲染器版本：示例内容、排版或绘制（wind-scene / wind-ui 的候选窗管线）有改动、会让同一份
 /// 输入画出不同像素时递增。它进预览缓存键，旧图随之失效。
-pub const CANDIDATE_PREVIEW_RENDER_VERSION: u32 = 2;
+pub const CANDIDATE_PREVIEW_RENDER_VERSION: u32 = 3;
 
 /// 示例编码：拼音带音节分隔符 `'`，显示时按 `ui.candidate.syllable_separator` 换（见
 /// [`preview_preedit`]）。
@@ -24,7 +24,7 @@ pub fn preview_preedit(sep: &str) -> String {
 pub const PREVIEW_CANDIDATES: [(&str, &str); 10] = [
     ("你好", ""),
     ("拟好", ""),
-    ("你", "wqiy"),
+    ("你", "nǐ"),
     ("尼", ""),
     ("泥", ""),
     ("妮", ""),
@@ -345,7 +345,7 @@ mod tests {
         assert_eq!(all.len(), 10);
         let labels: Vec<_> = all.iter().map(|c| c.label.as_str()).collect();
         assert_eq!(labels, ["a", "2", "3", "4", "5", "6", "7", "8", "9", "0"]);
-        assert_eq!(all[2].comment.as_str(), "wqiy");
+        assert_eq!(all[2].comment.as_str(), "nǐ");
         assert_eq!(preview_preedit("'"), "ni'hao");
         assert_eq!(preview_preedit(" "), "ni hao");
         assert_eq!(preview_preedit(""), "nihao");

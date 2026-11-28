@@ -54,14 +54,15 @@ impl Coordinator {
         let shift = data.modifiers & MOD_SHIFT != 0;
         let ch = printable_char(data.key_code, shift)?;
         // 网址：前缀表按惯例小写，故探针把字母归一到小写再比。
-        if url_on {
+        let appending = state.input_cursor_pos == state.input_buffer.len() && state.committed_text.is_empty();
+        if url_on && appending {
             let probe = format!("{}{}", state.input_buffer, ch.to_ascii_lowercase());
             if self.is_url_prefix(&probe) {
                 return Some(self.enter_url_mode(state, probe));
             }
         }
         // Unicode：**字面**比较，不归一大小写（理由见 `UnicodeConfig::prefixes`）。
-        if unicode_on {
+        if unicode_on && appending {
             let probe = format!("{}{}", state.input_buffer, ch);
             if self.is_unicode_prefix(&probe) {
                 return Some(self.enter_unicode_mode(state, probe, RewindOrigin::Normal));
@@ -84,17 +85,12 @@ impl Coordinator {
         // `ma@qq.com`，随后再打一个字母，`update_candidates` 又把「你好」拼回 preedit，
         // 用户看到的是乱序的两截。
         //
-        // ⚠️ url / unicode 结构上有同一个洞，但它们要求「缓冲恰好等于前缀去掉末键」
-        // （`www` + `.`、`u` + `+`），触发面窄得多；本模式是「任意非空缓冲 + `@`」，
-        // 不挡就会从潜在变成常见。那两个的既有洞另案处理，不在本闸门里一并改——
-        // 那会动到既有行为。
         if email_on
             && ch == crate::handle_email::EMAIL_AT
             && !state.input_buffer.is_empty()
             && state.committed_text.is_empty()
         {
-            let buffer = format!("{}{}", state.input_buffer, crate::handle_email::EMAIL_AT);
-            return Some(self.enter_email_mode(state, buffer, RewindOrigin::Normal));
+            return Some(self.enter_email_mode(state, RewindOrigin::Normal));
         }
         None
     }
@@ -115,18 +111,14 @@ impl Coordinator {
     /// 同时登记夺取回退：snapshot=夺取前的正常输入（=前缀去掉补全键），host_text=完整前缀。
     pub(crate) fn enter_url_mode(&self, state: &mut State, buffer: String) -> KeyAction {
         // 夺取前的正常 input_buffer 即回退快照（前缀的最后一字符是刚补全的那一键）。
-        let snapshot = state.input_buffer.clone();
+        let snapshot = preedit_cursor::cased_or_buffer(&state.input_buffer, &state.input_buffer_cased).to_owned();
         state.input_buffer.clear();
         state.candidates.clear();
         state.active = Some(ModeKind::Url);
         state.url_buffer = buffer.clone();
         state.url_cursor = state.url_buffer.len(); // 夺取进入时缓冲已有内容，光标落末尾
         state.preedit = buffer.clone();
-        state.rewind = Some(Rewind {
-            snapshot,
-            host_text: buffer,
-            origin: RewindOrigin::Normal, // 前缀夺取抢的是正常码表输入流
-        });
+        state.rewind = Some(Rewind::at_ends(snapshot, buffer, RewindOrigin::Normal));
         // 历史补全候选（`input.url.history_enabled` 关着时恒空）。候选窗照常显示——
         // 空候选时它给的是「正在输入网址」的模式徽标提示。
         self.update_url_candidates(state);
@@ -160,18 +152,17 @@ impl Coordinator {
     }
 
     /// 当前夺取式模式的 buffer（用于回退边界判定）。非夺取式模式返回 None。
-    pub(crate) fn active_hijack_buffer<'a>(&self, state: &'a State) -> Option<&'a str> {
+    fn active_hijack_buffer<'a>(&self, state: &'a State) -> Option<(&'a str, usize)> {
         match state.active {
-            Some(ModeKind::Url) => Some(&state.url_buffer),
-            Some(ModeKind::Email) => Some(&state.email_buffer),
-            Some(ModeKind::Unicode) => Some(&state.unicode_buffer),
+            Some(ModeKind::Url) => Some((&state.url_buffer, state.url_cursor)),
+            Some(ModeKind::Email) => Some((&state.email_buffer, state.email_cursor)),
+            Some(ModeKind::Unicode) => Some((&state.unicode_buffer, state.unicode_cursor)),
             // z 夺取：仅 try_z_fallback 会同时武装 state.rewind，故 can_rewind 只对夺取式进入
             // 成立（符号/字母首键进入的这些模式 rewind=None，不会误回退）。
-            Some(ModeKind::TempPinyin) => Some(&state.temp_pinyin_buffer),
-            Some(ModeKind::TempEnglish) => Some(&state.temp_english_buffer),
-            Some(ModeKind::Mix(_)) => Some(&state.mix_buffer),
-            Some(ModeKind::RareChar) => Some(&state.special_buffer),
-            Some(ModeKind::Reverse) => Some(&state.special_buffer),
+            Some(ModeKind::TempPinyin) => Some((&state.temp_pinyin_buffer, state.temp_pinyin_cursor)),
+            Some(ModeKind::TempEnglish) => Some((&state.temp_english_buffer, state.temp_english_cursor)),
+            Some(ModeKind::Mix(_)) => Some((&state.mix_buffer, state.mix_cursor)),
+            Some(ModeKind::RareChar | ModeKind::Reverse) => Some((&state.special_buffer, state.special_cursor)),
             None | Some(ModeKind::Special(_) | ModeKind::AuxCode) => None,
         }
     }
@@ -186,17 +177,18 @@ impl Coordinator {
     /// 缓冲回到边界）那一帧正是夺取边界本身，回退仍应可用，清掉登记就回不去了。
     pub(crate) fn can_rewind(&self, state: &State) -> bool {
         match (&state.rewind, self.active_hijack_buffer(state)) {
-            (Some(rw), Some(buf)) => buf == rw.host_text && state.committed_text.is_empty(),
+            (Some(rw), Some((buf, cursor))) => cursor == rw.host_cursor
+                && buf == rw.host_text && state.committed_text.is_empty(),
             _ => false,
         }
     }
 
     /// 执行夺取回退：撤销夺取，把快照回放到正常码表输入流并重算候选。
     pub(crate) fn rewind_hijack(&self, state: &mut State) -> KeyAction {
-        let (snapshot, origin) = state
+        let (snapshot, cursor, origin) = state
             .rewind
             .take()
-            .map(|r| (r.snapshot, r.origin))
+            .map(|r| (r.snapshot, r.source_cursor, r.origin))
             .unwrap_or_default();
         // 退出当前夺取式模式：URL / z-fallback 的临拼、临英、mix、生僻字。
         // ⚠️ 必须与 `active_hijack_buffer` 枚举的模式**一一对应**：那边认得、这边漏了，
@@ -218,8 +210,9 @@ impl Coordinator {
         // 回放目标由**来源**决定，不是恒定的 `input_buffer`（见 `RewindOrigin`）。
         match origin {
             RewindOrigin::Normal => {
-                state.input_buffer = snapshot;
-                state.input_cursor_pos = state.input_buffer.len(); // 光标落到恢复码末尾
+                state.input_buffer = snapshot.to_ascii_lowercase();
+                state.input_buffer_cased = snapshot;
+                state.input_cursor_pos = cursor;
                 self.update_candidates(state);
                 self.notify_ui_update(state);
                 let display = state.preedit.clone();
@@ -229,7 +222,7 @@ impl Coordinator {
                 );
                 KeyAction::UpdateComposition {
                     text: display,
-                    caret_pos: state.input_buffer.chars().count() as u32,
+                    caret_pos: self.composition_caret(state),
                 }
             }
             RewindOrigin::TempEnglish => {
@@ -238,7 +231,7 @@ impl Coordinator {
                 // Shift+字母进入的临英本就没有前缀字符（触发键进入的才有）。
                 state.active = Some(ModeKind::TempEnglish);
                 state.temp_english_buffer = snapshot;
-                state.temp_english_cursor = state.temp_english_buffer.len();
+                state.temp_english_cursor = cursor;
                 state.temp_english_prefix = String::new();
                 self.update_temp_english_candidates(state);
                 self.notify_ui_update(state);
@@ -248,8 +241,8 @@ impl Coordinator {
                     state.temp_english_buffer
                 );
                 KeyAction::UpdateComposition {
-                    text: display.clone(),
-                    caret_pos: display.chars().count() as u32,
+                    text: display,
+                    caret_pos: self.overlay_caret(state),
                 }
             }
             RewindOrigin::Mix { idx, prefix } => {
@@ -262,7 +255,7 @@ impl Coordinator {
                 state.active = Some(ModeKind::Mix(idx));
                 state.mix_id = idx;
                 state.mix_buffer = snapshot;
-                state.mix_cursor = state.mix_buffer.len();
+                state.mix_cursor = cursor;
                 state.mix_prefix = prefix;
                 self.update_mix_candidates(state);
                 let caret_pos = self.overlay_caret(state);

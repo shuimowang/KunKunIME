@@ -17,6 +17,7 @@ kind = "smart"
 mode = "continuous"
 select_keys_commit = false
 select_keys_as_punctuation = true
+backspace_cancels_only = false
 
 [keys]
 select_key_groups = []

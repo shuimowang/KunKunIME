@@ -69,7 +69,7 @@ pub(super) fn list<H: WebDataRpc + ?Sized>(h: &H, params: &Value) -> anyhow::Res
 /// `userDicts.entries {schemaId, name, offset, limit, query?, sortBy?, sortOrder?}` →
 /// `{items: [{code, text, weight, enabled}], total}`（同 `dict.listPaged`）。
 pub(super) fn entries<H: WebDataRpc + ?Sized>(h: &H, params: &Value) -> anyhow::Result<Value> {
-    let (_, ds, store) = target(h, params)?;
+    let (schema, ds, store) = target(h, params)?;
     let name = str_param(params, "name")?;
     let all = store.user_dict_entries(&ds, name)?;
     let query = params
@@ -84,14 +84,25 @@ pub(super) fn entries<H: WebDataRpc + ?Sized>(h: &H, params: &Value) -> anyhow::
         all
     } else {
         let (code_q, _) = wind_store::wdict::split_spaced_code(query);
-        let code_q = code_q.to_lowercase();
+        let pinyin = wind_coordinator::user_words_api::target_is_pinyin(h, schema);
+        let normalize = |s: String| {
+            if pinyin {
+                wind_engine::pinyin::spelling::normalize_u_umlaut(&s).into_owned()
+            } else {
+                s
+            }
+        };
+        let code_q = normalize(code_q.to_lowercase());
         let q = query.to_lowercase();
-        let (mut head, tail): (Vec<_>, Vec<_>) = all
-            .into_iter()
-            .filter(|e| {
-                e.code.to_lowercase().contains(&code_q) || e.text.to_lowercase().contains(&q)
-            })
-            .partition(|e| e.code.to_lowercase().starts_with(&code_q));
+        let (mut head, mut tail) = (Vec::new(), Vec::new());
+        for e in all {
+            let code = normalize(e.code.to_lowercase());
+            if code.starts_with(&code_q) {
+                head.push(e);
+            } else if code.contains(&code_q) || e.text.to_lowercase().contains(&q) {
+                tail.push(e);
+            }
+        }
         head.extend(tail);
         head
     };
@@ -173,6 +184,35 @@ pub(super) fn add_entry<H: WebDataRpc + ?Sized>(h: &H, params: &Value) -> anyhow
         changed(h, &ds);
     }
     Ok(json!({ "ok": true }))
+}
+
+/// The settings table edits one logical key. Existing add/update RPCs retain their upsert semantics.
+pub(super) fn edit_entry<H: WebDataRpc + ?Sized>(h: &H, params: &Value) -> anyhow::Result<Value> {
+    let (schema, ds, store) = writable(h, params)?;
+    let orig_code = str_param(params, "oldCode")?;
+    let orig_text = store_text(str_param(params, "oldText")?);
+    let input = str_param(params, "code")?;
+    let text = store_text(str_param(params, "text")?);
+    let weight = params["weight"]
+        .as_i64()
+        .and_then(|w| i32::try_from(w).ok())
+        .ok_or_else(|| anyhow::anyhow!("权重须为整数"))?;
+    let (code, boundary) =
+        wind_coordinator::user_words_api::normalize_add_code(h, schema, input, &text);
+    let edit = wind_store::WordEdit {
+        old: (orig_code, &orig_text),
+        new: (&code, &text),
+        boundary,
+        weight,
+    };
+    if params.get("name").is_some() {
+        store.edit_user_dict_entry(&ds, str_param(params, "name")?, &edit)?;
+        changed(h, &ds);
+    } else {
+        store.edit_user_word(&ds, &edit)?;
+        wind_coordinator::user_words_api::clear_deleted_for_added(h, &ds, &[(&code, &text)]);
+    }
+    Ok(json!({"ok":true}))
 }
 
 /// `userDicts.clear {schemaId, name}` → `{ok, removed}`：删光词条，保留文件头。
@@ -560,6 +600,74 @@ mod tests {
         f.rpc("userDicts.create", target.clone()).unwrap();
         assert!(f.rpc("userDicts.appendImport", p).is_err());
         assert_eq!(f.rpc("userDicts.entries", target).unwrap()["total"], 0);
+    }
+
+    #[test]
+    fn edit_keeps_equivalent_spelling_and_rejects_collisions_in_both_libraries() {
+        let f = fx("edit-spelling");
+        for lib in [None, Some("人物")] {
+            let mut scope = json!({"schemaId": f.py});
+            let (add, list) = if let Some(name) = lib {
+                scope["name"] = json!(name);
+                f.rpc("userDicts.create", scope.clone()).unwrap();
+                ("userDicts.addEntry", "userDicts.entries")
+            } else {
+                ("dict.add", "dict.listPaged")
+            };
+            let word = |text: &str, weight: i32| {
+                let mut p = scope.clone();
+                p["code"] = json!("xue yao");
+                p["text"] = json!(text);
+                p["weight"] = json!(weight);
+                p
+            };
+            f.rpc(add, word("薛瑶", 88)).unwrap();
+            f.rpc(add, word("雪遥", 61)).unwrap();
+            let mut query = scope.clone();
+            query["query"] = json!(if lib.is_some() { "xve" } else { "xue" });
+            assert_eq!(f.rpc(list, query).unwrap()["total"], 2, "{list}");
+            let mut p = word("薛瑶", 12);
+            p["oldCode"] = json!("xue yao");
+            p["oldText"] = json!("薛瑶");
+            p["code"] = json!(if lib.is_some() { "xveyao" } else { "xueyao" });
+            f.rpc("dict.editEntry", p.clone()).unwrap();
+            let rows = || {
+                f.rpc(list, scope.clone()).unwrap()["items"]
+                    .as_array()
+                    .unwrap()
+                    .clone()
+            };
+            assert_eq!(rows().len(), 2);
+            assert!(
+                rows()
+                    .iter()
+                    .any(|r| r["text"] == "薛瑶" && r["code"] == "xue yao" && r["weight"] == 12)
+            );
+            p["text"] = json!("雪遥");
+            assert!(
+                f.rpc("dict.editEntry", p.clone())
+                    .unwrap_err()
+                    .to_string()
+                    .contains("已有")
+            );
+            assert!(
+                rows()
+                    .iter()
+                    .any(|r| r["text"] == "雪遥" && r["weight"] == 61)
+            );
+            p["text"] = json!("雪瑶");
+            f.rpc("dict.editEntry", p.clone()).unwrap();
+            assert!(
+                f.rpc("dict.editEntry", p).is_err(),
+                "the original row is gone"
+            );
+            assert_eq!(rows().len(), 2);
+            assert!(
+                rows()
+                    .iter()
+                    .any(|r| r["text"] == "雪瑶" && r["weight"] == 12)
+            );
+        }
     }
 
     #[test]

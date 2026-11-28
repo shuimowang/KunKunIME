@@ -97,7 +97,26 @@ fn pinyin_english_and_literal_typing() {
     let config = Config::load(Some(&data)).unwrap();
     assert_eq!(config.schema.active, "pinyin");
     assert_eq!(config.schema.available, ["pinyin", "shuangpin", "english"]);
+    assert!(!config.input.association.backspace_cancels_only);
+    let user_config = fixture.join("userdata/config.toml");
+    std::fs::create_dir_all(user_config.parent().unwrap()).unwrap();
+    std::fs::write(&user_config, "[input.association]\nbackspace_cancels_only = true\n").unwrap();
+    assert!(Config::load(Some(&data)).unwrap().input.association.backspace_cancels_only);
+    std::fs::remove_file(user_config).unwrap();
+    let mut url_config = config.clone();
+    url_config.input.url.enabled = true;
     let c = Coordinator::new_headless(config, Some(&data));
+    c.debug_assoc_suggest("今天");
+    assert!(c.debug_wait_assoc_bigram(std::time::Duration::from_secs(10)));
+    select(&c, "jintian", "今天", "今天");
+    assert!(!c.debug_all_candidate_texts().is_empty(), "预计出现下一词联想");
+    assert!(matches!(tap(&c, wind_keys::keymap::VK_BACK), KeyAction::ClearCompositionThenPassThrough));
+    for letter in b"ha" {
+        tap(&c, u32::from(letter.to_ascii_uppercase()));
+    }
+    assert!(matches!(tap(&c, wind_keys::keymap::VK_BACK), KeyAction::UpdateComposition { .. }));
+    assert_eq!(c.debug_input_buffer(), "h");
+    tap(&c, wind_keys::keymap::VK_ESCAPE);
     for (spelling, expected) in [("", "；"), ("ni", "你；")] {
         for ch in spelling.bytes() {
             tap(&c, u32::from(ch.to_ascii_uppercase()));
@@ -148,4 +167,19 @@ fn pinyin_english_and_literal_typing() {
     select(&c, "keyboar", "keyboard", "keyboard ");
     select(&c, "hello", "hello", "hello ");
     select(&c, "templa", "template", "template ");
+
+    // A partial conversion belongs to the host composition until the whole text commits.
+    // A URL prefix in its unconverted remainder must not take ownership of just that tail.
+    drop(c);
+    let c = Coordinator::new_headless(url_config, Some(&data));
+    for ch in b"nihaowww" {
+        tap(&c, u32::from(ch.to_ascii_uppercase()));
+    }
+    let page = c.debug_all_candidate_texts();
+    let idx = page.iter().take(7).position(|w| w == "你好").unwrap();
+    assert!(matches!(tap(&c, u32::from(b'1') + idx as u32),
+        KeyAction::UpdateComposition { text, .. } if text.starts_with("你好")));
+    assert!(matches!(tap(&c, wind_keys::keymap::VK_PERIOD),
+        KeyAction::InsertText { text, .. } | KeyAction::CommitThenDeferComposition {commit_text: text, ..}
+        if text.starts_with("你好") && text.ends_with("。")));
 }

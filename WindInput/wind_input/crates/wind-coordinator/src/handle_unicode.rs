@@ -92,7 +92,7 @@ impl Coordinator {
     ) -> KeyAction {
         let snapshot = match origin {
             // 夺取前的正常输入（前缀的最后一字符是刚补全的那一键，故快照即当前 input_buffer）。
-            RewindOrigin::Normal => state.input_buffer.clone(),
+            RewindOrigin::Normal => preedit_cursor::cased_or_buffer(&state.input_buffer, &state.input_buffer_cased).to_owned(),
             // 临英转交：快照是临英缓冲里已有的那部分（`U`），`+` 尚未进任何缓冲。
             RewindOrigin::TempEnglish => state.temp_english_buffer.clone(),
             // 快捷输入目前不转交 Unicode 模式；为穷尽匹配给出同源的快照。
@@ -110,11 +110,7 @@ impl Coordinator {
             "Entered Unicode mode (buffer={}, origin={:?})",
             buffer, origin
         );
-        state.rewind = Some(Rewind {
-            snapshot,
-            host_text: buffer,
-            origin,
-        });
+        state.rewind = Some(Rewind::at_ends(snapshot, buffer, origin));
         self.update_unicode_candidates(state);
         let disp = state.preedit.clone();
         self.notify_ui_update(state);

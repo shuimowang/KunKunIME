@@ -8929,11 +8929,9 @@ mod mouse_command_overlay_tests {
             st.active = Some(ModeKind::RareChar);
             st.special_buffer = "gg".into();
             st.special_prefix = "z".into();
-            st.rewind = Some(crate::pipeline::Rewind {
-                snapshot: "z".into(),
-                host_text: "g".into(),
-                origin: crate::pipeline::RewindOrigin::Normal,
-            });
+            st.rewind = Some(crate::pipeline::Rewind::at_ends(
+                "z".into(), "g".into(), crate::pipeline::RewindOrigin::Normal,
+            ));
             st.candidates = vec![Candidate {
                 text: "玨".into(),
                 ..Default::default()
@@ -9175,12 +9173,9 @@ mod expand_stop_tests {
     /// 生僻取 U+4E00 起**不在名单里**的字（该类 `outside: rare`：汉字域内名单外即生僻）。
     fn common_and_rare(dir: &Path, n: usize) -> (Vec<char>, Vec<char>) {
         let yaml = std::fs::read_to_string(dir.join("charsets/common_han.yaml")).unwrap();
-        let body = yaml
-            .split("\n...\n")
-            .nth(1)
-            .expect("common_han.yaml 缺文档体");
+        let mut body = yaml.lines();
+        assert!(body.any(|line| line == "..."), "common_han.yaml 缺文档体");
         let listed: Vec<char> = body
-            .lines()
             .map(str::trim)
             .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('-'))
             .filter_map(|l| {

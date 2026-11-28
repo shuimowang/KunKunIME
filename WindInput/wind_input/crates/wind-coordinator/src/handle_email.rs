@@ -53,15 +53,20 @@ impl Coordinator {
     pub(crate) fn enter_email_mode(
         &self,
         state: &mut State,
-        buffer: String,
         origin: RewindOrigin,
     ) -> KeyAction {
-        // 夺取前的缓冲即回退快照（`@` 是刚按下的那一键，不在快照里）。
-        let snapshot = match origin {
-            RewindOrigin::Normal => state.input_buffer.clone(),
-            RewindOrigin::TempEnglish => state.temp_english_buffer.clone(),
-            RewindOrigin::Mix { .. } => state.mix_buffer.clone(),
+        let (text, cursor) = match &origin {
+            RewindOrigin::Normal => (
+                preedit_cursor::cased_or_buffer(&state.input_buffer, &state.input_buffer_cased),
+                state.input_cursor_pos,
+            ),
+            RewindOrigin::TempEnglish => (state.temp_english_buffer.as_str(), state.temp_english_cursor),
+            RewindOrigin::Mix { .. } => (state.mix_buffer.as_str(), state.mix_cursor),
         };
+        let snapshot = text.to_owned();
+        let mut buffer = snapshot.clone();
+        let mut host_cursor = cursor;
+        preedit_cursor::BufEdit::new(&mut buffer, &mut host_cursor).insert(EMAIL_AT);
         state.input_buffer.clear();
         state.temp_english_buffer.clear();
         state.temp_english_prefix.clear();
@@ -78,20 +83,21 @@ impl Coordinator {
         state.candidates.clear();
         state.active = Some(ModeKind::Email);
         state.email_buffer = buffer.clone();
-        state.email_cursor = state.email_buffer.len(); // 夺取进入时缓冲已有内容，光标落末尾
+        state.email_cursor = host_cursor;
         state.preedit = buffer.clone();
         state.rewind = Some(Rewind {
             snapshot,
             host_text: buffer,
+            source_cursor: host_cursor - EMAIL_AT.len_utf8(),
+            host_cursor,
             origin,
         });
         self.update_email_candidates(state);
         self.notify_ui_update(state);
-        let disp = state.email_buffer.clone();
-        debug!("Entered email mode (len={})", disp.chars().count());
+        debug!("Entered email mode (len={})", state.email_buffer.chars().count());
         KeyAction::UpdateComposition {
-            text: disp.clone(),
-            caret_pos: disp.chars().count() as u32,
+            text: state.email_buffer.clone(),
+            caret_pos: self.overlay_caret(state),
         }
     }
 

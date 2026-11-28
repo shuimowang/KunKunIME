@@ -472,6 +472,7 @@ fn web_data_dispatch<H: WebDataRpc + ?Sized>(
         "dict.search" => h.web_dict_search(params),
         "dict.add" => h.web_dict_add(params),
         "dict.update" => h.web_dict_update(params),
+        "dict.editEntry" => user_dicts::edit_entry(h, params),
         "dict.remove" => h.web_dict_remove(params),
         "dict.removeSelected" => batch_remove::remove_selected(h, params),
         // 批量写（逐条 remove，动的页与导入同量级）：见 `BULK_WRITE_METHODS`。

@@ -556,12 +556,6 @@ fn input_page(state: &AppState, nav: &SubNav) -> Element {
 
 /// 「列表显示」下拉：把两个显示过滤收进一个菜单，不再各占一格。
 ///
-/// windui 的 dropdown 是**单选**语义（`selected: Signal<usize>`），没有复选菜单。这里用
-/// 首项当标题哨兵：收起态恒显示 `options[selected]`，故 selected 必须停在第 0 项，
-/// 标题才不会变成上次点的那一项。选中 1/2 项 → effect 翻转对应开关并把 selected 拨回 0；
-/// 拨回这一步本身会再触发一次 effect，靠「== 0 时不做事」收敛。
-///
-/// 开关态用 badge 显示（开/关），比在 label 前缀加 ✓ 更容易一眼扫到。
 fn build_list_view_menu(
     app: &Rc<RefCell<AppState>>,
     mgr: &crate::dialogs::schema_manager::SchemaManagerState,
@@ -594,61 +588,53 @@ pub(crate) const SCHEME_ENGINE_CARDS: [(&str, &str, bool); 5] = [
     ("英文", "英文行为", false),
 ];
 
-fn scheme_page(app: &Rc<RefCell<AppState>>, state: &AppState, nav: &SubNav) -> Element {
-    let mgr = &state.schema_mgr;
+/// 低频文件操作和排序放在菜单里，仍按当前选择决定哪些操作可执行。
+fn schema_more_actions(mgr: &crate::dialogs::schema_manager::SchemaManagerState) -> Vec<MenuItem> {
+    let import = mgr.clone();
+    let refresh = mgr.clone();
+    let mut items = vec![
+        MenuItem::run("导入方案包…", move |ctx| import.do_import_package(ctx), false),
+        MenuItem::run("刷新列表", move |_| refresh.refresh(), false),
+    ];
+    if mgr.selected_entry().is_some() {
+        let export = mgr.clone();
+        items.push(MenuItem::run(
+            "导出选中方案…", move |ctx| export.do_export_selected(ctx), false,
+        ));
+        if let Some((index, total)) = mgr.selected_enabled_pos().filter(|(_, count)| *count > 1) {
+            let up = mgr.clone();
+            let down = mgr.clone();
+            items.push(MenuItem::separator());
+            items.push(MenuItem::run("上移", move |_| up.move_selected(true), false).enabled(index > 0));
+            items.push(MenuItem::run("下移", move |_| down.move_selected(false), false).enabled(index + 1 < total));
+        }
+        if mgr.selected_is_user() {
+            let delete = mgr.clone();
+            items.push(MenuItem::separator());
+            items.push(MenuItem::run("删除选中方案…", move |_| delete.request_delete_selected(), false).danger());
+        }
+    }
+    items
+}
 
-    // 工具栏**拆成两行**：上行是作用于选中项与全局的操作按钮，下行是列表显示过滤。
-    //
-    // 曾经一行装下：左边两个复选框、右边七个按钮 + 一个分隔条。加了「显示特殊方案」后
-    // 总宽超出容器，按钮被挤出可视区。这不是第一次——中间原有的「共 N 个已安装方案」
-    // 状态文字也是因为 weight(1.0) 吃掉弹性空间、把按钮挤没了才被删掉的。
-    // 一行里塞十个控件本就没有余量，改成分行比继续在里面腾挪稳。
-    //
-    // 过滤行放在按钮行**下方、紧贴列表**：它描述的是「下面这个列表显示什么」，
-    // 与列表相邻比与操作按钮相邻更说得通。
-    // padding_xy(0,4) 给按钮 outline 边框与下方 divider 留出间距。
-    let st_refresh = mgr.clone();
-    let (m_up, e_up) = (mgr.clone(), mgr.clone());
-    let (m_dn, e_dn) = (mgr.clone(), mgr.clone());
+fn schema_toolbar(
+    app: &Rc<RefCell<AppState>>,
+    mgr: &crate::dialogs::schema_manager::SchemaManagerState,
+) -> Element {
     let (m_act, e_act) = (mgr.clone(), mgr.clone());
     let (m_set, e_set) = (mgr.clone(), mgr.clone());
-    let (m_del, e_del) = (mgr.clone(), mgr.clone());
-    let (m_exp, e_exp) = (mgr.clone(), mgr.clone());
-    let m_imp = mgr.clone();
-    let toolbar = Element::row()
+    let more = mgr.clone();
+    Element::flow()
         .width_match()
-        .cross(Align::Center)
         .padding_xy(0, 4)
-        .spacing(8)
+        .spacing(6)
+        .run_spacing(4)
         .child(build_list_view_menu(app, mgr))
-        .child(Element::leaf().weight(1.0))
         .child(
-            Element::button("↑")
-                .small()
-                .outline_soft()
-                .enabled_when(move || {
-                    e_up.sel_ver.get();
-                    e_up.selected_enabled_pos().is_some_and(|(i, _)| i > 0)
-                })
-                .on_click(move |_| m_up.move_selected(true)),
-        )
-        .child(
-            Element::button("↓")
-                .small()
-                .outline_soft()
-                .enabled_when(move || {
-                    e_dn.sel_ver.get();
-                    e_dn.selected_enabled_pos().is_some_and(|(i, t)| i + 1 < t)
-                })
-                .on_click(move |_| m_dn.move_selected(false)),
-        )
-        .child(
-            // 设为当前：即时生效 + 随保存持久化（见 SchemaManagerState::set_active）。
-            // enabled_when 同时读 sel_ver 与 active_ver——选中变了要重估，设完当前
-            // 自身要变灰，两个来源缺一不可。
             Element::button("设为当前")
                 .small()
                 .outline_soft()
+                .tooltip("选中一个已启用的方案，将它设为当前输入方案")
                 .enabled_when(move || {
                     e_act.sel_ver.get();
                     e_act.active_ver.get();
@@ -657,9 +643,10 @@ fn scheme_page(app: &Rc<RefCell<AppState>>, state: &AppState, nav: &SubNav) -> E
                 .on_click(move |_| m_act.set_active_selected()),
         )
         .child(
-            Element::button("设置")
+            Element::button("方案设置")
                 .small()
                 .outline_soft()
+                .tooltip("打开选中方案的设置")
                 .enabled_when(move || {
                     e_set.sel_ver.get();
                     e_set.selected_entry().is_some()
@@ -667,40 +654,17 @@ fn scheme_page(app: &Rc<RefCell<AppState>>, state: &AppState, nav: &SubNav) -> E
                 .on_click(move |_| m_set.open_settings_selected()),
         )
         .child(
-            Element::button("删除")
-                .small()
-                .outline()
-                .danger()
-                .enabled_when(move || {
-                    e_del.sel_ver.get();
-                    e_del.selected_is_user()
-                })
-                .on_click(move |_| m_del.request_delete_selected()),
-        )
-        .child(Element::leaf().width(1).height(18).bg_role(Role::Divider))
-        .child(
-            Element::button("刷新")
+            Element::button("更多操作")
                 .small()
                 .outline_soft()
-                .on_click(move |_| st_refresh.refresh()),
+                .on_click(move |ctx| ctx.show_dropdown_menu(ctx.bounds(), schema_more_actions(&more))),
         )
-        .child(
-            Element::button("导入")
-                .small()
-                .outline_soft()
-                .on_click(move |ctx| m_imp.do_import_package(ctx)),
-        )
-        .child(
-            Element::button("导出")
-                .small()
-                .outline_soft()
-                .enabled_when(move || {
-                    e_exp.sel_ver.get();
-                    e_exp.selected_entry().is_some()
-                })
-                .on_click(move |ctx| m_exp.do_export_selected(ctx)),
-        )
-        // 操作反馈 toast（0×0 不可见叶子，feedback 信号变化即弹单条 toast）。
+}
+
+fn scheme_page(app: &Rc<RefCell<AppState>>, state: &AppState, nav: &SubNav) -> Element {
+    let mgr = &state.schema_mgr;
+    let toolbar = Element::col().width_match()
+        .child(schema_toolbar(app, mgr))
         .child(dict::reactive::toast_sink(mgr.feedback));
 
     // 复合行列表（已启用在前 · 未启用在后 · 特殊方案独立分区）
@@ -1395,6 +1359,36 @@ mod about_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn schema_tools_fit_narrow_cards_and_keep_import_available() {
+        use std::{cell::RefCell, rc::Rc};
+        use windui::{core::Tree, event::{MouseButton, PointerEvent, PointerKind}, geometry::{Point, Size}};
+
+        let app = Rc::new(RefCell::new(crate::state::AppState::empty()));
+        let state = app.borrow();
+        for width in [330, 395, 640] {
+            let mut tree = Tree::new();
+            let toolbar = super::schema_toolbar(&app, &state.schema_mgr).width(width).build(&mut tree);
+            tree.root = Some(toolbar);
+            tree.layout_root(Size::new(width, 120), &mut windui::text::NullTextEngine);
+            let controls = &tree.get(toolbar).unwrap().children;
+            for &id in controls {
+                let rect = tree.abs_bounds(id);
+                assert!(rect.w > 0 && rect.x >= 0 && rect.x + rect.w <= width, "{rect:?}");
+            }
+            let rect = tree.abs_bounds(*controls.last().unwrap());
+            let point = Point::new(rect.x + rect.w / 2, rect.y + rect.h / 2);
+            let (mut hover, mut capture) = (None, None);
+            let mut click = |kind| tree.dispatch_pointer(
+                PointerEvent::single(kind, point, MouseButton::Left), &mut hover, &mut capture,
+            );
+            click(PointerKind::Down);
+            let menu = click(PointerKind::Up).menu.expect("scheme operations menu");
+            assert!(menu.items.iter().any(|item| item.label == "导入方案包…" && item.enabled));
+            assert!(menu.items.iter().any(|item| item.label == "刷新列表" && item.enabled));
+        }
+    }
+
     /// 守门：theme 组必须仍有一节叫「主题设置」（`theme_gallery::SETTINGS_SECTION`）。
     ///
     /// [`theme_page`] 拿 `sec == SETTINGS_SECTION` 这个**字符串**判据往那张卡里追加「导入 /

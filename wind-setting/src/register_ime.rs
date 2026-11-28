@@ -329,7 +329,9 @@ impl DefaultStatus {
                     .unwrap_or("其他输入法")
             ),
         };
-        if !(self.registered && self.enabled) {
+        if self.mode == DefaultMode::Kunkun && !self.registered {
+            s.push_str("。当前程序目录尚未注册；若安装过多份，可从已注册的目录打开。");
+        } else if !(self.registered && self.enabled) {
             s.push_str("。要使用困困输入法，请先点击左下角的「注册输入法」。");
         }
         s
@@ -354,6 +356,16 @@ fn query_default(exe: &Path, command: DefaultCommand) -> Result<DefaultStatus, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_default_ime_distinguishes_account_default_from_this_copy() {
+        let status = DefaultStatus {
+            registered: false, enabled: false, mode: DefaultMode::Kunkun,
+            name: None, input_tip: None,
+        };
+        assert!(status.summary().contains("当前程序目录尚未注册"));
+        assert!(!status.summary().contains("请先点击"));
+    }
 
     fn status(registered: bool, enabled: bool) -> Reply {
         Reply::Default(

@@ -696,46 +696,28 @@ pub fn summary_label(text: Signal<String>) -> Element {
         .max_lines(1)
 }
 
-/// 多选键组专用行：左侧弹性标签 + 右侧固定宽网格（靠右对齐）。
-///
-/// 网格固定 300px（两列各 ~145），不会撑宽；左侧 weight(1) 自由伸展，
-/// 窗口变宽时标签获得更多空间，与 hotkey 行的控件组视觉一致靠右。
+/// 多选键组在标签和说明下面展示，窄窗口也给文字和选项留出完整宽度。
 pub fn setting_row_checks(label: &str, sub: Option<&str>, grid: Element) -> Element {
-    // 字号/字重/间距与库版设置行同源（`FormTheme`），只是本行型自行拼装：库没有
-    // 「右侧固定宽网格」这一种，而它与普通行的差别（cross 对齐、控件定宽、允许两行）
-    // 都在骨架上，套不进 `setting_row_desc`。
     let th = windui::theme::current();
     let (f, m) = (&th.form, &th.metrics);
-    // 限行取 2 而非跟随 `form.*_max_lines`：键组行的标签常是「候选翻页键（上一页/下一页）」
-    // 这类长名，右侧又被 300px 网格占死，压成一行会把大半个名字吃掉；而本行型总共只有
-    // 三五行，不像清单页那样需要严格等高。
-    let mut left = Element::col().weight(1.0).spacing(2).child(
-        Element::label(label)
+    let mut row = Element::col()
+        .width_match()
+        .padding_xy(0, f.row_pad_y(m))
+        .spacing(4)
+        .child(Element::label(label)
             .font_size(f.label_size(m))
             .font_weight(f.label_weight())
             .fg_role(Role::Text)
+            .width_match());
+    if let Some(hint) = sub {
+        row = row.child(Element::label(hint)
+            .font_size(f.desc_size(m))
+            .fg_role(Role::TextSubtle)
             .width_match()
-            .max_lines(2)
-            .truncate(Truncate::End),
-    );
-    if let Some(s) = sub {
-        left = left.child(
-            Element::label(s)
-                .font_size(f.desc_size(m))
-                .fg_role(Role::TextSubtle)
-                .width_match()
-                .max_lines(2)
-                .truncate(Truncate::End)
-                .tooltip(s),
-        );
+            .max_lines(3)
+            .tooltip(hint));
     }
-    Element::row()
-        .width_match()
-        .cross(Align::Start)
-        .padding_xy(0, f.row_pad_y(m))
-        .spacing(f.gap(m))
-        .child(left)
-        .child(grid.width(300))
+    row.child(grid.width(300))
 }
 
 /// 卡片容器：圆角 surface + 边框，承载分区内的若干设置行（行间自动插分隔线）。

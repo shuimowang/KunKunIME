@@ -23,6 +23,15 @@ use std::collections::BTreeSet;
 
 use crate::manifest::{MItem, Manifest};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DictionaryTarget {
+    Current,
+    Category(&'static str, crate::pages::dict::spec::LogicalTab),
+    AddWord,
+    ImportMain,
+    System,
+}
+
 /// 跳转目标 —— 「点了这条结果，界面该发生什么」。
 ///
 /// `anchor` 是字符串键，与页面构建时挂上的锚点一一对应（P2 落地）。
@@ -44,7 +53,7 @@ pub enum JumpTarget {
     /// 方案级：跳到方案页，附指示条路径（「哪个方案」要用户自己选）。
     SchemaLevel { hint_path: Vec<String> },
     /// 切换到管理窗口的词库页，保留可返回的设置页。
-    Dictionary(Option<crate::pages::dict::spec::LogicalTab>),
+    Dictionary(DictionaryTarget),
 }
 
 impl JumpTarget {
@@ -407,7 +416,7 @@ struct Handwritten {
 #[rustfmt::skip]
 const HANDWRITTEN: &[Handwritten] = &[
     #[cfg(windows)]
-    Handwritten { id: "input:windows-default-ime", anchor: "input:windows-default-ime", page: "input", title: "Windows 登录默认输入法", section: "默认状态", keywords: "默认输入法 登录 开机 重启 微软拼音 恢复自动选择 设置为默认 设为默认输入法", feature: "" },
+    Handwritten { id: "input:windows-default-ime", anchor: "input:windows-default-ime", page: "input", title: "Windows 登录默认输入法", section: "默认状态", keywords: "默认输入法 登录 开机 重启 微软拼音 恢复自动选择 设置为默认 设为默认输入法 注册输入法 系统键盘", feature: "" },
     // ── 方案页：五条都落在「输入方案」卡上 ──
     Handwritten { id: "schema:list", anchor: "schema:list", page: "schema", title: "方案列表", section: "输入方案", keywords: "切换 启用 排序 拖动", feature: "" },
     Handwritten { id: "schema:shuangpin-layout", anchor: "schema:shuangpin-layout", page: "schema", title: "双拼布局", section: "双拼", keywords: "小鹤 自然码 搜狗 微软 智能abc 声母 韵母 键位 shuangpin", feature: "shuangpin_layout" },
@@ -416,12 +425,10 @@ const HANDWRITTEN: &[Handwritten] = &[
     Handwritten { id: "schema:export", anchor: "schema:list", page: "schema", title: "导出方案包", section: "输入方案", keywords: "wpkg 备份 分享", feature: "" },
     Handwritten { id: "schema:url-import", anchor: "schema:list", page: "schema", title: "从网址导入方案", section: "输入方案", keywords: "url 在线 下载", feature: "" },
     // ── 词库：直接进入词库页（见 JumpTarget::Dictionary）──
-    #[cfg(windows)]
-    Handwritten { id: "dict:register-ime", anchor: "dict:manage", page: "dict", title: "注册为 Windows 输入法", section: "词库管理", keywords: "系统键盘 Win+空格 切换输入法 启用开发版", feature: "" },
     Handwritten { id: "dict:manage", anchor: "dict:manage", page: "dict", title: "词库管理", section: "词库", keywords: "词条 编辑 删除 查找", feature: "" },
     Handwritten { id: "dict:add-word", anchor: "dict:manage", page: "dict", title: "添加词条", section: "词库", keywords: "造词 新增 自定义", feature: "" },
-    Handwritten { id: "dict:import", anchor: "dict:manage", page: "dict", title: "导入词库", section: "词库", keywords: "文本 合并 覆盖", feature: "" },
-    Handwritten { id: "dict:phrase-import", anchor: "dict:manage", page: "dict", title: "短语导入", section: "词库", keywords: "phrase 批量", feature: "" },
+    Handwritten { id: "dict:import", anchor: "dict:manage", page: "dict", title: "导入主词库", section: "词库", keywords: "导入词库 批量导入 名单 文本 合并", feature: "" },
+    Handwritten { id: "dict:phrase-import", anchor: "dict:manage", page: "dict", title: "用户短语", section: "命令短语", keywords: "短语导入 phrase 批量", feature: "" },
     // 方案设置里「扩展词库」那一节的开关，词库窗里也有（过渡期两处都在，见 schema_manager::EXT_DICTS_MOVED）。
     Handwritten { id: "dict:system", anchor: "dict:manage", page: "dict", title: "系统词库", section: "词库", keywords: "主词库 扩展词库 细胞词库 分类词库 附加 启用 查看 信息 词条 搜索 排序 加进用户词库 成语 地名 人名 网络热词", feature: "" },
     // ── 统计 ──
@@ -471,7 +478,6 @@ fn handwritten_entries(manifest: &Manifest) -> Vec<SearchEntry> {
         .iter()
         // 被定制版 `feature:` 藏掉的卡片：页面上没有落点，搜到了点过去什么都没有。
         .filter(|h| h.feature.is_empty() || !manifest.feature_hidden(h.feature))
-        .filter(|h| h.id != "dict:register-ime" || crate::mode::get() == crate::mode::AppMode::Dev)
         .filter(|h| {
             h.feature != crate::pages::extensions::FEATURE || crate::pages::extensions::SUPPORTED
         })
@@ -482,7 +488,13 @@ fn handwritten_entries(manifest: &Manifest) -> Vec<SearchEntry> {
             path: vec![page_label(h.page).to_string(), h.section.to_string()],
             // 词库页自带方案与分类导航（见 `JumpTarget::Dictionary`）。
             target: if h.page == "dict" {
-                JumpTarget::Dictionary(None)
+                JumpTarget::Dictionary(match h.id {
+                    "dict:add-word" => DictionaryTarget::AddWord,
+                    "dict:import" => DictionaryTarget::ImportMain,
+                    "dict:phrase-import" => DictionaryTarget::Category("phrase", crate::pages::dict::spec::LogicalTab::PhraseUser),
+                    "dict:system" => DictionaryTarget::System,
+                    _ => DictionaryTarget::Current,
+                })
             } else {
                 JumpTarget::Card {
                     tab: page_tab(h.page),

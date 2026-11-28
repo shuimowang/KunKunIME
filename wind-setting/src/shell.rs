@@ -377,14 +377,30 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
             let app = app.clone();
             move |target| {
                 let st = app.borrow();
-                if let Some(tab) = target {
-                    st.route_dict_target(crate::cli::DictTarget {
-                        schema: "completion".into(),
-                        tab: Some(tab),
-                        ..Default::default()
-                    });
-                }
+                use crate::search::index::DictionaryTarget;
                 st.show_dictionary();
+                if st.dict_mgr.has_open_dialog() {
+                    return;
+                }
+                let mgr = &st.dict_mgr;
+                match target {
+                    DictionaryTarget::Current => {}
+                    DictionaryTarget::Category(schema, tab) => {
+                        st.route_dict_target(crate::cli::DictTarget {
+                            schema: schema.into(),
+                            tab: Some(tab),
+                            ..Default::default()
+                        });
+                    }
+                    DictionaryTarget::AddWord => mgr.open_personal_word(),
+                    DictionaryTarget::ImportMain => mgr.open_main_word_import(),
+                    DictionaryTarget::System => {
+                        let schema = mgr.current_schema_id().unwrap_or_else(|| "pinyin".into());
+                        if !mgr.open_sys_list_of(&schema) {
+                            mgr.notify_err("请先在「输入方案」中启用要查看的方案。");
+                        }
+                    }
+                }
             }
         },
     ));
@@ -1036,7 +1052,11 @@ fn build_footer(
     let stats_tab = crate::cli::page_to_index("stats");
     let dictionary_visible = app.borrow().dictionary_visible;
     let mcp_tab = crate::cli::page_to_index("mcp");
-    let show_page_actions = move || !dictionary_visible.get() && Some(tab_sig.get()) != mcp_tab;
+    let about_tab = crate::cli::page_to_index("about");
+    let show_page_actions = move || {
+        let tab = Some(tab_sig.get());
+        !dictionary_visible.get() && tab != mcp_tab && tab != about_tab
+    };
     let refresh_btn = Element::button("刷新数据")
         .small()
         .outline_soft()
