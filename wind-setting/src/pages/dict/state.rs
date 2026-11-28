@@ -861,8 +861,7 @@ impl DictManagerState {
     /// 指定数据域的子标签序列（按 kind 生成）。
     ///
     /// 按域参数化而非只读当前信号：深链要在「切过去之前」就知道目标域有没有请求的类型，
-    /// 否则只能像早期 `open_add_word_prefilled` 那样临时改写 `domain` 信号再恢复——
-    /// 那种写法会平白触发信号版本变化，把导航 effect 卷进来。
+    /// 提前检查可避免为验证目标而改写当前页。
     pub fn tabs_for_domain_at(&self, domain: usize) -> Vec<LogicalTab> {
         tabs_for_kind(self.domain_kind_at(domain))
     }
@@ -960,8 +959,7 @@ impl DictManagerState {
     /// → 已启用但被折叠掉的拼音变体（如双拼 id）。全不中返回 `None`。
     ///
     /// 严格匹配，刻意不做「未知即拼音」的猜测：命令行里 `--schema` 拼错时，
-    /// 静默落到别的域远比明确告诉用户"没找到"更难排查。需要宽松兜底的调用方
-    /// （如 [`Self::open_add_word_prefilled`]）自行在外层追加。
+    /// 找不到调用方指定的目标时返回 None。
     pub fn resolve_domain(&self, schema: &str) -> Option<usize> {
         let s = schema.trim();
         if s.is_empty() {
@@ -973,23 +971,10 @@ impl DictManagerState {
         if s.eq_ignore_ascii_case("quick") {
             return Some(DOMAIN_QUICK);
         }
-        // `charsets` 是这个域改名后的叫法（域标签已是「字符集分类」）；旧的两个别名
-        // 保留——用户可能把 `--schema common-chars` 写进了快捷方式，改名不该弄坏它。
-        if s.eq_ignore_ascii_case("common")
-            || s.eq_ignore_ascii_case("common-chars")
-            || s.eq_ignore_ascii_case("charsets")
-        {
+        if s.eq_ignore_ascii_case("charsets") {
             return Some(DOMAIN_COMMON);
         }
-        // 各 tab 的 cli_id 也收进来：`--type mail-suffix` 单独给时用户多半没想过还要
-        // 再给一个 `--schema`，而少了这一档的后果不是报错而是**静默跑偏**——
-        // `LogicalTab::from_cli_id` 解析得动（`bad_tab` 为空，不会提示「未知类型」），
-        // 域却停在启动态的「命令短语」，最后 toast 一句「『命令短语』没有『邮箱后缀』」。
-        if s.eq_ignore_ascii_case("completion")
-            || s.eq_ignore_ascii_case("mail-suffix")
-            || s.eq_ignore_ascii_case("url-history")
-            || s.eq_ignore_ascii_case("quick-history")
-        {
+        if s.eq_ignore_ascii_case("completion") {
             return Some(DOMAIN_COMPLETION);
         }
         let domains = self.folded_domains();
@@ -1044,45 +1029,31 @@ impl DictManagerState {
     /// 应用命令行深链（`--page dict --schema <id> --type <id>`）。
     ///
     /// 两维各自可选：省 `schema` = 保持当前域，省 `tab` = 沿用该域上次停留的子标签。
-    /// 返回 `Some(提示)` 表示已尽力定位但有偏差（供上层 toast），`None` 表示完全命中。
-    ///
-    /// 偏差有两类，都降级而不报错——用户的意图是"打开设置看看"，把他挡在门外没有意义：
-    /// - 方案没找到 → 保持当前域
-    /// - 该域没有请求的类型（如拼音域没有候选调整）→ 落该域首个子标签
+    /// 校验完整目标后才改变导航。错误时保留当前数据域、子标签、分库与勾选。
     pub fn apply_deep_link(&self, schema: &str, tab: Option<LogicalTab>) -> Option<String> {
-        let mut note = None;
-        let domain = match self.resolve_domain(schema) {
-            Some(d) => d,
-            None => {
-                if !schema.trim().is_empty() {
-                    note = Some(format!("未找到方案「{schema}」，已保持当前数据域"));
-                }
-                self.domain.get()
-            }
+        let domain = if schema.trim().is_empty() {
+            self.domain.get()
+        } else if let Some(domain) = self.resolve_domain(schema) {
+            domain
+        } else {
+            return Some(format!("未找到词库方案「{schema}」，已取消跳转。"));
         };
-
-        // 子标签集随域而变，故必须先把域定下来再解析类型。
-        let tabs = self.tabs_for_domain_at(domain);
-        let sub = match tab {
-            None => None,
-            Some(t) => match tabs.iter().position(|x| *x == t) {
-                Some(i) => Some(i),
-                None => {
-                    if let Some(first) = tabs.first() {
-                        note = Some(format!(
-                            "「{}」没有「{}」，已定位到「{}」",
-                            self.domain_label_at(domain),
-                            t.title(),
-                            first.title()
-                        ));
-                    }
-                    Some(0)
-                }
-            },
+        let sub = if let Some(tab) = tab {
+            let tabs = self.tabs_for_domain_at(domain);
+            let Some(index) = tabs.iter().position(|&t| t == tab) else {
+                return Some(format!("「{}」没有「{}」，已取消跳转。", self.domain_label_at(domain), tab.title()));
+            };
+            Some(index)
+        } else {
+            None
         };
 
         self.navigate_to(domain, sub);
-        note
+        self.cats.close();
+        if tab == Some(LogicalTab::UserDict) {
+            self.select_lib(None);
+        }
+        None
     }
 
     /// 外部深链不能在确认、编辑或导入期间替换当前操作的数据域。
@@ -3076,9 +3047,9 @@ impl DictManagerState {
         }
     }
 
-    /// 先用指定方案，再找拼音，最后尝试其他支持用户词条的已启用方案。
-    fn select_word_library(&self, preferred: Option<usize>) -> bool {
-        let target = preferred.into_iter()
+    /// 全局搜索没有指定方案：优先使用当前可写词库，其次是已启用的拼音词库。
+    fn select_word_library(&self) -> bool {
+        let target = std::iter::once(self.domain.get())
             .chain(self.resolve_domain("pinyin"))
             .chain(GLOBAL_DOMAINS..self.domain_count())
             .find_map(|domain| {
@@ -3097,21 +3068,15 @@ impl DictManagerState {
     }
 
     pub(crate) fn open_personal_word(&self) {
-        if self.select_word_library(Some(self.domain.get())) {
+        if self.select_word_library() {
             self.open_add();
         }
     }
 
     pub(crate) fn open_main_word_import(&self) {
-        if self.select_word_library(Some(self.domain.get())) {
+        if self.select_word_library() {
             self.select_lib(None);
             self.open_import_dialog();
-        }
-    }
-
-    pub fn open_add_word_prefilled(&self, text: &str, code: &str, schema: &str) {
-        if self.select_word_library(self.resolve_domain(schema)) {
-            self.prefill_add_word(text, code);
         }
     }
 
@@ -4910,7 +4875,7 @@ mod tests {
     }
 
     #[test]
-    fn prefill_selects_userdict_domain_for_pinyin() {
+    fn prefill_on_selected_pinyin_library_preserves_text_and_code() {
         let st = DictManagerState::new();
         with_schemas(
             &st,
@@ -4919,8 +4884,8 @@ mod tests {
                 schema_s("quanpin", "全拼", "pinyin", "full"),
             ],
         );
-        st.open_add_word_prefilled("你好", "nihao", "quanpin");
-        // 命中拼音域（domain>=1），子标签落在用户词库
+        assert!(st.apply_deep_link("quanpin", Some(LogicalTab::UserDict)).is_none());
+        st.prefill_add_word("你好", "nihao");
         assert_eq!(st.current_category(), WordCategory::UserDict);
         assert_eq!(st.edit_text.get(), "你好");
         assert_eq!(st.edit_code.get(), "nihao");
@@ -4930,16 +4895,7 @@ mod tests {
     }
 
     #[test]
-    fn prefill_matches_pinyin_alias() {
-        let st = DictManagerState::new();
-        with_schemas(&st, vec![schema_s("quanpin", "全拼", "pinyin", "full")]);
-        // core 传来的双拼 id 归一到拼音域代表
-        st.open_add_word_prefilled("好", "hao", "shuangpin_ziranma");
-        assert_eq!(st.current_category(), WordCategory::UserDict);
-    }
-
-    #[test]
-    fn personal_add_from_email_and_unknown_schema_pick_a_writable_pinyin_library() {
+    fn global_add_word_from_email_opens_a_writable_pinyin_library() {
         let st = DictManagerState::new();
         with_schemas(&st, vec![
             schema("other", "其他方案", "codetable"),
@@ -4948,8 +4904,6 @@ mod tests {
         st.domain.set(DOMAIN_COMPLETION);
         st.open_personal_word();
         assert!(st.edit_visible.get() && !st.completion_add_visible.get());
-        assert_eq!(st.current_schema_id().as_deref(), Some("quanpin"));
-        st.open_add_word_prefilled("你好", "nihao", "not-listed");
         assert_eq!(st.current_schema_id().as_deref(), Some("quanpin"));
 
         let empty = DictManagerState::new();
@@ -5887,17 +5841,10 @@ mod tests {
         assert_eq!(st.resolve_domain("phrase"), Some(DOMAIN_PHRASE));
         assert_eq!(st.resolve_domain("quick"), Some(DOMAIN_QUICK));
         assert_eq!(st.resolve_domain("charsets"), Some(DOMAIN_COMMON));
-        assert_eq!(
-            st.resolve_domain("common-chars"),
-            Some(DOMAIN_COMMON),
-            "旧别名"
-        );
         assert_eq!(st.resolve_domain("completion"), Some(DOMAIN_COMPLETION));
-        // 两个 tab 的 cli_id 也该认：单给 `--type mail-suffix` 时用户多半没再给 --schema。
-        assert_eq!(st.resolve_domain("mail-suffix"), Some(DOMAIN_COMPLETION));
-        assert_eq!(st.resolve_domain("url-history"), Some(DOMAIN_COMPLETION));
-        // 不能被前缀相同的 `quick`（快捷输入格式域）截走。
-        assert_eq!(st.resolve_domain("quick-history"), Some(DOMAIN_COMPLETION));
+        for old_or_tab in ["common", "common-chars", "mail-suffix", "url-history", "quick-history"] {
+            assert_eq!(st.resolve_domain(old_or_tab), None);
+        }
         // 每个全局域的 cli 关键字都必须指向一个**互不相同**的槽位。
         let globals = [
             st.resolve_domain("phrase"),
@@ -5995,29 +5942,31 @@ mod tests {
     }
 
     #[test]
-    fn deep_link_downgrades_when_type_absent_in_domain() {
+    fn deep_link_accepts_a_real_schema_id_even_when_it_matches_a_tab_id() {
+        let st = DictManagerState::new();
+        with_schemas(&st, vec![schema("url-history", "自定义", "codetable")]);
+        assert!(st.apply_deep_link("url-history", Some(LogicalTab::UserDict)).is_none());
+        assert_eq!(st.current_schema_id().as_deref(), Some("url-history"));
+    }
+
+    #[test]
+    fn deep_link_rejects_unavailable_type_and_keeps_current_library() {
         let st = deep_link_fixture();
-        // 混输域只有候选调整（tabs_for_domain 不给用户词库）。
-        // 这里原本用「拼音域 + 候选调整」作样例——拼音补上该标签后那个前提就不成立了，
-        // 测试会因**样例失效**而红，而不是机制坏了。换成夹具里仍然缺类型的混输域。
+        // 混输域只有候选调整，显式请求用户词库必须保持原页。
         let note = st
             .apply_deep_link("mixed", Some(LogicalTab::UserDict))
             .expect("落空档应给出提示");
         assert!(note.contains("用户词库"), "提示要点名用户要的类型: {note}");
-        assert!(note.contains("候选调整"), "提示要说明实际落点: {note}");
-        assert_eq!(st.domain.get(), GLOBAL_DOMAINS + 2, "域仍按 schema 定位");
-        assert_eq!(
-            st.current_category(),
-            WordCategory::Shadow,
-            "降级到该域首个子标签，而非报错或错位"
-        );
+        assert_eq!(st.domain.get(), DOMAIN_PHRASE);
+        assert_eq!(st.current_category(), WordCategory::PhraseSystem);
     }
 
     #[test]
     fn deep_link_reports_unknown_schema_and_keeps_domain() {
         let st = deep_link_fixture();
         st.navigate_to(GLOBAL_DOMAINS, Some(0));
-        let note = st.apply_deep_link("typo", None).expect("未知方案应提示");
+        let note = st.apply_deep_link("typo", Some(LogicalTab::Freq)).expect("未知方案应提示");
+        assert_eq!(st.current_category(), WordCategory::UserDict);
         assert!(note.contains("typo"), "提示要带上用户输入的原值: {note}");
         assert_eq!(
             st.domain.get(),
@@ -7931,7 +7880,7 @@ mod tests {
         st.open_edit("aaaa", "工", 7, 0);
         assert_eq!(st.edit_weight_hint.get(), user);
 
-        st.open_add_word_prefilled("工", "aaaa", "wb");
+        st.prefill_add_word("工", "aaaa");
         assert_eq!(st.edit_weight.get(), "1200");
         assert_eq!(st.edit_weight_hint.get(), user);
 

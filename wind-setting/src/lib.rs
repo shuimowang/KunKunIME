@@ -338,16 +338,11 @@ pub fn run() {
         } else if args.iter().any(|a| a == "--dark") {
             st.dark.set(true);
         }
-        // 初始页：--page <id> / --page=<id> / 快捷 --<id> / --tab <n>。
-        if let Some(idx) = cli::parse_target(&args) {
+        if let Some(target) = cli::parse_dict_target(&args) {
+            st.route_dict_target(target);
+        } else if let Some(idx) = cli::parse_target(&args) {
             route_target(&st, idx);
         }
-        // 词库页深链（--schema/--type）：此刻方案列表尚未就绪，故只挂起，
-        // 待 apply_loaded 注入方案后再定位（见 AppState::route_dict_target）。
-        if let Some(t) = cli::parse_dict_target(&args) {
-            st.route_dict_target(t);
-        }
-        // 冷启动协议 URL：解析并路由（切相关页 + 占位提示）。
         if let Some(raw) = cli::parse_protocol(&args) {
             drop(st);
             route_protocol(&raw, &app_state);
@@ -678,12 +673,10 @@ fn route_second_launch(ctx: &mut EventCtx, argv: &[String], app: &Rc<RefCell<sta
         run_import_action(ctx, ImportAction::ClipboardDialog, app);
     } else if let Some(p) = cli::parse_import_file(argv) {
         run_import_action(ctx, ImportAction::File(p), app);
+    } else if let Some(target) = cli::parse_dict_target(argv) {
+        app.borrow().route_dict_target(target);
     } else if let Some(idx) = cli::parse_target(argv) {
-        let st = app.borrow();
-        if let Some(target) = cli::parse_dict_target(argv) {
-            st.route_dict_target(target);
-        }
-        route_target(&st, idx);
+        route_target(&app.borrow(), idx);
     } else {
         app.borrow().return_to_settings();
     }
@@ -1075,7 +1068,7 @@ mod tests {
             run(&["exe", "--dict", "--schema", "pinyin", "--type", "user-dict"]),
             MAIN_SINGLE_KEY
         );
-        assert!(app.borrow().dictionary_visible.get());
+        assert!(!app.borrow().dictionary_visible.get());
         assert!(app.borrow().awaiting_dict_target());
         assert_eq!(run(&["exe", "--page=dict"]), MAIN_SINGLE_KEY);
         assert_eq!(run(&["exe"]), MAIN_SINGLE_KEY);
@@ -1088,6 +1081,7 @@ mod tests {
     fn unified_window_repeated_dictionary_launch_keeps_the_active_word_editor_target() {
         let app = Rc::new(RefCell::new(state::AppState::empty()));
         *app.borrow().theme_handle.borrow_mut() = Some(ThemeHandle::detached(Theme::default()));
+        app.borrow().show_dictionary();
         let mgr = app.borrow().dict_mgr.clone();
         mgr.edit_visible.set(true);
         mgr.edit_text.set("尚未提交的人名".into());

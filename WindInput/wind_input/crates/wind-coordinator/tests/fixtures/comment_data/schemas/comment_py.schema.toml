@@ -1,0 +1,6 @@
+[schema]
+id = "comment_py"
+name = "测试拼音"
+
+[engine]
+type = "pinyin"

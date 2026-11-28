@@ -1,0 +1,6 @@
+[schema]
+id = "comment_table"
+name = "测试码表"
+
+[engine]
+type = "codetable"

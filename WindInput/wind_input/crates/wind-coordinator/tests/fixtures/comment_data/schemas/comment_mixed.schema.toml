@@ -1,0 +1,10 @@
+[schema]
+id = "comment_mixed"
+name = "测试混输"
+
+[engine]
+type = "mixed"
+
+[engine.mixed]
+primary_schema = "comment_table"
+secondary_schema = "comment_py"

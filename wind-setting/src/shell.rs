@@ -378,20 +378,20 @@ pub fn build(app: &Rc<RefCell<AppState>>) -> Element {
             move |target| {
                 let st = app.borrow();
                 use crate::search::index::DictionaryTarget;
-                st.show_dictionary();
-                if st.dict_mgr.has_open_dialog() {
-                    return;
-                }
                 let mgr = &st.dict_mgr;
+                if !matches!(target, DictionaryTarget::Category(_, _)) {
+                    st.show_dictionary();
+                    if mgr.has_open_dialog() {
+                        return;
+                    }
+                }
                 match target {
                     DictionaryTarget::Current => {}
-                    DictionaryTarget::Category(schema, tab) => {
-                        st.route_dict_target(crate::cli::DictTarget {
-                            schema: schema.into(),
-                            tab: Some(tab),
-                            ..Default::default()
-                        });
-                    }
+                    DictionaryTarget::Category(schema, tab) => st.route_dict_target(crate::cli::DictTarget {
+                        schema: schema.into(),
+                        tab: Some(tab),
+                        ..Default::default()
+                    }),
                     DictionaryTarget::AddWord => mgr.open_personal_word(),
                     DictionaryTarget::ImportMain => mgr.open_main_word_import(),
                     DictionaryTarget::System => {
@@ -476,6 +476,7 @@ pub(crate) fn reset_registrations(app: &Rc<RefCell<AppState>>) {
 
 /// 一级导航栏宽度（逻辑 px）。搜索框与搜索浮层的捕获层都从它推出来，见 `search::ui`。
 pub(crate) const NAV_W: i32 = 158;
+pub(crate) const TITLEBAR_H: i32 = 44;
 
 /// 当前页**有没有**二级导航可言。
 ///
@@ -794,7 +795,7 @@ pub(crate) fn build_titlebar(subtitle: &str) -> Element {
     // 关闭键 hover 红底仍是方角：Win11 下由 DWM 按系统半径裁出窗口圆角。
     Element::row()
         .width_match()
-        .height(44)
+        .height(TITLEBAR_H)
         .cross(Align::Stretch)
         .bg_role(Role::SurfaceAlt)
         .window_drag()

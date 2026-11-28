@@ -3428,21 +3428,21 @@ mod eval_var_tests {
     }
 
     /// 出厂分配下当前态、横排落到的模板串。
-    fn factory_tpl(available: &[&str], active: &str, mode: Option<ModeKind>) -> String {
-        factory_tpl_with(available, active, mode, |_| {})
-    }
-
-    fn factory_tpl_with(
-        available: &[&str],
+    fn factory_tpl(
         active: &str,
+        engine: &str,
         mode: Option<ModeKind>,
         tweak: impl FnOnce(&mut Config),
     ) -> String {
         let mut cfg = Config::default();
         tweak(&mut cfg);
-        cfg.schema.available = available.iter().map(|s| s.to_string()).collect();
+        cfg.schema.available = ["comment_py", "comment_table", "comment_mixed"].map(String::from).into();
         cfg.schema.active = active.to_string();
-        let co = Coordinator::new_headless(cfg.clone(), Some(&data_dir()));
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/comment_data");
+        let co = Coordinator::new_headless(cfg.clone(), Some(&fixture));
+        // 确认方案确实加载，防止未知方案回落到码表类型使断言看起来通过。
+        assert_eq!(co.engine_mgr.active_schema_id(), active);
+        assert_eq!(co.engine_mgr.schema_engine_type(active).as_deref(), Some(engine));
         let st = State {
             active: mode,
             ..Default::default()
@@ -3453,24 +3453,17 @@ mod eval_var_tests {
     /// 出厂分配（设计 §13.6）：拼音方案默认不显示编码，码表跟随全局，混输给码表编码，
     /// 临时拼音给完整回退链——哪怕当前方案是拼音；快捷输入不显示。
     #[test]
-    fn factory_assignment_reproduces_retired_code_hint_defaults() {
-        assert_eq!(factory_tpl(&["pinyin", "wubi86"], "pinyin", None), "");
-        assert_eq!(
-            factory_tpl(&["pinyin", "wubi86"], "wubi86", None),
-            "${code_hint|code_rev|shuangpin}"
-        );
-        assert_eq!(
-            factory_tpl(&["wubi86_pinyin", "pinyin"], "wubi86_pinyin", None),
-            "${code_hint|code_rev}"
-        );
-        assert_eq!(
-            factory_tpl(&["pinyin", "wubi86"], "pinyin", Some(ModeKind::TempPinyin)),
-            "${code_hint|code_rev|shuangpin}"
-        );
-        assert_eq!(
-            factory_tpl(&["pinyin", "wubi86"], "wubi86", Some(ModeKind::Mix(0))),
-            ""
-        );
+    fn factory_assignment_uses_the_active_engine_type_and_input_mode() {
+        let code = "${code_hint|code_rev|shuangpin}";
+        for (active, engine, mode, expected) in [
+            ("comment_py", "pinyin", None, ""),
+            ("comment_table", "codetable", None, code),
+            ("comment_mixed", "mixed", None, "${code_hint|code_rev}"),
+            ("comment_py", "pinyin", Some(ModeKind::TempPinyin), code),
+            ("comment_table", "codetable", Some(ModeKind::Mix(0)), ""),
+        ] {
+            assert_eq!(factory_tpl(active, engine, mode, |_| {}), expected, "{active} {mode:?}");
+        }
     }
 
     /// 用户自建的快捷输入没有自己的格，落到通配的 `mode.mix`：码表方案下也不显示。
@@ -3483,9 +3476,9 @@ mod eval_var_tests {
         };
         let idx = Config::default().schema.mix_modes.len() as u8;
         assert_eq!(
-            factory_tpl_with(
-                &["pinyin", "wubi86"],
-                "wubi86",
+            factory_tpl(
+                "comment_table",
+                "codetable",
                 Some(ModeKind::Mix(idx)),
                 add_mine
             ),

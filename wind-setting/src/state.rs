@@ -2784,6 +2784,7 @@ impl AppState {
 
     /// 切换到词库，并保留返回时的设置页位置。
     pub fn show_dictionary(&self) {
+        self.pending_dict_target.borrow_mut().take();
         self.search.dismiss();
         self.dictionary_visible.set(true);
         if self.data_loaded && !self.dict_mgr.has_open_dialog() {
@@ -2794,13 +2795,20 @@ impl AppState {
     }
 
     pub fn return_to_settings(&self) {
+        self.pending_dict_target.borrow_mut().take();
         self.dictionary_visible.set(false);
     }
 
     /// 词库页深链统一入口：方案列表已就绪则立即定位，否则挂起等 [`Self::apply_loaded`] 消费。
     /// 冷启动（列表未就绪）与二次实例激活（已就绪）共用此入口，避免两条易走偏的路径。
     pub fn route_dict_target(&self, target: crate::cli::DictTarget) {
+        self.pending_dict_target.borrow_mut().take();
+        if let Some(message) = &target.error {
+            self.feedback.set(Some((ToastKind::Error, message.clone())));
+            return;
+        }
         if target.is_empty() {
+            self.show_dictionary();
             return;
         }
         if self.dict_mgr.has_open_dialog() {
@@ -2830,18 +2838,11 @@ impl AppState {
         }
     }
 
-    /// 执行深链定位并汇总提示。偏差一律降级 + toast，不阻断——用户的意图是"打开看看"，
-    /// 把他挡在词库页外面没有意义。多条偏差合并成一条 toast，免得连弹两次。
-    fn apply_dict_target(&self, t: &crate::cli::DictTarget) {
-        let mut notes: Vec<String> = Vec::new();
-        if !t.bad_tab.is_empty() {
-            notes.push(format!("未知的词库类型「{}」", t.bad_tab));
-        }
-        if let Some(n) = self.dict_mgr.apply_deep_link(&t.schema, t.tab) {
-            notes.push(n);
-        }
-        if !notes.is_empty() {
-            self.feedback.set(Some((ToastKind::Info, notes.join("；"))));
+    fn apply_dict_target(&self, target: &crate::cli::DictTarget) {
+        if let Some(error) = self.dict_mgr.apply_deep_link(&target.schema, target.tab) {
+            self.feedback.set(Some((ToastKind::Error, error)));
+        } else {
+            self.show_dictionary();
         }
     }
 
@@ -6581,6 +6582,29 @@ mod tests {
         assert!(st.conn_failed.get(), "非 mock 未连接应置 conn_failed");
     }
 
+    #[test]
+    fn unified_window_invalid_dictionary_target_leaves_the_original_page_and_selection() {
+        let app = Rc::new(RefCell::new(AppState::empty()));
+        *app.borrow().theme_handle.borrow_mut() = Some(ThemeHandle::detached(Theme::default()));
+        app.borrow_mut().data_loaded = true;
+        let about = crate::cli::page_to_index("about").unwrap();
+        app.borrow().tab.set(about);
+        let mgr = app.borrow().dict_mgr.clone();
+        *mgr.schemas.borrow_mut() = vec![SchemaInfo {
+            id: "pinyin".into(), kind: "pinyin".into(), name: "拼音".into(), ..Default::default()
+        }];
+        let initial = (mgr.domain.get(), mgr.sub_tab.get());
+        for (schema, ty) in [("unknown","freq"),("pinyin","typo"),("pinyin","mail-suffix")] {
+            let argv = ["exe","--page","dict","--schema",schema,"--type",ty].map(str::to_owned);
+            windui::testing::run_with_ctx(|ctx| crate::route_second_launch(ctx, &argv, &app));
+            let st = app.borrow();
+            assert_eq!(st.tab.get(), about);
+            assert!(!st.dictionary_visible.get());
+            assert_eq!((mgr.domain.get(), mgr.sub_tab.get()), initial);
+            assert!(st.feedback.get().unwrap().1.contains("取消跳转"));
+        }
+    }
+
     /// 冷启动时机守护：命令行解析发生在方案列表就绪之前，深链只能先挂起，
     /// 由 `apply_loaded` 在 `set_schemas` **之后**消费。若哪天顺序被调换（或消费点
     /// 提前到 set_schemas 前），folded_domains 还是空的，`--schema` 会解析失败，
@@ -6595,7 +6619,7 @@ mod tests {
         st.route_dict_target(crate::cli::DictTarget {
             schema: "wb".into(),
             tab: Some(crate::pages::dict::spec::LogicalTab::Shadow),
-            bad_tab: String::new(),
+            ..Default::default()
         });
         assert_eq!(st.dict_mgr.domain.get(), 0, "方案未就绪时不应先跳到某个域");
         assert!(st.awaiting_dict_target());

@@ -279,7 +279,11 @@ pub fn build_search_box(
     let clear_st = st.clone();
     let click_st = st.clone();
 
-    let input = Element::text_input(query, "搜索设置  Ctrl+F")
+    let hint = st.open.map(|open| {
+        if *open { "" } else { "搜索设置（Ctrl+F）" }.to_string()
+    });
+    let input = Element::text_input(query, "搜索设置")
+        .tooltip(hint)
         // 前置图标区留白，图标本身由下面的 SVG 叠上去（见 `icon` 的说明）。
         .leading_icon(' ')
         .width(BOX_W)
@@ -444,10 +448,11 @@ pub fn build_results_overlay(
     };
     let scrim = Element::col()
         .fill()
+        .child(Element::leaf().width_match().height(crate::shell::TITLEBAR_H))
         .child(
             Element::row()
                 .width_match()
-                .height(OVERLAY_TOP)
+                .height(OVERLAY_TOP - crate::shell::TITLEBAR_H)
                 // 洞：纯占位、无 widget 也无背景，故不吞命中（见 `hit_node` 的判据），
                 // 点击径直落到下面的搜索框上。
                 .child(Element::leaf().width(SIDEBAR_W).height_match())
@@ -935,13 +940,12 @@ mod tests {
     /// 同步，浮层就会错位——那种偏移在截图上不明显，但用起来别扭。
     #[test]
     fn overlay_top_matches_layout() {
-        const TITLEBAR_H: i32 = 44;
         const DIVIDER_H: i32 = 1;
         const SIDEBAR_PAD_V: i32 = 10;
         const GAP: i32 = 4;
         assert_eq!(
             OVERLAY_TOP,
-            TITLEBAR_H + DIVIDER_H + SIDEBAR_PAD_V + BOX_H + GAP
+            crate::shell::TITLEBAR_H + DIVIDER_H + SIDEBAR_PAD_V + BOX_H + GAP
         );
         // 侧栏左右各 8 内边距。两者现在都由 `shell::NAV_W` 推出，这条断言退化成
         // 「没人把它们改回字面量」的守门。

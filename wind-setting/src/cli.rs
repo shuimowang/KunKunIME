@@ -132,26 +132,14 @@ pub struct DictTarget {
     pub schema: String,
     /// 目标子标签;None = 不指定(或 `--type` 值非法)。
     pub tab: Option<LogicalTab>,
-    /// `--type` 的原始取值(仅当解析失败时非空,供上层提示"未知类型 X")。
-    pub bad_tab: String,
+    /// 明确指定的参数缺值或不可识别时，整次导航都应取消。
+    pub error: Option<String>,
 }
 
 impl DictTarget {
     /// 两维都没给 —— 等价于只写了 `--page dict`,无需走深链路径。
     pub fn is_empty(&self) -> bool {
-        self.schema.is_empty() && self.tab.is_none() && self.bad_tab.is_empty()
-    }
-
-    /// 写入 `--type` 取值:非法值不静默吞掉,留原值给上层 toast 提示,
-    /// 否则用户只会看到"没反应"而无从判断是拼错还是功能没生效。
-    fn set_tab(&mut self, v: &str) {
-        match LogicalTab::from_cli_id(v) {
-            Some(tab) => {
-                self.tab = Some(tab);
-                self.bad_tab.clear();
-            }
-            None => self.bad_tab = v.to_string(),
-        }
+        self.schema.is_empty() && self.tab.is_none() && self.error.is_none()
     }
 }
 
@@ -162,20 +150,24 @@ pub fn parse_dict_target(argv: &[String]) -> Option<DictTarget> {
         return None;
     }
     let mut t = DictTarget::default();
-    let mut it = argv.iter();
-    while let Some(a) = it.next() {
-        if let Some(v) = a.strip_prefix("--schema=") {
-            t.schema = v.to_string();
-        } else if a == "--schema" {
-            if let Some(v) = it.next() {
-                t.schema = v.clone();
-            }
-        } else if let Some(v) = a.strip_prefix("--type=") {
-            t.set_tab(v);
-        } else if a == "--type" {
-            if let Some(v) = it.next() {
-                t.set_tab(v);
-            }
+    let mut args = argv.iter().skip(1).map(String::as_str).peekable();
+    while let Some(arg) = args.next() {
+        let (flag, value) = match arg.split_once('=') {
+            Some((flag @ ("--schema" | "--type"), value)) => (flag, Some(value)),
+            _ if matches!(arg, "--schema" | "--type") => (arg, args.next_if(|v| !v.starts_with("--"))),
+            _ => continue,
+        };
+        let Some(value) = value.filter(|v| !v.trim().is_empty()) else {
+            t.error = Some(format!("词库参数 {flag} 缺少值，已取消跳转。"));
+            break;
+        };
+        if flag == "--schema" {
+            t.schema = value.to_owned();
+        } else if let Some(tab) = LogicalTab::from_cli_id(value) {
+            t.tab = Some(tab);
+        } else {
+            t.error = Some(format!("未知的词库类型「{value}」，已取消跳转。"));
+            break;
         }
     }
     Some(t)
@@ -362,7 +354,7 @@ mod tests {
         .unwrap();
         assert_eq!(t.schema, "wubi86");
         assert_eq!(t.tab, Some(LogicalTab::Shadow));
-        assert!(t.bad_tab.is_empty());
+        assert!(t.error.is_none());
 
         // `=` 式 + 快捷 --dict（与 --page dict 能力对等）
         let t2 =
@@ -403,13 +395,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_dict_target_rejects_explicit_empty_or_missing_arguments() {
+        for args in [
+            vec!["exe", "--page", "dict", "--schema="],
+            vec!["exe", "--page", "dict", "--schema", "--type", "freq"],
+            vec!["exe", "--page", "dict", "--type"],
+            vec!["exe", "--page", "dict", "--type="],
+        ] {
+            let target = parse_dict_target(&a(&args)).unwrap();
+            assert!(!target.is_empty() && target.error.is_some(), "{args:?}");
+        }
+    }
+
+    #[test]
     fn parse_dict_target_keeps_bad_type_for_reporting() {
         let t = parse_dict_target(&a(&["exe", "--page", "dict", "--type", "候选调整"])).unwrap();
         assert!(t.tab.is_none());
-        assert_eq!(
-            t.bad_tab, "候选调整",
-            "非法值应留存供上层提示，而非静默丢弃"
-        );
+        assert!(t.error.as_deref().unwrap().contains("候选调整"));
         assert!(!t.is_empty(), "有非法值时不算空，仍需走深链路径以弹出提示");
     }
 
