@@ -37,6 +37,11 @@ class DeleteUndo {
     /** 还没等到这次删除自己引起的那条光标回报 */
     private var awaitingOwn = false
 
+    var suspended = false
+        set(value) {
+            if (value) invalidate()
+            field = value
+        }
     val canRestore: Boolean get() = entry != null
 
     /**
@@ -46,6 +51,7 @@ class DeleteUndo {
     fun onBackwardDelete(
         textBefore: String, selected: String, oldStart: Int, oldEnd: Int, newStart: Int, newEnd: Int, nowMs: Long,
     ) {
+        if (suspended) return
         if (newStart == oldStart && newEnd == oldEnd) {
             if (pending.size == MAX_PENDING) pending.removeFirst()
             pending.addLast(Pending(textBefore, selected, oldStart, oldEnd, nowMs))
@@ -60,7 +66,7 @@ class DeleteUndo {
     }
 
     fun recordBackward(deleted: String, anchor: Int) {
-        if (deleted.isEmpty()) return
+        if (suspended || deleted.isEmpty()) return
         val e = entry
         entry = if (mergeable && e != null && e.anchor == anchor + deleted.length) {
             Entry(deleted + e.before, e.after, anchor)
@@ -72,7 +78,7 @@ class DeleteUndo {
     }
 
     fun record(before: String, after: String, anchor: Int) {
-        if (before.isEmpty() && after.isEmpty()) return
+        if (suspended || (before.isEmpty() && after.isEmpty())) return
         entry = Entry(before, after, anchor)
         mergeable = false
         awaitingOwn = true

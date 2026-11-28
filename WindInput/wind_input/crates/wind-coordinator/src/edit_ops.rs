@@ -83,7 +83,7 @@ pub fn to_outcome(action: KeyAction) -> KeyOutcome {
             // 合并这两者会让上屏后残留旧编码。
             if let Some(comp) = new_composition {
                 ops.push(EditOp::SetComposition {
-                    caret: comp.chars().count(),
+                    caret: comp.encode_utf16().count(),
                     text: comp,
                 });
             }
@@ -176,7 +176,7 @@ pub fn to_outcome(action: KeyAction) -> KeyOutcome {
                 ops.push(EditOp::Commit(commit_text));
             }
             ops.push(EditOp::SetComposition {
-                caret: deferred_composition.chars().count(),
+                caret: deferred_composition.encode_utf16().count(),
                 text: deferred_composition,
             });
             KeyOutcome {
@@ -213,7 +213,7 @@ mod tests {
     fn insert_with_composition_emits_both() {
         let o = to_outcome(KeyAction::InsertText {
             text: "式".into(),
-            new_composition: Some("aa".into()),
+            new_composition: Some("𠮷a".into()),
             mode_changed: false,
             chinese_mode: true,
             has_new_composition: true,
@@ -223,8 +223,8 @@ mod tests {
             vec![
                 EditOp::Commit("式".into()),
                 EditOp::SetComposition {
-                    text: "aa".into(),
-                    caret: 2
+                    text: "𠮷a".into(),
+                    caret: 3
                 },
             ],
         );
@@ -301,7 +301,7 @@ mod tests {
 
         let o = to_outcome(KeyAction::CommitThenDeferComposition {
             commit_text: "式".into(),
-            deferred_composition: "b".into(),
+            deferred_composition: "𠮷b".into(),
             timeout_ms: 50,
         });
         assert_eq!(
@@ -309,8 +309,8 @@ mod tests {
             vec![
                 EditOp::Commit("式".into()),
                 EditOp::SetComposition {
-                    text: "b".into(),
-                    caret: 1
+                    text: "𠮷b".into(),
+                    caret: 3
                 },
             ],
         );

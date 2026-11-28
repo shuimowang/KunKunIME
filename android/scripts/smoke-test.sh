@@ -113,10 +113,10 @@ adb_device logcat -c
 if [[ "$smoke_variant" == debug ]]; then
     # Direct view APIs and the startup-control API are only kept in debug.
     adb_device shell am instrument -w -r \
-        -e class com.windinput.ime.keyboard.A11yActionTest,com.windinput.ime.keyboard.MultiTouchTest,com.windinput.ime.keyboard.VoiceGestureTest \
+        -e class com.windinput.ime.keyboard.A11yActionTest,com.windinput.ime.keyboard.MultiTouchTest,com.windinput.ime.keyboard.VoiceGestureTest,com.windinput.ime.service.EditorConnectionTest \
         "$app_id.test/androidx.test.runner.AndroidJUnitRunner" \
         | tr -d '\r' | tee "$smoke_results/keyboard-instrumentation.txt"
-    verify_instrumentation "$smoke_results/keyboard-instrumentation.txt" 18
+    verify_instrumentation "$smoke_results/keyboard-instrumentation.txt" 21
     adb_device logcat -d -v threadtime > "$smoke_results/keyboard-logcat.txt"
 fi
 
@@ -140,6 +140,13 @@ for screenshot in "${smoke_screenshots[@]}"; do
     adb_device pull "/sdcard/Android/data/$app_id/files/smoke/$screenshot" "$smoke_results/$screenshot"
     test -s "$smoke_results/$screenshot"
 done
+
+smoke_stage="dictionary"
+adb_device shell am instrument -w -r \
+    -e class com.windinput.ime.smoke.PersonalDictionaryUiTest \
+    "$app_id.test/androidx.test.runner.AndroidJUnitRunner" \
+    | tr -d '\r' | tee "$smoke_results/dictionary-instrumentation.txt"
+verify_instrumentation "$smoke_results/dictionary-instrumentation.txt" 1
 
 # Android's real SpeechRecognizer binds a provider from the test APK. This
 # deterministic fixture captures no audio and is never packaged in the app.
@@ -190,7 +197,7 @@ for result in offline-model-ready.png offline-voice-listening.png offline-voice-
 done
 
 if [[ "$smoke_variant" == debug ]]; then
-    echo 'KunKunIME debug smoke passed: startup queue/cancellation, eighteen view tests, real IME/phrases, controlled speech IPC, real native Chinese/English samples and local AudioRecord cancellation. Physical microphone accuracy not measured.'
+    echo 'KunKunIME debug smoke passed: startup queue/cancellation, keyboard and editor tests, real IME/phrases, dictionary editing, controlled speech IPC, native speech samples and local AudioRecord cancellation.'
 else
     echo 'KunKunIME release smoke passed: non-debuggable app, real IME/phrases, controlled speech IPC, real native Chinese/English samples and local AudioRecord cancellation. No startup gate; physical microphone accuracy not measured.'
 fi

@@ -5,6 +5,8 @@
 -keep class com.windinput.ime.smoke.RealImeSmokeTest { *; }
 -keep class com.windinput.ime.smoke.VoiceImeSmokeTest { *; }
 -keep class com.windinput.ime.smoke.OfflineVoiceSmokeTest { *; }
+-keep class com.windinput.ime.smoke.PersonalDictionaryUiTest { *; }
+-keep class com.windinput.ime.service.EditorConnectionTest { *; }
 -keep class com.windinput.ime.smoke.ControlledRecognitionService { *; }
 -keep class com.windinput.ime.smoke.ControlledRecognitionReleaseReceiver { *; }
 -keep class com.windinput.ime.keyboard.VoiceGestureTest { *; }

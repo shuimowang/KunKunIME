@@ -1062,14 +1062,14 @@ impl MobileCore {
     // 失效候选缓存——改完立即打得出，与桌面同一条路，不需要另发重载。
 
     /// 分页列出用户词。`query` 为空 = 浏览（按编码序），非空 = 搜索（编码前缀命中在前，
-    /// 词条内容 / 编码中段命中在后；可带音节空格）。出错记 warn 返回空页。
+    /// 词条内容 / 编码中段命中在后；可带音节空格）。读取失败交给设置页提示与重试。
     pub fn user_words(
         &self,
         schema_id: &str,
         query: &str,
         offset: u32,
         limit: u32,
-    ) -> UserWordPage {
+    ) -> Result<UserWordPage, String> {
         use wind_coordinator::web_host::WebDataHost;
         let r = wind_coordinator::user_words_api::list_paged(
             &*self.coord,
@@ -1085,24 +1085,24 @@ impl MobileCore {
         if let Some(store) = self.coord.user_store() {
             store.mark_scan_pending();
         }
-        match r {
-            Ok(page) => UserWordPage {
-                total: page.total as u64,
-                items: page
-                    .items
-                    .iter()
-                    .map(|r| UserWord {
-                        code: wind_coordinator::user_words_api::display_code(r),
-                        text: r.text.clone(),
-                        weight: r.weight,
-                    })
-                    .collect(),
-            },
-            Err(e) => {
-                tracing::warn!("读用户词失败: {e}");
-                UserWordPage::default()
-            }
-        }
+        let page = r.map_err(|error| {
+            self.coord
+                .storage_readonly_reason()
+                .map(str::to_owned)
+                .unwrap_or_else(|| error.to_string())
+        })?;
+        Ok(UserWordPage {
+            total: page.total as u64,
+            items: page
+                .items
+                .iter()
+                .map(|row| UserWord {
+                    code: wind_coordinator::user_words_api::display_code(row),
+                    text: row.text.clone(),
+                    weight: row.weight,
+                })
+                .collect(),
+        })
     }
 
     /// 手动加词。`code` 可带音节空格（显式切分，优先于自动求解）。
@@ -1651,7 +1651,7 @@ mod user_words_tests {
         m.user_word_add("pinyin", "ni hao", "你好").unwrap();
         m.user_word_add("pinyin", "wo men", "我们").unwrap();
 
-        let page = m.user_words("pinyin", "", 0, 50);
+        let page = m.user_words("pinyin", "", 0, 50).unwrap();
         assert_eq!(page.total, 2);
         assert_eq!(
             page.items[0],
@@ -1663,16 +1663,16 @@ mod user_words_tests {
             "显示码带音节空格、权重取桌面加词默认值"
         );
 
-        let hits = m.user_words("pinyin", "们", 0, 50);
+        let hits = m.user_words("pinyin", "们", 0, 50).unwrap();
         assert_eq!((hits.total, hits.items[0].text.as_str()), (1, "我们"));
 
         // 列表给的显示码原样回传即可删掉
         m.user_word_remove("pinyin", &page.items[0].code, "你好")
             .unwrap();
-        assert_eq!(m.user_words("pinyin", "", 0, 50).total, 1);
+        assert_eq!(m.user_words("pinyin", "", 0, 50).unwrap().total, 1);
 
         assert_eq!(m.user_words_clear("pinyin"), Ok(1));
-        assert_eq!(m.user_words("pinyin", "", 0, 50), UserWordPage::default());
+        assert_eq!(m.user_words("pinyin", "", 0, 50).unwrap(), UserWordPage::default());
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1744,7 +1744,7 @@ mod user_words_tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// 只读模式：写口带着原因拒绝；读口照约定返回空页（不 panic）。
+    /// 未知数据版本不会打开个人库；读和写都说明原因。
     #[test]
     fn readonly_rejects_writes_with_reason() {
         let (m, dir) = core("ro", Some("format_version = 99\ndir_id = \"x\"\n"));
@@ -1752,7 +1752,8 @@ mod user_words_tests {
         assert!(err.contains("99"), "要把只读原因交给用户: {err}");
         assert!(m.user_word_remove("pinyin", "ni hao", "你好").is_err());
         assert!(m.user_words_clear("pinyin").is_err());
-        assert_eq!(m.user_words("pinyin", "", 0, 50), UserWordPage::default());
+        let read_error = m.user_words("pinyin", "", 0, 50).unwrap_err();
+        assert!(read_error.contains("99"), "读取失败时也要保留版本原因: {read_error}");
         assert!(m.phrase_add("dz", "地址").is_err(), "短语写入同样受只读闸");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -1842,7 +1843,7 @@ mod dict_transfer_tests {
             .find(|s| s.key == "userWords")
             .expect("要有用户词段");
         assert_eq!((uw.added, uw.skipped, uw.rejected), (1, 0, 0), "{r:?}");
-        assert_eq!(m.user_words("wubi86", "", 0, 50).total, 1);
+        assert_eq!(m.user_words("wubi86", "", 0, 50).unwrap().total, 1);
         let after = type_code(&m, "aaaa");
         assert!(
             after.iter().any(|t| t == "风起测词"),
@@ -1863,7 +1864,7 @@ mod dict_transfer_tests {
         let text = m.dict_export("wubi86").unwrap();
         let err = m.dict_import("pinyin", &text, false).unwrap_err();
         assert!(err.contains("码表") && err.contains("拼音"), "{err}");
-        assert_eq!(m.user_words("pinyin", "", 0, 50).total, 0, "拒收不落库");
+        assert_eq!(m.user_words("pinyin", "", 0, 50).unwrap().total, 0, "拒收不落库");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1890,7 +1891,7 @@ mod dict_transfer_tests {
         // replace：先清空再导入
         let r = m.dict_import("wubi86", "aaad\t风起丁词\n", true).unwrap();
         assert_eq!(r.sections[0].added, 1, "{r:?}");
-        let page = m.user_words("wubi86", "", 0, 50);
+        let page = m.user_words("wubi86", "", 0, 50).unwrap();
         assert_eq!(
             page.items
                 .iter()
@@ -1909,7 +1910,7 @@ mod dict_transfer_tests {
             (1, 1),
             "{r:?}"
         );
-        let page = m.user_words("pinyin", "", 0, 50);
+        let page = m.user_words("pinyin", "", 0, 50).unwrap();
         assert_eq!(page.items[0].code, "feng qi ha ha");
         let _ = std::fs::remove_dir_all(dir);
     }

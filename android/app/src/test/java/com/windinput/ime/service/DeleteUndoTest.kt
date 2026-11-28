@@ -10,6 +10,22 @@ class DeleteUndoTest {
 
     private val u = DeleteUndo()
 
+    @Test fun incognitoClearsExistingAndPendingDeletesUntilRecordingResumes() {
+        u.recordBackward("明", 1)
+        assertTrue(u.canRestore)
+        u.onBackwardDelete("甲", "", 5, 5, 5, 5, 10)
+        u.suspended = true
+        u.onSelectionUpdate(5, 5, 4, 4, 20)
+        u.record("私密", "", 0)
+        u.recordBackward("密", 0)
+        u.onBackwardDelete("合成样本", "", 4, 4, 3, 3, 30)
+        assertFalse(u.canRestore)
+        u.suspended = false
+        assertNull(u.take(0, 0))
+        u.recordBackward("新", 0)
+        assertEquals("新", u.take(0, 0)?.before)
+    }
+
     // ── 删掉的是哪段 ─────────────────────────────────────────────
 
     @Test fun 单删取两次光标之间的那段() {

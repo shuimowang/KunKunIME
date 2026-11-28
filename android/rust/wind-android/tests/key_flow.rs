@@ -267,7 +267,7 @@ fn offline_full_pinyin_english_and_private_persistence() {
         "困困输入".into(),
     )
     .expect("用户词库必须可写");
-    let words = core.user_words("pinyin".into(), "困困输入".into(), 0, 20);
+    let words = core.user_words("pinyin".into(), "困困输入".into(), 0, 20).unwrap();
     assert!(words.items.iter().any(|word| word.text == "困困输入"));
     assert!(core.dict_export("pinyin".into()).unwrap().contains("困困输入"));
     assert!(root.join("data").is_dir(), "用户词文本须留在私有数据根中");

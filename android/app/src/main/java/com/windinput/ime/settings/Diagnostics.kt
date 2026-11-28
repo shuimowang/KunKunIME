@@ -24,7 +24,7 @@ import java.util.zip.ZipOutputStream
  *
  * 诊断信息 = 版本、系统、机型 + 本应用最近的日志尾部 + 最近一次 K 侧崩溃栈。**不含用户文字**：
  * - 日志只取 INFO 及以上（核心的约定是 info 及以上不记用户输入；带文字的逐键日志是 DEBUG），
- * - 测试台（设置首页「试一试」）把输入框原文记在 WindTestPad 标签下（e2e 靠它读结果），整个排除。
+ * - 导出时始终排除试打台的 WindTestPad 标签。
  * 发不发、发给谁都由用户在系统分享面板里选，本应用自己不联网。
  */
 object Diagnostics {

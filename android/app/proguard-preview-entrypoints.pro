@@ -2,6 +2,15 @@
 # JNA/UniFFI boundaries are in proguard-rules.pro; shared test runtime ABI is
 # in proguard-instrumentation-runtime.pro.
 
+# The debug instrumentation APK calls these helpers with a native EditText/InputConnection.
+-keep class com.windinput.ime.service.EditorCompositionKt {
+    public static boolean setInlineComposition(android.view.inputmethod.InputConnection, java.lang.String, int);
+    public static void deleteWithoutUndo(android.view.inputmethod.InputConnection, int, int);
+}
+-keep class com.windinput.ime.service.EditorCursorKt {
+    public static java.lang.Integer backspaceSelectionStart(java.lang.CharSequence, int, int);
+}
+
 -keep class com.windinput.ime.core.CoreStartupGate {
     public static final com.windinput.ime.core.CoreStartupGate INSTANCE;
     public com.windinput.ime.core.CoreStartupGate$Hold holdForTest();
