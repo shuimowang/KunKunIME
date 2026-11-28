@@ -1098,7 +1098,7 @@ mod tests {
             assert_eq!(st.current_category(), WordCategory::SysDicts);
             assert_eq!(
                 (st.pane_title.get(), st.pane_subtitle.get()),
-                (SYS_TITLE.to_string(), "词库列表".to_string())
+                (SYS_TITLE.to_string(), String::new())
             );
             let rows = st.table_rows.get();
             assert_eq!(rows.len(), 6);

@@ -1302,31 +1302,7 @@ fn about_page(app: &Rc<RefCell<AppState>>, state: &AppState) -> Element {
         let row = setting_row("卸载", Some("打开卸载向导，确认后开始移除。"), button);
         panel = panel.child(crate::search::anchor::wrap(row, "about:uninstall", state.jump));
     }
-    let panel = panel
-        .child(Element::divider())
-        .child(Element::label("基于 WindInput、wind-setting 和 WindUI 开源项目开发。").fg_role(Role::Text))
-        .child(Element::label("软件采用 GPL-3.0-or-later 许可。词库和第三方组件许可随程序提供。").fg_role(Role::TextMuted));
-    let tab = state.tab;
-    let mcp_tab = crate::cli::page_to_index("mcp").expect("MCP page is registered");
-    let connect = Element::button("查看 MCP 接入指南")
-        .small()
-        .outline_soft()
-        .on_click(move |_| tab.set(mcp_tab));
-    let guide = section(
-        "AI 助手接入",
-        vec![setting_row(
-            "本机 MCP 服务",
-            Some("让 Codex 等 AI 助手管理个人词库、查询和更改设置。"),
-            connect,
-        )],
-    );
-    crate::widgets::page(
-        Element::col()
-            .width_match()
-            .spacing(18)
-            .child(crate::search::anchor::wrap(panel, "about:main", state.jump))
-            .child(guide),
-    )
+    page(crate::search::anchor::wrap(panel, "about:main", state.jump))
 }
 
 /// 手写卡的二级导航条目：卡片被用户藏掉时，导航里那一条跟着消失（否则点它只会滚到一片空白）。
@@ -1363,36 +1339,6 @@ mod about_tests {
             PointerEvent::single(kind, at, MouseButton::Left), &mut hover, &mut capture);
         click(PointerKind::Down);
         assert_eq!(click(PointerKind::Up).open_url.as_deref(), Some("https://github.com/shuimowang/KunKunIME"));
-    }
-
-    #[test]
-    fn mcp_guide_about_entry_navigates_in_place() {
-        use crate::state::AppState;
-        use windui::core::Tree;
-        use windui::event::{MouseButton, PointerEvent, PointerKind};
-        use windui::geometry::{Point, Size};
-
-        let app = std::rc::Rc::new(std::cell::RefCell::new(AppState::empty()));
-        let state = app.borrow();
-        state.tab.set(crate::cli::page_to_index("about").unwrap());
-        let mut tree = Tree::new();
-        let root = super::about_page(&app, &state).width(760).height(670).build(&mut tree);
-        tree.root = Some(root);
-        tree.layout_root(Size::new(760, 670), &mut windui::text::NullTextEngine);
-        // The guide button follows the project link in keyboard navigation order.
-        let button = *tree.focusable_order().last().expect("about actions");
-        let bounds = tree.abs_bounds(button);
-        let point = Point::new(bounds.x + bounds.w / 2, bounds.y + bounds.h / 2);
-        let (mut hover, mut capture) = (None, None);
-        for kind in [PointerKind::Down, PointerKind::Up] {
-            let result = tree.dispatch_pointer(
-                PointerEvent::single(kind, point, MouseButton::Left),
-                &mut hover,
-                &mut capture,
-            );
-            assert!(result.open_windows.is_empty());
-        }
-        assert_eq!(Some(state.tab.get()), crate::cli::page_to_index("mcp"));
     }
 
     /// 「不是定制版」的两种形态都不出徽章：core 明确回答的 `null`，与老版本 core

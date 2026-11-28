@@ -555,6 +555,8 @@ fn web_data_dispatch<H: WebDataRpc + ?Sized>(
         "userDicts.rename" => user_dicts::rename(h, params),
         "userDicts.delete" => user_dicts::delete(h, params),
         "userDicts.importAs" => user_dicts::import_as(h, params),
+        "userDicts.revision" => user_dicts::revision(h, params),
+        "userDicts.appendImport" => user_dicts::append_import(h, params),
         "userDicts.setEnabled" => user_dicts::set_enabled(h, params),
         // 删除一个方案的全部用户数据（数据方案目录、它的备份、方案覆盖）；共用数据的拒绝。
         "userdata.purgeSchema" => h.web_userdata_purge_schema(params),

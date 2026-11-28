@@ -88,51 +88,7 @@ pub fn build_page_for_with_controls(mgr: DictManagerState, controls: Element) ->
         move || mgr_ed.on_edit_dialog_closed(),
     );
 
-    let (imp_open, imp_vis, imp_en) = (mgr.clone(), mgr.clone(), mgr.clone());
-    let import_entry = Element::button("批量导入…")
-        .small()
-        .tooltip(crate::text_file::UTF8_ONLY)
-        .on_click(move |ctx| imp_open.do_import(ctx))
-        .visible_when(move || imp_vis.io_entry_visible())
-        .enabled_when(move || imp_en.io_entry_enabled());
-    let (exp_open, exp_vis, exp_en) = (mgr.clone(), mgr.clone(), mgr.clone());
-    let export_entry = Element::button("导出…")
-        .small()
-        .outline_soft()
-        .on_click(move |ctx| exp_open.do_export(ctx))
-        .visible_when(move || exp_vis.io_entry_visible())
-        .enabled_when(move || exp_en.io_entry_enabled());
-    let (actions, actions_vis) = (mgr.clone(), mgr.clone());
-    let more = Element::button("更多操作")
-        .small()
-        .outline_soft()
-        .on_click(move |ctx| {
-            ctx.show_dropdown_menu(ctx.bounds(), library_actions(&actions));
-        })
-        .visible_when(move || {
-            let ops = actions_vis.current_spec().ops;
-            actions_vis.edit_file_target().is_some()
-                || ops.clear
-                || ops.reset_default
-                || ops.promote_all
-        });
-    // 系统词条表：「‹ 返回」回系统词库表（标题是「系统词库 · <名>」）。
-    let (m_back, v_back) = (mgr.clone(), mgr.clone());
-    let back = Element::button("‹ 返回")
-        .small()
-        .outline_soft()
-        .on_click(move |_| m_back.leave_sys_dict())
-        .visible_when(move || v_back.current_category() == WordCategory::SysEntries);
-    let title_row = Element::row()
-        .width_match()
-        .height(34)
-        .cross(Align::Center)
-        .spacing(8)
-        .child(back)
-        .child(pane_heading(&mgr))
-        .child(import_entry)
-        .child(export_entry)
-        .child(more);
+    let title_row = pane_header(&mgr);
     let context_mgr = mgr.clone();
     let help = Element::host_signal(mgr.table_epoch, move |_| {
         let text = match context_mgr.current_category() {
@@ -315,6 +271,50 @@ pub fn build_page_for_with_controls(mgr: DictManagerState, controls: Element) ->
         .child(toast_sink(mgr.feedback))
 }
 
+fn pane_header(mgr: &DictManagerState) -> Element {
+    let (imp_open, imp_vis) = (mgr.clone(), mgr.clone());
+    let import_entry = Element::button("批量导入…")
+        .small()
+        .tooltip(crate::text_file::UTF8_ONLY)
+        .on_click(move |ctx| {
+            if imp_open.current_category() == WordCategory::UserLib {
+                imp_open.pick_lib_append_file(ctx);
+            } else {
+                imp_open.do_import(ctx);
+            }
+        })
+        .visible_when(move || {
+            let category = imp_vis.current_category();
+            !scheme_import_in_menu(category)
+                && imp_vis.io_entry_enabled()
+                && (imp_vis.io_entry_visible() || category == WordCategory::UserLib)
+        });
+    let actions = mgr.clone();
+    let more = Element::button("更多操作")
+        .small()
+        .outline_soft()
+        .on_click(move |ctx| {
+            ctx.show_dropdown_menu(ctx.bounds(), library_actions(&actions));
+        });
+    // 系统词条表：「‹ 返回」回系统词库表（标题是「系统词库 · <名>」）。
+    let (m_back, v_back) = (mgr.clone(), mgr.clone());
+    let back = Element::button("‹ 返回")
+        .small()
+        .outline_soft()
+        .on_click(move |_| m_back.leave_sys_dict())
+        .visible_when(move || v_back.current_category() == WordCategory::SysEntries);
+    Element::row()
+        .width_match()
+        .height(34)
+        .cross(Align::Center)
+        .spacing(8)
+        .child(back)
+        .child(pane_heading(mgr))
+        .child(add_entry_button(mgr))
+        .child(import_entry)
+        .child(more)
+}
+
 fn build_mail_presets(mgr: &DictManagerState) -> Element {
     let visible = mgr.clone();
     let groups = mgr.email_presets.map(|presets| vec![presets.clone()]);
@@ -369,13 +369,58 @@ fn build_lib_notice(mgr: &DictManagerState) -> Element {
         .visible_when(move || !notice.get().is_empty())
 }
 
-/// 低频文件操作和整表操作按当前类别生成，先选择范围再执行确认。
+// 在学习记录或排序页，导入的是方案数据，并非写入眼前这一张表。
+fn scheme_import_in_menu(category: WordCategory) -> bool {
+    matches!(category, WordCategory::Temp | WordCategory::Freq | WordCategory::Shadow)
+}
+
 fn library_actions(mgr: &DictManagerState) -> Vec<MenuItem> {
     let mut items = Vec::new();
+    if mgr.current_spec().ops.multi_select {
+        let rows = mgr.display_rows.borrow();
+        if !rows.is_empty() {
+            let label = if rows.iter().all(|row| mgr.is_selected(row)) {
+                "取消本页全选"
+            } else {
+                "全选本页"
+            };
+            let m = mgr.clone();
+            items.push(MenuItem::run(label, move |_| m.toggle_select_page(), false));
+        }
+    }
+    let mut tools = Vec::new();
+    if mgr.io_entry_visible() && mgr.io_entry_enabled() {
+        if scheme_import_in_menu(mgr.current_category()) {
+            let m = mgr.clone();
+            tools.push(MenuItem::run("导入方案数据…", move |ctx| m.do_import(ctx), false));
+        }
+        let m = mgr.clone();
+        let label = if mgr.current_schema_id().is_some() {
+            "导出方案数据…"
+        } else {
+            "导出…"
+        };
+        tools.push(MenuItem::run(label, move |ctx| m.do_export(ctx), false));
+    }
+    if mgr.has_nav_stats() {
+        let m = mgr.clone();
+        tools.push(MenuItem::run("系统词库统计…", move |_| m.open_nav_stats(), false));
+    }
+    let m = mgr.clone();
+    tools.push(MenuItem::run(
+        "刷新",
+        move |_| {
+            #[cfg(windows)]
+            m.registration.refresh();
+            m.refresh_all();
+        },
+        false,
+    ));
     if mgr.edit_file_target().is_some() {
         let m = mgr.clone();
-        items.push(MenuItem::run("编辑文件…", move |_| m.do_edit_file(), false));
+        tools.push(MenuItem::run("编辑文件…", move |_| m.do_edit_file(), false));
     }
+    push_group(&mut items, tools);
     let ops = mgr.current_spec().ops;
     let mut changes = Vec::new();
     if ops.promote_all {
@@ -412,14 +457,25 @@ fn library_actions(mgr: &DictManagerState) -> Vec<MenuItem> {
     items
 }
 
-/// 搜索与新增固定在同一行；勾选时的操作独立占一行，以免挤掉搜索入口。
-fn build_toolbar(mgr: &DictManagerState) -> Element {
-    // 工具栏里的输入框与两侧 `.small()` 按钮同高。
-    let small_h = windui::theme::current().metrics.control_h_sm;
-    // 添加（dict/phrase/shadow 按类别分派）
+fn add_entry_button(mgr: &DictManagerState) -> Element {
+    let caption = mgr.clone();
+    let label = mgr.table_epoch.map(move |_| {
+        use WordCategory as C;
+        match caption.current_category() {
+            C::PhraseUser => "添加短语",
+            C::Shadow => "添加调整",
+            C::QuickFormat => "添加格式",
+            C::CommonChars => "添加常用字",
+            C::Charsets => "新建字符类",
+            C::MailSuffix => "添加后缀",
+            C::UrlHistory => "添加网址",
+            C::QuickHistory => "添加内容",
+            _ => "添加词条",
+        }.to_string()
+    });
     let m_add = mgr.clone();
     let v_add = mgr.clone();
-    let add = Element::button("添加")
+    Element::button(label)
         .small()
         .outline_soft()
         .on_click(move |_| {
@@ -441,16 +497,12 @@ fn build_toolbar(mgr: &DictManagerState) -> Element {
                 _ => m_add.open_add(),
             }
         })
-        .visible_when(move || v_add.current_spec().ops.add);
+        .visible_when(move || v_add.current_spec().ops.add)
+}
 
-    // 多选（t63）：本页全选 / 删除选中。勾选框挂在编码列前（见 `render_cell`）。
-    let (m_sp, v_sp, e_sp) = (mgr.clone(), mgr.clone(), mgr.clone());
-    let select_page = Element::button("本页全选")
-        .small()
-        .outline_soft()
-        .on_click(move |_| m_sp.toggle_select_page())
-        .enabled_when(move || !e_sp.display_rows.borrow().is_empty())
-        .visible_when(move || v_sp.current_spec().ops.multi_select);
+/// 搜索与筛选共用一行；勾选词条后才展示批量操作。
+fn build_toolbar(mgr: &DictManagerState) -> Element {
+    let small_h = windui::theme::current().metrics.control_h_sm;
     let m_ds = mgr.clone();
     let delete_selected = Element::button("删除所选…")
         .small()
@@ -570,8 +622,6 @@ fn build_toolbar(mgr: &DictManagerState) -> Element {
         .spacing(6)
         .padding_xy(0, 2)
         .child(search)
-        .child(add)
-        .child(select_page)
         .child(only_modified);
 
     let selected = mgr.selected_count;
@@ -792,54 +842,21 @@ fn build_table(mgr: &DictManagerState) -> Element {
     .fill()
 }
 
-/// 右栏标题：主标题（类别或分组名，19px 半粗）+「 · 」+ 副标题（对象名，14px 常规、淡色）。
-/// 整块占标题行的剩余宽度；窄时主标题保持原样、副标题自己截断，右边的按钮不会被挤出可视区。
-/// 副标题为空（无对象的类别）时分隔点与副标题都不占位。
+/// 有具体词库时直接显示库名；其余页面显示类别名。
 fn pane_heading(mgr: &DictManagerState) -> Element {
     let sub = mgr.pane_subtitle;
     let has_sub = move || !sub.get().is_empty();
-    let wide = Element::row()
-        .cross(Align::Center)
-        .spacing(6)
+    let label = |title| Element::label_signal(title)
+        .font_size(19.0)
+        .font_weight(600)
+        .max_lines(1)
         .width_match()
-        .child(
-            Element::label_signal(mgr.pane_title)
-                .font_size(19.0)
-                .font_weight(600)
-                .fg_role(Role::Text)
-                .max_lines(1),
-        )
-        .child(
-            Element::label("·")
-                .font_size(14.0)
-                .fg_role(Role::TextMuted)
-                .visible_when(has_sub),
-        )
-        .child(
-            Element::label_signal(sub)
-                .font_size(14.0)
-                .fg_role(Role::TextMuted)
-                .max_lines(1)
-                .truncate(Truncate::End)
-                .weight(1.0)
-                .visible_when(has_sub),
-        );
-    let narrow = mgr.cats.narrow.clone();
-    let narrow_heading = move || narrow.get() && !sub.get().is_empty();
-    let wide_visible = narrow_heading.clone();
+        .truncate(Truncate::End)
+        .tooltip(title);
     Element::stack()
         .weight(1.0)
-        .child(wide.visible_when(move || !wide_visible()))
-        .child(
-            Element::label_signal(sub)
-                .font_size(19.0)
-                .font_weight(600)
-                .max_lines(1)
-                .width_match()
-                .truncate(Truncate::End)
-                .tooltip(sub)
-                .visible_when(narrow_heading),
-        )
+        .child(label(sub).visible_when(has_sub))
+        .child(label(mgr.pane_title).visible_when(move || !has_sub()))
 }
 
 /// 双击整行的激活动作：可编辑类别进入编辑对话框（候选调整走 shadow 编辑，其余走 open_edit）。
@@ -1837,11 +1854,10 @@ mod tests {
             mgr.on_nav_changed();
             assert_eq!(mgr.current_category(), cat);
             let mut tree = Tree::new();
-            let root = build_toolbar(&mgr).width(620).build(&mut tree);
+            let root = pane_header(&mgr).width(620).build(&mut tree);
             tree.root = Some(root);
             tree.layout_root(Size::new(620, 120), &mut windui::text::NullTextEngine);
-            let bar = tree.get(root).unwrap().children[0];
-            let button = tree.get(bar).unwrap().children[1];
+            let button = tree.focusable_order()[0];
             let rect = tree.abs_bounds(button);
             assert!(rect.w > 0 && rect.h > 0, "the Add button must be visible");
             let point = Point::new(rect.x + rect.w / 2, rect.y + rect.h / 2);
@@ -2078,6 +2094,31 @@ mod tests {
             .filter(|i| !i.separator)
             .map(|i| i.label.clone())
             .collect()
+    }
+
+    #[test]
+    fn personal_library_menu_keeps_page_selection_and_scheme_tools_in_context() {
+        let mgr = DictManagerState::new();
+        *mgr.schemas.borrow_mut() = vec![SchemaInfo {
+            id: "pinyin".into(),
+            name: "拼音".into(),
+            kind: "pinyin".into(),
+            ..Default::default()
+        }];
+        mgr.domain.set(GLOBAL_DOMAINS);
+        mgr.sub_tab.set(0);
+        let labels = || menu_labels(&library_actions(&mgr));
+        assert!(labels().iter().any(|l| l == "导出方案数据…"));
+        assert!(labels().iter().any(|l| l == "系统词库统计…"));
+        assert!(labels().iter().any(|l| l == "刷新"));
+        assert!(!labels().iter().any(|l| l == "全选本页"));
+        mgr.apply_rows(&json!({"items":[
+            {"code":"ling","text":"凌","weight":80},
+            {"code":"ling","text":"铃","weight":60}
+        ],"total":2}));
+        assert!(labels().iter().any(|l| l == "全选本页"));
+        mgr.toggle_select_page();
+        assert!(labels().iter().any(|l| l == "取消本页全选"));
     }
 
     /// 菜单里**不出现行内容本身**（词条 / 编码）。

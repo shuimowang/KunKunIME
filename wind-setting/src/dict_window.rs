@@ -12,14 +12,17 @@ use crate::state::AppState;
 pub fn build_content(app: Rc<RefCell<AppState>>) -> Element {
     let mgr = app.borrow().dict_mgr.clone();
     let app_menu = app.clone();
-    let back = app.clone();
-    let back_button = Element::button("返回上页")
-        .small()
-        .outline_soft()
-        .tooltip("回到进入词库前的设置页")
-        .on_click(move |_| back.borrow().return_to_settings());
-    let sidebar = build_category_nav(&mgr, back_button)
-        .on_context_menu(move || crate::pages::config_import::dictionary_import_menu(&app_menu));
+    let sidebar = build_category_nav(&mgr).on_context_menu(move || {
+        let mut items = crate::pages::config_import::dictionary_import_menu(&app_menu);
+        let back = app_menu.clone();
+        items.push(MenuItem::separator());
+        items.push(MenuItem::run(
+            "返回上页",
+            move |_| back.borrow().return_to_settings(),
+            false,
+        ));
+        items
+    });
 
     let body = Element::row()
         .fill()
@@ -84,7 +87,7 @@ mod tests {
         let app = Rc::new(RefCell::new(AppState::empty()));
         let mut tree = build_tree(&app);
 
-        // 分类栏空白区域与设置侧栏使用相同的导入菜单。
+        // 分类栏空白右键菜单提供通用导入入口和回到上一设置页的快捷操作。
         let (mut hover, mut capture) = (None, None);
         let res = tree.dispatch_pointer(
             PointerEvent::single(PointerKind::Down, Point::new(100, 300), MouseButton::Right),
@@ -100,8 +103,8 @@ mod tests {
             .collect();
         assert_eq!(
             labels,
-            vec!["从剪贴板导入配置", "导入文件…"],
-            "词库窗与主窗必须是同一份菜单（`import_menu_items`），实得 {labels:?}"
+            vec!["从剪贴板导入配置", "导入文件…", "返回上页"],
+            "分类栏提供导入与返回操作，实得 {labels:?}"
         );
     }
 

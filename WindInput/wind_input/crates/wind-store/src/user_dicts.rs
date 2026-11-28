@@ -429,24 +429,71 @@ impl Store {
         name: &str,
         rows: &[crate::wdict::WordIo],
     ) -> anyhow::Result<usize> {
-        let mut out: Vec<(String, String, u64, i32)> = Vec::with_capacity(rows.len());
-        let mut at: std::collections::HashMap<(String, String), usize> =
-            std::collections::HashMap::new();
-        for r in rows {
-            let (flat, b, text) = wind_userdata::text::normalize_key(&r.code, &r.text, false);
-            if flat.is_empty() || text.is_empty() {
-                continue;
-            }
-            match at.get(&(flat.clone(), text.clone())) {
-                Some(&i) => out[i].3 = out[i].3.max(r.weight),
-                None => {
-                    at.insert((flat.clone(), text.clone()), out.len());
-                    out.push((flat, text, r.boundary.unwrap_or(b), r.weight));
-                }
-            }
-        }
+        let out = normalized_import_rows(rows);
         self.write_new_lib(ds, name, &out)?;
         Ok(out.len())
+    }
+
+    /// Bind an append dialog to the selected existing library before the file picker opens.
+    pub fn user_dict_revision(&self, ds: &str, name: &str) -> anyhow::Result<String> {
+        let path = self.existing_lib(ds, name)?;
+        let (bytes, _) =
+            fold::read_text(&path)?.ok_or_else(|| anyhow::anyhow!("分库不存在：{name}"))?;
+        Ok(fold::fingerprint(Some(&bytes)))
+    }
+
+    /// Merge into an existing file in one checked replacement. Existing rows retain their
+    /// spelling, syllable boundaries and weights, including alternate candidates at the same code.
+    pub fn append_user_dict(
+        &self,
+        ds: &str,
+        name: &str,
+        expected: &str,
+        rows: &[crate::wdict::WordIo],
+    ) -> anyhow::Result<usize> {
+        use wind_userdata::text::{PatchOp, parse, patch_with_banner};
+        self.ensure_writable()?;
+        let _guard = self.lock_user_dict_writes();
+        let path = self.existing_lib(ds, name)?;
+        self.check_not_editing(&path)?;
+        let (bytes, mtime) =
+            fold::read_text(&path)?.ok_or_else(|| anyhow::anyhow!("分库不存在：{name}"))?;
+        anyhow::ensure!(
+            fold::fingerprint(Some(&bytes)) == expected,
+            "分库「{name}」已变化，请重新选择导入文件。"
+        );
+        let dict = parse(&bytes, &path, false)
+            .map_err(|e| anyhow::anyhow!("分库 {name} 无法解析：{e:?}"))?;
+        let existing: std::collections::HashSet<_> = dict
+            .entries
+            .iter()
+            .map(|e| (e.code.as_str(), e.text.as_str()))
+            .collect();
+        let ops: Vec<_> = normalized_import_rows(rows)
+            .into_iter()
+            .filter(|(code, text, _, _)| !existing.contains(&(code.as_str(), text.as_str())))
+            .map(|(code, text, boundary, weight)| PatchOp::Upsert {
+                code,
+                text,
+                boundary,
+                weight,
+            })
+            .collect();
+        if !ops.is_empty() {
+            let out = patch_with_banner(
+                &bytes,
+                &path,
+                false,
+                &ops,
+                mtime,
+                name,
+                ds == PINYIN_DS,
+                None,
+            )
+            .map_err(|e| anyhow::anyhow!("分库 {name} 无法解析：{e:?}"))?;
+            fold::commit_text(&path, &out, Some(expected))?;
+        }
+        Ok(ops.len())
     }
 
     /// 改名：文件改名，文件头 `name:` 恰为旧名时一并改；`dicts.toml` 里各方案的记录同步。
@@ -675,6 +722,30 @@ impl Store {
         fold::commit_text(&p, out.as_bytes(), Some(&fold::fingerprint(Some(&bytes))))?;
         Ok(n)
     }
+}
+
+/// 同一输入中的重复键取较高权重；先后顺序及首个词条的音节边界保持不变。
+fn normalized_import_rows(rows: &[crate::wdict::WordIo]) -> Vec<(String, String, u64, i32)> {
+    let mut out: Vec<(String, String, u64, i32)> = Vec::with_capacity(rows.len());
+    let mut at: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
+    for r in rows {
+        let (code, boundary, text) = wind_userdata::text::normalize_key(&r.code, &r.text, false);
+        if code.is_empty() || text.is_empty() {
+            continue;
+        }
+        match at.entry((code.clone(), text.clone())) {
+            std::collections::hash_map::Entry::Occupied(slot) => {
+                let row = &mut out[*slot.get()];
+                row.3 = row.3.max(r.weight);
+            }
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(out.len());
+                out.push((code, text, r.boundary.unwrap_or(boundary), r.weight));
+            }
+        }
+    }
+    out
 }
 
 /// 界面加词的码 / 词：非空、不含 tab 与换行（一行一条、tab 分列）。

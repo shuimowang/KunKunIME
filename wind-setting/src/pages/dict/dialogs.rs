@@ -319,6 +319,7 @@ fn build_import_dialog(mgr: &DictManagerState) -> Element {
     let sample = mgr.clone();
     let sample_format = mgr.io_format_note;
     let sample_ready = mgr.import_ready;
+    let options = mgr.import_options_open;
     let file_row = Element::row()
         .width_match()
         .cross(Align::Center)
@@ -344,12 +345,20 @@ fn build_import_dialog(mgr: &DictManagerState) -> Element {
                 .enabled_when(move || sample_ready.get())
                 .tooltip("查看前 8 个词按当前方案生成的编码")
                 .on_click(move |_| sample.preview_word_codes()),
+        )
+        .child(
+            Element::button(options.map(|open| {
+                if *open { "收起导入选项" } else { "更多导入选项" }.to_string()
+            }))
+            .small()
+            .outline_soft()
+            .on_click(move |_| options.set(!options.get())),
         );
     let body = dialog_body()
         .spacing(12)
         .child(
             Element::label(
-                "从 WindDict / Rime / TSV / 纯词列表导入（按内容自动识别）。文件须为 UTF-8 编码。",
+                "选择 UTF-8 词表。导入拼音词库时，人名可以每行写一个。",
             )
             .font_size(12.5)
             .fg_role(Role::TextMuted)
@@ -358,12 +367,12 @@ fn build_import_dialog(mgr: &DictManagerState) -> Element {
         )
         .child(file_row)
         .child(io_target_row(mgr, "导入到"))
-        .child(io_format_row(mgr.io_format, mgr.io_format_note))
+        .child(io_format_row(mgr.io_format, mgr.io_format_note).visible_when(move || options.get()))
         .child({
             let m = mgr.clone();
-            io_weight_row(mgr, move || m.is_word_list_import())
+            io_weight_row(mgr, move || options.get() && m.is_word_list_import())
         })
-        .child(io_type_row(mgr))
+        .child(io_type_row(mgr).visible_when(move || options.get() || sample_format.get() == "WindDict 词库"))
         .child(io_boundary_row(mgr))
         // 提示与预览同处一个固定视口：三条的行数各自随目标/文件变动，分开放会让对话框
         // 高度跟着跳。放不下时内部滚动，外框尺寸恒定（见 IO_NOTE_VIEWPORT_H）。
@@ -398,6 +407,8 @@ fn build_import_dialog(mgr: &DictManagerState) -> Element {
             Element::button("替换导入")
                 .small()
                 .danger()
+                .tooltip("替换目标方案中勾选的数据类型")
+                .visible_when(move || options.get())
                 .enabled_when(move || replace_ready.import_enabled())
                 .on_click(move |_| replace.confirm_import("replace")),
         )
@@ -1113,12 +1124,19 @@ fn build_lib_prompt_dialog(mgr: &DictManagerState) -> Element {
         .visible_when(move || importing.get());
     let format_row =
         io_format_row(libs.format, libs.format_note).visible_when(move || importing.get());
-    let encoding_note = Element::label(crate::text_file::UTF8_ONLY)
-        .font_size(12.0)
-        .fg_role(Role::TextMuted)
-        .width_match()
-        .max_lines(1)
-        .visible_when(move || importing.get());
+    let encoding_note = Element::label_signal(libs.appending.map(|append| {
+        if *append {
+            "只添加新词条；已有的相同编码和词条保留原权重。"
+        } else {
+            crate::text_file::UTF8_ONLY
+        }
+        .to_string()
+    }))
+    .font_size(12.0)
+    .fg_role(Role::TextMuted)
+    .width_match()
+    .max_lines(1)
+    .visible_when(move || importing.get());
     let m_wl = mgr.clone();
     let weight_row = io_weight_row(mgr, move || m_wl.lib_import_is_word_list());
 
@@ -1142,7 +1160,16 @@ fn build_lib_prompt_dialog(mgr: &DictManagerState) -> Element {
     let body = dialog_body()
         .spacing(12)
         .child(file_row)
-        .child(name_row)
+        .child(name_row.visible_when(move || !libs.appending.get()))
+        .child(
+            Element::row()
+                .width_match()
+                .cross(Align::Center)
+                .spacing(8)
+                .child(label("目标词库"))
+                .child(Element::label_signal(libs.name).weight(1.0))
+                .visible_when(move || libs.appending.get()),
+        )
         .child(error)
         .child(format_row)
         .child(weight_row)

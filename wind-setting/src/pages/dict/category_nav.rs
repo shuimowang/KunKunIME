@@ -43,9 +43,7 @@ pub enum NavNode {
     Main(usize),
     /// 一个分库（文件主名）。
     Lib(usize, String),
-    /// 「系统词库」分组标题（不可选、无菜单）。
-    SysGroup,
-    /// 分组下唯一的条目「词库列表」：点开右栏的词库表（不是类别，不切子标签、无菜单）。
+    /// 「系统词库」：打开右栏的系统词库表，不改变当前用户词库子标签。
     SysList,
 }
 
@@ -54,16 +52,13 @@ impl NavNode {
     pub fn tab(&self) -> usize {
         match self {
             NavNode::Tab(i) | NavNode::LibGroup(i) | NavNode::Main(i) | NavNode::Lib(i, _) => *i,
-            NavNode::Heading | NavNode::SysGroup | NavNode::SysList => usize::MAX,
+            NavNode::Heading | NavNode::SysList => usize::MAX,
         }
     }
 
     /// 是不是分组标题。
     pub fn is_heading(&self) -> bool {
-        matches!(
-            self,
-            NavNode::LibGroup(_) | NavNode::Heading | NavNode::SysGroup
-        )
+        matches!(self, NavNode::LibGroup(_) | NavNode::Heading)
     }
 }
 
@@ -72,7 +67,7 @@ impl NavNode {
 pub struct NavEntry {
     pub node: NavNode,
     pub title: String,
-    /// 缩进层级：0 = 类别，1 = 用户词库下的主词库与分库（留出勾选框那一列）。
+    /// 缩进层级：0 = 类别，1 = 用户词库下的主词库与分库。
     pub depth: u8,
     /// 分库：开关状态。
     pub enabled: Option<bool>,
@@ -95,20 +90,7 @@ impl NavEntry {
     }
 }
 
-/// 「用户词库」分组之后其余类别的分组标题。
-pub(crate) const OTHER_HEADING: &str = "其他";
-
-/// 「系统词库」分组下那个条目的标题。
-pub(crate) const SYS_LIST_TITLE: &str = "词库列表";
-
-/// 底栏按钮「词库统计」的文案。说「词库」不说「主词库」：本栏的「主词库」是用户的主分库。
-const STATS_TITLE: &str = "词库统计";
-
-/// 按子标签序列与分库列表排出中栏。`libs` 为 `None`（不是方案域、或 core 不认分库）时
-/// 「用户词库」只是普通的一类；否则它是一个分组（主词库 + 各分库），其余类别归到「其他」。
-/// `main_count` 是主词库的条目数（还没取到为 `None`）。`cats` 非空时用户词库（分组或那一类）之后是「系统词库」分组标题与其下
-/// 唯一的条目「词库列表」（不带计数、库再多也不变长；方案没有可列的系统词库时不出），其后
-/// 的类别同样归到「其他」；方案没有用户词库时它们在最前。
+/// 用户词库有分库时列出主词库和各分库。系统词库占一行，其后的临时词库、词频和候选调整归到「学习与候选」。
 pub fn nav_entries(
     tabs: &[LogicalTab],
     libs: Option<&[UserLib]>,
@@ -116,19 +98,12 @@ pub fn nav_entries(
     cats: &[SysCat],
 ) -> Vec<NavEntry> {
     let mut out = Vec::new();
-    let mut grouped = false;
-    let mut sys_pending = !cats.is_empty();
-    if sys_pending && !tabs.contains(&LogicalTab::UserDict) {
-        push_sys_group(&mut out);
-        sys_pending = false;
-        grouped = true;
+    let system_entry = || NavEntry::plain(NavNode::SysList, SYS_TITLE, 0);
+    let mut grouped = !cats.is_empty() && !tabs.contains(&LogicalTab::UserDict);
+    if grouped {
+        out.push(system_entry());
     }
     for (i, tab) in tabs.iter().enumerate() {
-        if sys_pending && i > 0 && tabs[i - 1] == LogicalTab::UserDict {
-            push_sys_group(&mut out);
-            sys_pending = false;
-            grouped = true;
-        }
         match (tab, libs) {
             (LogicalTab::UserDict, Some(libs)) => {
                 grouped = true;
@@ -148,23 +123,17 @@ pub fn nav_entries(
             _ => {
                 if grouped {
                     grouped = false;
-                    out.push(NavEntry::plain(NavNode::Heading, OTHER_HEADING, 0));
+                    out.push(NavEntry::plain(NavNode::Heading, "学习与候选", 0));
                 }
                 out.push(NavEntry::plain(NavNode::Tab(i), tab.title(), 0));
             }
         }
-    }
-    if sys_pending {
-        // 用户词库是最后一类
-        push_sys_group(&mut out);
+        if *tab == LogicalTab::UserDict && !cats.is_empty() {
+            out.push(system_entry());
+            grouped = true;
+        }
     }
     out
-}
-
-/// 「系统词库」分组标题 + 其下的「词库列表」（没有勾选框那一列，不缩进，同「其他」下的类别）。
-fn push_sys_group(out: &mut Vec<NavEntry>) {
-    out.push(NavEntry::plain(NavNode::SysGroup, SYS_TITLE, 0));
-    out.push(NavEntry::plain(NavNode::SysList, SYS_LIST_TITLE, 0));
 }
 
 impl DictManagerState {
@@ -179,12 +148,12 @@ impl DictManagerState {
         )
     }
 
-    /// 中栏底栏的「词库统计」是否可用：只有方案域（全局域没有系统词库）。
+    /// 只有方案域提供词库统计。
     pub(crate) fn has_nav_stats(&self) -> bool {
         self.current_schema_id().is_some()
     }
 
-    /// 打开当前方案的词库统计对话框（底栏按钮；不动选中的类别）。
+    /// 打开当前方案的词库统计对话框，沿用当前选择。
     pub(crate) fn open_nav_stats(&self) {
         self.open_stats_at(self.domain.get());
     }
@@ -197,7 +166,7 @@ impl DictManagerState {
     }
 
     /// 节点是否选中。组标题从不高亮（选中的是它下面的主词库）。右栏开着系统词库时只有
-    /// 「词库列表」高亮。
+    /// 「系统词库」高亮。
     pub fn is_nav_selected(&self, node: &NavNode) -> bool {
         if self.cats.open.get() {
             return *node == NavNode::SysList;
@@ -206,7 +175,7 @@ impl DictManagerState {
         match node {
             NavNode::SysList => false,
             NavNode::Tab(i) => cur == *i,
-            NavNode::LibGroup(_) | NavNode::Heading | NavNode::SysGroup => false,
+            NavNode::LibGroup(_) | NavNode::Heading => false,
             NavNode::Main(i) => cur == *i && self.libs.current.get().is_none(),
             NavNode::Lib(i, n) => cur == *i && self.libs.current.get().as_deref() == Some(n),
         }
@@ -216,7 +185,7 @@ impl DictManagerState {
     /// 重载；子标签没变而分库变了，由 [`Self::select_lib`] 重载）。
     pub fn select_nav(&self, node: &NavNode) {
         match node {
-            NavNode::LibGroup(_) | NavNode::Heading | NavNode::SysGroup => return,
+            NavNode::LibGroup(_) | NavNode::Heading => return,
             NavNode::SysList => {
                 self.open_sys_cats();
                 return;
@@ -242,10 +211,10 @@ impl DictManagerState {
     }
 
     /// 右栏标题的两段：(类别或分组名, 对象名)，界面上以「 · 」相连；没有对象的类别副标题为空。
-    /// 用户词库分了库时对象是「主词库」或分库名；系统词库是「词库列表」或某本库的名字。
+    /// 用户词库分了库时显示「主词库」或分库名；进入一本系统词库后显示其名称。
     pub(crate) fn pane_titles_now(&self) -> (String, String) {
         match self.current_category() {
-            WordCategory::SysDicts => return (SYS_TITLE.into(), SYS_LIST_TITLE.into()),
+            WordCategory::SysDicts => return (SYS_TITLE.into(), String::new()),
             WordCategory::SysEntries => return (SYS_TITLE.into(), self.sys_view_title()),
             _ => {}
         }
@@ -270,19 +239,19 @@ impl DictManagerState {
     /// 分组标题不可选，右键也不换掉正在看的那一项。
     pub fn nav_menu_items(&self, node: &NavNode) -> Vec<MenuItem> {
         // 系统词库没有菜单。
-        if matches!(node, NavNode::SysGroup | NavNode::SysList) {
+        if *node == NavNode::SysList {
             return Vec::new();
         }
         self.select_nav(node);
         match node {
             NavNode::LibGroup(_) => self.lib_add_menu_items(),
-            NavNode::Heading | NavNode::SysGroup | NavNode::SysList => Vec::new(),
+            NavNode::Heading | NavNode::SysList => Vec::new(),
             NavNode::Lib(_, name) => self.lib_menu_items(name),
             NavNode::Tab(_) | NavNode::Main(_) => self.file_menu_items(),
         }
     }
 
-    /// 「用户词库」组标题与栏顶「+」的菜单。
+    /// 「用户词库」组标题与「新建词库…」按钮共用的菜单。
     pub fn lib_add_menu_items(&self) -> Vec<MenuItem> {
         let (m_new, m_imp, m_dir) = (self.clone(), self.clone(), self.clone());
         vec![
@@ -362,7 +331,7 @@ impl DictManagerState {
 
 /// 构建中栏：分组、导航与分库添加入口随 `nav_epoch` 重建。
 /// 底色同主窗二级导航（`SurfaceAlt`，与右栏同色、靠分隔线分开）。
-pub fn build_category_nav(mgr: &DictManagerState, back: Element) -> Element {
+pub fn build_category_nav(mgr: &DictManagerState) -> Element {
     let m_list = mgr.clone();
     let list =
         Element::host_signal(mgr.nav_epoch, move |_| build_list(&m_list)).padding_xy(SIDE_PAD, 0);
@@ -390,49 +359,7 @@ pub fn build_category_nav(mgr: &DictManagerState, back: Element) -> Element {
                 .tooltip("切换输入方案或全局词库"),
         )
         .on_context_menu(move || domain_menu.domain_menu_items(domain_menu.domain.get()));
-    let m_refresh = mgr.clone();
     let status = mgr.status;
-    let stats = mgr.clone();
-    let has_stats = mgr.clone();
-    let footer = Element::col()
-        .width_match()
-        .spacing(6)
-        .padding_xy(SIDE_PAD, 6)
-        .child(
-            Element::label_signal(status)
-                .font_size(11.0)
-                .fg_role(Role::TextMuted)
-                .width_match()
-                .max_lines(2)
-                .visible_when(move || !status.get().is_empty()),
-        )
-        .child(
-            Element::button(STATS_TITLE)
-                .small()
-                .outline_soft()
-                .width_match()
-                .tooltip("查看当前方案系统词库的词数分布与重码")
-                .on_click(move |_| stats.open_nav_stats())
-                .visible_when(move || has_stats.has_nav_stats()),
-        )
-        .child(
-            Element::row()
-                .width_match()
-                .spacing(6)
-                .child(back.weight(1.0))
-                .child(
-                    Element::button("刷新")
-                        .small()
-                        .outline_soft()
-                        .weight(1.0)
-                        .tooltip("重新读取数据文件并刷新词库")
-                        .on_click(move |_| {
-                            #[cfg(windows)]
-                            m_refresh.registration.refresh();
-                            m_refresh.refresh_all();
-                        }),
-                ),
-        );
 
     Element::col()
         .width(CATNAV_W)
@@ -442,8 +369,15 @@ pub fn build_category_nav(mgr: &DictManagerState, back: Element) -> Element {
         .spacing(4)
         .child(selector)
         .child(Element::scroll().fill().weight(1.0).child(list))
-        .child(Element::divider())
-        .child(footer)
+        .child(
+            Element::label_signal(status)
+                .font_size(11.0)
+                .fg_role(Role::TextMuted)
+                .width_match()
+                .max_lines(2)
+                .padding_xy(SIDE_PAD, 0)
+                .visible_when(move || !status.get().is_empty()),
+        )
 }
 
 fn build_list(mgr: &DictManagerState) -> Element {
@@ -460,21 +394,25 @@ fn build_list(mgr: &DictManagerState) -> Element {
 
 /// 用户词库的按钮独立于标题，与标题原有的右键菜单共用同一组操作。
 fn heading_row(mgr: &DictManagerState, e: &NavEntry) -> Element {
-    let title = group_title(&e.title);
     if !matches!(e.node, NavNode::LibGroup(_)) {
-        return title;
+        return group_title(&e.title);
     }
     let (ctx_mgr, node, add_mgr) = (mgr.clone(), e.node.clone(), mgr.clone());
     Element::row()
         .width_match()
         .cross(Align::Center)
         .child(
-            title
+            Element::label(e.title.clone())
+                .font_size(11.5)
+                .font_weight(600)
+                .fg_role(Role::TextMuted)
+                .max_lines(1)
+                .padding_xy(ROW_PAD_X, 0)
                 .weight(1.0)
                 .on_context_menu(move || ctx_mgr.nav_menu_items(&node)),
         )
         .child(
-            Element::button("添加…")
+            Element::button("新建词库…")
                 .small()
                 .outline_soft()
                 .tooltip("新建或导入用户分库")
@@ -503,7 +441,7 @@ fn nav_row(mgr: &DictManagerState, e: NavEntry) -> Element {
                 .corner(7.0)
                 .cross(Align::Center)
                 .spacing(4)
-                .padding_xy(ROW_PAD_X, 0);
+                .padding_edges(Insets::new(ROW_PAD_X + i32::from(e.depth) * 8, 0, ROW_PAD_X, 0));
             // 主词库始终启用，仅分库显示可操作的复选框。
             if let Some((sig, m, node)) = &toggle {
                 let (sig, m, node) = (*sig, m.clone(), node.clone());
@@ -595,7 +533,7 @@ mod tests {
                 ("主词库".into(), 1),
                 ("成语".into(), 1),
                 ("行业词".into(), 1),
-                ("其他".into(), 0),
+                ("学习与候选".into(), 0),
                 ("临时词库".into(), 0),
                 ("词频".into(), 0),
                 ("候选调整".into(), 0),
@@ -625,7 +563,7 @@ mod tests {
             [
                 ("用户词库".into(), 0),
                 ("主词库".into(), 1),
-                ("其他".into(), 0),
+                ("学习与候选".into(), 0),
                 ("临时词库".into(), 0)
             ]
         );
@@ -634,7 +572,7 @@ mod tests {
         assert_eq!(titles(&v), [("系统短语".into(), 0), ("用户短语".into(), 0)]);
     }
 
-    /// 中栏列表里没有「词库统计」：它是底栏按钮，不是节点。
+    /// 词库统计作为操作入口，不参与分类选择。
     #[test]
     fn stats_is_not_a_nav_node() {
         let tabs = [LogicalTab::UserDict, LogicalTab::Temp];
@@ -656,10 +594,9 @@ mod tests {
         }
     }
 
-    /// 方案有系统词库：用户词库分组（主词库 / 分库）之后一个「系统词库」分组标题，不带计数、
-    /// 不挂子项（库再多中栏也不变长），之后是「其他」分组。
+    /// 多本系统词库共用一条入口，接在个人分库之后、学习数据之前。
     #[test]
-    fn system_dict_group_follows_the_user_dict_group() {
+    fn system_dict_entry_follows_the_user_dict_group() {
         let tabs = [LogicalTab::UserDict, LogicalTab::Temp];
         let cats = [
             cat("a", true, Some(48721)),
@@ -675,20 +612,17 @@ mod tests {
                 ("主词库".into(), 1),
                 ("成语".into(), 1),
                 ("系统词库".into(), 0),
-                ("词库列表".into(), 0),
-                ("其他".into(), 0),
+                ("学习与候选".into(), 0),
                 ("临时词库".into(), 0),
             ]
         );
-        assert_eq!(v[3].node, NavNode::SysGroup);
-        assert!(v[3].node.is_heading(), "系统词库是分组标题，同用户词库");
-        assert_eq!(v[4].node, NavNode::SysList);
-        assert!(!v[4].node.is_heading(), "「词库列表」是可点条目");
-        assert_eq!((v[4].enabled, v[4].count), (None, None), "无勾选框、无计数");
+        assert_eq!(v[3].node, NavNode::SysList);
+        assert!(!v[3].node.is_heading(), "系统词库可直接点击");
+        assert_eq!((v[3].enabled, v[3].count), (None, None));
         assert_eq!(v[3].node.tab(), usize::MAX);
-        assert_eq!(v[4].node.tab(), usize::MAX);
+        assert_eq!(v[4].node, NavNode::Heading);
         assert_eq!(v[0].node, NavNode::LibGroup(0), "子标签下标不受影响");
-        assert_eq!(v[6].node, NavNode::Tab(1));
+        assert_eq!(v[5].node, NavNode::Tab(1));
         assert_eq!(
             v.iter().filter(|e| e.node == NavNode::SysList).count(),
             1,
@@ -696,7 +630,7 @@ mod tests {
         );
     }
 
-    /// 没有分库组：跟在「用户词库」那一类之后，后面照样分出「其他」；用户词库是最后一类或
+    /// 没有分库组：跟在「用户词库」那一类之后，后面照样分出「学习与候选」；用户词库是最后一类或
     /// 方案没有用户词库时各自落位；没有可列的系统词库不出。
     #[test]
     fn system_dict_edge_cases() {
@@ -707,8 +641,7 @@ mod tests {
             [
                 ("用户词库".into(), 0),
                 ("系统词库".into(), 0),
-                ("词库列表".into(), 0),
-                ("其他".into(), 0),
+                ("学习与候选".into(), 0),
                 ("临时词库".into(), 0),
             ]
         );
@@ -722,8 +655,7 @@ mod tests {
             titles(&v),
             [
                 ("用户词库".into(), 0),
-                ("系统词库".into(), 0),
-                ("词库列表".into(), 0)
+                ("系统词库".into(), 0)
             ]
         );
         let v = nav_entries(&[LogicalTab::Shadow], None, None, &[cat("a", false, None)]);
@@ -731,15 +663,14 @@ mod tests {
             titles(&v),
             [
                 ("系统词库".into(), 0),
-                ("词库列表".into(), 0),
-                ("其他".into(), 0),
+                ("学习与候选".into(), 0),
                 ("候选调整".into(), 0)
             ]
         );
         let v = nav_entries(&tabs, None, None, &[]);
         assert!(
             !v.iter()
-                .any(|e| matches!(e.node, NavNode::SysGroup | NavNode::SysList))
+                .any(|e| e.node == NavNode::SysList)
         );
     }
 
@@ -983,7 +914,7 @@ mod tests {
             windui::testing::run_with_ctx(|ctx| f(ctx));
             assert!(
                 st.stats.visible.get(),
-                "右键菜单与中栏底栏按钮打开同一个对话框"
+                "右键菜单打开当前方案统计"
             );
             assert_eq!(st.stats.view.borrow().schema_id, "wb");
             let windui::event::MenuAction::Run(f) = &items[3].action else {
@@ -1051,7 +982,7 @@ mod tests {
     /// 方案域可以打开词库统计。点按钮打开统计对话框、
     /// 不切类别、不改选中的节点。
     #[test]
-    fn stats_button_bar_is_schema_only_and_opens_the_dialog() {
+    fn stats_action_is_schema_only_and_opens_the_dialog() {
         with_mock(|| {
             let st = state();
             assert!(st.has_nav_stats());
@@ -1070,13 +1001,13 @@ mod tests {
         });
     }
 
-    /// 中栏连同「系统词库」分组标题建得出来（可点的标题挂在容器上）。
+    /// 有系统词库的分类栏可以布局。
     #[test]
     fn column_with_system_dict_builds() {
         with_mock(|| {
             let st = cats_state();
             let mut tree = windui::core::Tree::new();
-            let root = build_category_nav(&st, Element::button("返回上页")).build(&mut tree);
+            let root = build_category_nav(&st).build(&mut tree);
             tree.root = Some(root);
             tree.layout_root(
                 windui::geometry::Size::new(CATNAV_W, 600),
@@ -1085,8 +1016,7 @@ mod tests {
         });
     }
 
-    /// 点「词库列表」：右栏换成词库表、只高亮这个条目、不切子标签；点回别的节点收起；从二级
-    /// 点别处再点回来，落在一级。「系统词库」分组标题点不动、不高亮、无菜单。
+    /// 点击系统词库就打开词库表；返回个人词库后再次进入会回到一级列表。
     #[test]
     fn clicking_system_dict_opens_the_pane() {
         with_mock(|| {
@@ -1121,11 +1051,7 @@ mod tests {
             assert!(st.is_nav_selected(&NavNode::SysList));
             assert!(!st.is_nav_selected(&NavNode::Main(0)));
             assert!(st.nav_menu_items(&NavNode::SysList).is_empty());
-            assert!(!st.is_nav_selected(&NavNode::SysGroup), "分组标题不高亮");
-            assert!(st.nav_menu_items(&NavNode::SysGroup).is_empty());
-            click(&st, &NavNode::SysGroup);
-            assert!(st.cats.open.get(), "点分组标题什么都不变");
-            assert_eq!(pane(&st), ("系统词库".into(), "词库列表".into()));
+            assert_eq!(pane(&st), ("系统词库".into(), String::new()));
 
             st.enter_sys_dict("wubi86_extra");
             assert!(st.cats.viewing.get().is_some());
@@ -1152,7 +1078,7 @@ mod tests {
         });
     }
 
-    /// 带目标打开：从别的域跳到方案所在域并选中「词库列表」；导航 effect（测试里手动补一次）
+    /// 带目标打开：从别的域跳到方案所在域并选中「系统词库」；导航 effect（测试里手动补一次）
     /// 跑完后不得把它收起。已在该域时没有 effect，直接落到列表。
     #[test]
     fn open_sys_list_of_selects_the_list_after_nav_effect() {

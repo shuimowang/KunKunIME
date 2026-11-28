@@ -262,6 +262,8 @@ pub struct DictManagerState {
     /// 只给这两项。强制指定 WindDict/Rime/TSV 需要 core 的 preview/import 接受 format
     /// 参数（它们现在一律按内容自动识别），给了也不生效——列一个点了没反应的选项比不列更糟。
     pub io_format: Signal<usize>,
+    /// 文件格式、默认权重和替换导入收在可展开的选项中。
+    pub import_options_open: Signal<bool>,
     /// 格式行右侧的识别结果回显（"纯词列表" / "WindDict 词库" / …；空 = 未选文件）。
     pub io_format_note: Signal<String>,
     /// 纯词列表入库权重（用户可改）。纯词列表没有权重列，只能由用户给一个。
@@ -699,6 +701,7 @@ impl DictManagerState {
             io_auto_note: signal(String::new()),
             io_engine_note: signal(String::new()),
             io_format: signal(0),
+            import_options_open: signal(false),
             io_format_note: signal(String::new()),
             io_weight: signal("1200".to_string()),
             pending_wordlist: Rc::new(RefCell::new(None)),
@@ -1468,16 +1471,14 @@ impl DictManagerState {
             return "没有符合次数和闲置天数条件的词条。".into();
         }
         match self.current_category() {
-            WordCategory::UserDict => "还没有个人词条，可添加或批量导入。",
-            WordCategory::UserLib => "此分库还没有词条，可点击「添加」。",
+            WordCategory::UserDict | WordCategory::UserLib => "还没有个人词条，可点「添加词条」或「批量导入」。",
             WordCategory::PhraseUser => "还没有用户短语，可添加常用短码和对应文本。",
             WordCategory::Temp => "还没有待转正的临时词。",
             WordCategory::Freq => "还没有选词频次记录。",
             WordCategory::Shadow => "还没有固定位置或隐藏候选的规则。",
-            WordCategory::MailSuffix => "还没有个人后缀，可点击「添加」。",
-            WordCategory::UrlHistory | WordCategory::QuickHistory => {
-                "还没有补全项，可点击「添加」。"
-            }
+            WordCategory::MailSuffix => "还没有个人后缀，可点击「添加后缀」。",
+            WordCategory::UrlHistory => "还没有网址，可点击「添加网址」。",
+            WordCategory::QuickHistory => "还没有快捷输入内容，可点击「添加内容」。",
             WordCategory::CommonChars if self.only_modified.get() => "没有已修改的字符。",
             _ => "此列表暂无条目。",
         }
@@ -3689,7 +3690,7 @@ impl DictManagerState {
     /// 右栏标题行「导入/导出」按钮是否显示：方案域（有方案）或短语域；分库不显示（分库的
     /// 导入是中栏「从文件导入为分库」，导出就是它的文件本身）。
     pub fn io_entry_visible(&self) -> bool {
-        // 分库与系统词库都不走这套导入导出
+        // 分库有独立的追加入口，分库与系统词库均不走方案级导入导出。
         if matches!(
             self.current_category(),
             WordCategory::UserLib | WordCategory::SysDicts | WordCategory::SysEntries
@@ -3889,6 +3890,7 @@ impl DictManagerState {
         if !self.prepare_io_dialog("导入") {
             return;
         }
+        self.import_options_open.set(false);
         self.import_file_name.set(String::new());
         self.import_preview_msg.set(String::new());
         self.import_ready.set(false);
@@ -3952,7 +3954,7 @@ impl DictManagerState {
         ctx.request_pick_file(
             PickDialog::new()
                 .title("选择词库文件")
-                .filter("词库文件 (WindDict/Rime/TSV)", &["yaml", "txt"]),
+                .filter("词库文件 (纯词列表 / TSV / Rime / WindDict)", &["txt", "tsv", "yaml", "wdict"]),
             move |path| {
                 let Some(path) = path else {
                     return crate::file_pick::report_failure(|m| state.notify_err(m));

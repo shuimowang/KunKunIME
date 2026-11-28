@@ -1054,7 +1054,7 @@ const SPEC_USERDICT: CategorySpec = CategorySpec {
 };
 
 /// 用户分库：同用户词库的列与操作（增删改、清空、多选），都按行补丁改分库文件。
-/// 导入导出不在这里：分库的「导入」是中栏的「从文件导入为分库」，导出就是拷贝文件。
+/// 分库顶部的批量导入只追加到当前分库；新建分库另走中栏入口，导出可直接拷贝分库文件。
 const SPEC_USERLIB: CategorySpec = CategorySpec {
     category: WordCategory::UserLib,
     title: "用户分库",

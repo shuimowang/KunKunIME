@@ -224,6 +224,26 @@ pub(super) fn delete<H: WebDataRpc + ?Sized>(h: &H, params: &Value) -> anyhow::R
 /// 第三方 / 自有文件（Rime、TSV、WindDict 的 words 段）转成分库的 Rime 格式整写。纯词表
 /// （无编码）先经 `dict.encodeWords` 出码、拼成 TSV 再以 `content` 传进来。
 pub(super) fn import_as<H: WebDataRpc + ?Sized>(h: &H, params: &Value) -> anyhow::Result<Value> {
+    import_library(h, params, None)
+}
+
+pub(super) fn revision<H: WebDataRpc + ?Sized>(h: &H, params: &Value) -> anyhow::Result<Value> {
+    let (_, ds, store) = target(h, params)?;
+    Ok(json!({"revision": store.user_dict_revision(&ds, str_param(params, "name")?)?}))
+}
+
+pub(super) fn append_import<H: WebDataRpc + ?Sized>(
+    h: &H,
+    params: &Value,
+) -> anyhow::Result<Value> {
+    import_library(h, params, Some(str_param(params, "revision")?))
+}
+
+fn import_library<H: WebDataRpc + ?Sized>(
+    h: &H,
+    params: &Value,
+    revision: Option<&str>,
+) -> anyhow::Result<Value> {
     let (schema_id, ds, store) = writable(h, params)?;
     let name = str_param(params, "name")?;
     wind_store::user_dicts::validate_name(name)?;
@@ -248,8 +268,14 @@ pub(super) fn import_as<H: WebDataRpc + ?Sized>(h: &H, params: &Value) -> anyhow
     let parsed = rows.len();
     let (rows, st) =
         super::dict_transfer_api::apply_pinyin_entry_contract(h, schema_id, rows, true);
-    let imported = store.import_user_dict(&ds, name, &rows)?;
-    changed(h, &ds);
+    let imported = if let Some(expected) = revision {
+        store.append_user_dict(&ds, name, expected, &rows)?
+    } else {
+        store.import_user_dict(&ds, name, &rows)?
+    };
+    if imported != 0 || revision.is_none() {
+        changed(h, &ds);
+    }
     Ok(json!({
         "ok": true,
         "imported": imported,
@@ -490,6 +516,50 @@ mod tests {
             .is_err(),
             "不存在"
         );
+    }
+
+    #[test]
+    fn append_import_keeps_existing_rows_and_rejects_stale_or_missing_targets() {
+        let f = fx("append");
+        let target = json!({"schemaId": f.ct, "name": "小说"});
+        f.rpc(
+            "userDicts.importAs",
+            json!({"schemaId":f.ct,"name":"小说","content":"a\t甲\t17\na\t乙\t8\n"}),
+        )
+        .unwrap();
+        let revision = || f.rpc("userDicts.revision", target.clone()).unwrap()["revision"].clone();
+        let old = revision();
+        let mut p = json!({"schemaId":f.ct,"name":"小说","revision":old,
+            "content":"a\t甲\t999\na\t丙\t13\na\t丙\t9\nb\t甲\t5\n"});
+        let added = f.rpc("userDicts.appendImport", p.clone()).unwrap();
+        assert_eq!(added["imported"], 2);
+        assert_eq!(added["skipped"], 2);
+        let list = f.rpc("userDicts.entries", target.clone()).unwrap();
+        let rows = list["items"].as_array().unwrap();
+        assert_eq!(rows.len(), 4);
+        for (code, text, weight) in [
+            ("a", "甲", 17),
+            ("a", "乙", 8),
+            ("a", "丙", 13),
+            ("b", "甲", 5),
+        ] {
+            assert!(
+                rows.iter()
+                    .any(|r| r["code"] == code && r["text"] == text && r["weight"] == weight)
+            );
+        }
+        assert!(f.rpc("userDicts.appendImport", p.clone()).is_err());
+        p["revision"] = revision();
+        assert_eq!(
+            f.rpc("userDicts.appendImport", p.clone()).unwrap()["imported"],
+            0
+        );
+        assert_eq!(p["revision"], revision());
+        f.rpc("userDicts.delete", target.clone()).unwrap();
+        assert!(f.rpc("userDicts.appendImport", p.clone()).is_err());
+        f.rpc("userDicts.create", target.clone()).unwrap();
+        assert!(f.rpc("userDicts.appendImport", p).is_err());
+        assert_eq!(f.rpc("userDicts.entries", target).unwrap()["total"], 0);
     }
 
     #[test]

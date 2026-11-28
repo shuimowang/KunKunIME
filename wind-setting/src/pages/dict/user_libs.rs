@@ -168,7 +168,15 @@ pub enum MoveTarget {
     Lib(String),
 }
 
-/// 名字对话框的用途。
+/// The schema, library and content version captured when the user starts an append.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AppendTarget {
+    schema: String,
+    name: String,
+    label: String,
+    revision: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Prompt {
     Create,
@@ -179,6 +187,7 @@ enum Prompt {
     Import {
         path: String,
         content: String,
+        target: Option<AppendTarget>,
     },
 }
 
@@ -208,6 +217,7 @@ pub struct UserLibsState {
     pub name_error: Signal<String>,
     /// 名字对话框是不是「从文件导入」（驱动文件 / 格式 / 权重几行的显隐）。
     pub importing: Signal<bool>,
+    pub appending: Signal<bool>,
     pub file_label: Signal<String>,
     /// 导入格式：0 = 自动识别，1 = 纯词列表（同导入对话框）。
     pub format: Signal<usize>,
@@ -231,6 +241,7 @@ impl UserLibsState {
             name: signal(String::new()),
             name_error: signal(String::new()),
             importing: signal(false),
+            appending: signal(false),
             file_label: signal(String::new()),
             format: signal(0),
             format_note: signal(String::new()),
@@ -658,20 +669,73 @@ impl DictManagerState {
 
     /// 「从文件导入…」：选文件 → 名字对话框（默认取文件主名）。
     pub fn pick_lib_import_file(&self, ctx: &mut EventCtx) {
+        self.pick_library_file(ctx, None);
+    }
+
+    fn append_target(&self) -> Result<AppendTarget, String> {
+        let schema = self.current_schema_id().ok_or("请选择目标分库。")?;
+        let name = self.selected_lib().ok_or("请选择目标分库。")?;
+        let label = self
+            .libs
+            .list
+            .get()
+            .into_iter()
+            .find(|lib| lib.name == name)
+            .ok_or("目标分库已变化，请刷新列表。")?
+            .label;
+        let result = rpc::call_core(
+            "userDicts.revision",
+            &json!({"schemaId": schema, "name": name}),
+        )
+        .map_err(|e| format!("无法读取分库「{label}」：{e}"))?;
+        let revision = result
+            .get("revision")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or("无法确定分库版本，请刷新后重试。")?
+            .to_string();
+        Ok(AppendTarget {
+            schema,
+            name,
+            label,
+            revision,
+        })
+    }
+
+    pub fn pick_lib_append_file(&self, ctx: &mut EventCtx) {
+        match self.append_target() {
+            Ok(target) => self.pick_library_file(ctx, Some(target)),
+            Err(message) => self.notify_err(&message),
+        }
+    }
+
+    fn pick_library_file(&self, ctx: &mut EventCtx, target: Option<AppendTarget>) {
         let state = self.clone();
         ctx.request_pick_file(
-            PickDialog::new()
-                .title("选择词库文件")
-                .filter("词库文件 (Rime/TSV/WindDict/纯词列表)", &["yaml", "txt"]),
+            PickDialog::new().title("选择词库文件").filter(
+                "词库文件 (Rime/TSV/WindDict/纯词列表)",
+                &["yaml", "tsv", "wdict", "txt"],
+            ),
             move |path| match path {
-                Some(path) => state.open_lib_import(&path),
+                Some(path) => state.open_library_file(&path, target),
                 None => crate::file_pick::report_failure(|m| state.notify_err(m)),
             },
         );
     }
 
     /// 选好文件后打开名字对话框。
+    #[cfg(test)]
     pub(crate) fn open_lib_import(&self, path: &Path) {
+        self.open_library_file(path, None);
+    }
+
+    fn open_library_file(&self, path: &Path, target: Option<AppendTarget>) {
+        if let Some(target) = &target
+            && !self.is_current_target(target)
+        {
+            self.notify_err("已切换词库，请在目标分库内重新导入。");
+            return;
+        }
         let content = match crate::text_file::read_utf8(path) {
             Ok(c) => c,
             Err(e) => {
@@ -685,18 +749,30 @@ impl DictManagerState {
                 .unwrap_or_default(),
         );
         self.libs.format.set(0);
+        let (title, name) = match &target {
+            Some(t) => ("追加词条到当前词库", t.label.clone()),
+            None => ("从文件导入为分库", name_from_file(path)),
+        };
         self.open_prompt(
             Prompt::Import {
                 path: path.to_string_lossy().into_owned(),
                 content,
+                target,
             },
-            "从文件导入为分库",
-            name_from_file(path),
+            title,
+            name,
         );
         self.on_lib_format_changed();
     }
 
     fn open_prompt(&self, p: Prompt, title: &str, name: String) {
+        self.libs.appending.set(matches!(
+            p,
+            Prompt::Import {
+                target: Some(_),
+                ..
+            }
+        ));
         self.libs.importing.set(matches!(p, Prompt::Import { .. }));
         *self.libs.prompt.borrow_mut() = Some(p);
         self.libs.prompt_title.set(title.to_string());
@@ -712,6 +788,10 @@ impl DictManagerState {
 
     /// 名字输入变化（effect 调用）：即时校验。空着不报错，只是「确定」不可点。
     pub fn on_lib_name_changed(&self) {
+        if self.libs.appending.get() {
+            self.libs.name_error.set(String::new());
+            return;
+        }
         let name = self.libs.name.get();
         let name = name.trim();
         let renaming = match &*self.libs.prompt.borrow() {
@@ -731,6 +811,11 @@ impl DictManagerState {
     /// 名字对话框的「确定」可不可点。
     pub fn lib_prompt_ready(&self) -> bool {
         !self.libs.name.get().trim().is_empty() && self.libs.name_error.get().is_empty()
+    }
+
+    fn is_current_target(&self, target: &AppendTarget) -> bool {
+        self.current_schema_id().as_deref() == Some(target.schema.as_str())
+            && self.selected_lib().as_deref() == Some(target.name.as_str())
     }
 
     /// 这次导入按纯词列表处理：用户指定，或内容像纯词列表（同导入对话框的判据）。
@@ -760,6 +845,29 @@ impl DictManagerState {
         let name = self.libs.name.get().trim().to_string();
         let prompt = self.libs.prompt.borrow().clone();
         let Some(prompt) = prompt else { return };
+        if let Prompt::Import {
+            ref path,
+            ref content,
+            target: Some(ref target),
+        } = prompt
+        {
+            if !self.is_current_target(target) {
+                self.notify_err("已切换词库，请在目标分库内重新导入。");
+                self.cancel_lib_prompt();
+                return;
+            }
+            if self.import_lib(
+                &target.schema,
+                &target.name,
+                path,
+                content,
+                Some(&target.revision),
+            ) {
+                self.cancel_lib_prompt();
+                self.after_lib_change();
+            }
+            return;
+        }
         let renaming = match &prompt {
             Prompt::Rename { old } => Some(old.as_str()),
             _ => None,
@@ -792,7 +900,9 @@ impl DictManagerState {
                 }
                 ok
             }
-            Prompt::Import { path, content } => self.import_lib(&id, &name, &path, &content),
+            Prompt::Import { path, content, .. } => {
+                self.import_lib(&id, &name, &path, &content, None)
+            }
         };
         if done {
             self.cancel_lib_prompt();
@@ -823,11 +933,21 @@ impl DictManagerState {
     }
 
     /// 导入为分库：纯词列表先分批出码拼成 TSV 以 `content` 传，其余传路径由 core 识别。
-    fn import_lib(&self, schema: &str, name: &str, path: &str, content: &str) -> bool {
+    fn import_lib(
+        &self,
+        schema: &str,
+        name: &str,
+        path: &str,
+        content: &str,
+        revision: Option<&str>,
+    ) -> bool {
         let mut params = json!({ "schemaId": schema, "name": name });
         let mut unencodable = 0;
+        let mut skipped_source_lines = 0;
         if self.lib_import_is_word_list() {
-            let words = super::wordlist::parse_word_list(content).words;
+            let list = super::wordlist::parse_word_list(content);
+            skipped_source_lines = list.skipped + list.duplicates;
+            let words = list.words;
             if words.is_empty() {
                 self.notify_err("文件里没有可用的词条。");
                 return false;
@@ -855,9 +975,18 @@ impl DictManagerState {
         } else {
             params["path"] = json!(path);
         }
-        match rpc::call_core("userDicts.importAs", &params) {
-            Ok(v) => {
-                self.notify_ok(&import_text(name, &v, unencodable));
+        let method = if let Some(revision) = revision {
+            params["revision"] = json!(revision);
+            "userDicts.appendImport"
+        } else {
+            "userDicts.importAs"
+        };
+        match rpc::call_core(method, &params) {
+            Ok(mut v) => {
+                v["skipped"] =
+                    json!(v["skipped"].as_u64().unwrap_or_default() + skipped_source_lines as u64);
+                let display_name = self.libs.name.get();
+                self.notify_ok(&import_text(display_name.trim(), &v, unencodable));
                 true
             }
             Err(e) => {
@@ -1447,6 +1576,45 @@ mod tests {
             let tsv = params["content"].as_str().unwrap();
             assert!(tsv.contains("\t中国\t1200\n"), "{tsv}");
             let _ = std::fs::remove_dir_all(p.parent().unwrap());
+        });
+    }
+
+    #[test]
+    fn append_import_targets_the_original_library_and_blocks_navigation_changes() {
+        with_mock(|| {
+            let st = state();
+            select(&st, Some("成语"));
+            let p = temp_file("append", "中国\n计算机\n");
+            let target = st.append_target().unwrap();
+            st.open_library_file(&p, Some(target.clone()));
+            assert!(st.libs.appending.get() && st.lib_prompt_ready());
+            assert_eq!(st.libs.name.get(), "成语");
+            crate::rpc::take_mock_calls();
+            st.submit_lib_prompt();
+            let calls = crate::rpc::take_mock_calls();
+            let writes: Vec<_> = calls
+                .iter()
+                .filter(|(m, _)| m == "userDicts.appendImport")
+                .collect();
+            assert_eq!(writes.len(), 1);
+            let params = &writes[0].1;
+            assert_eq!(params["name"], "成语");
+            assert_eq!(params["schemaId"], "wb");
+            assert_eq!(params["revision"], "mock-file-revision");
+            assert!(params["content"].as_str().unwrap().contains("\t中国\t"));
+            assert!(
+                !calls
+                    .iter()
+                    .any(|(m, _)| m == "userDicts.importAs" || m == "dict.import")
+            );
+            st.open_library_file(&p, Some(target));
+            select(&st, None);
+            crate::rpc::take_mock_calls();
+            st.submit_lib_prompt();
+            assert!(!st.libs.prompt_visible.get());
+            assert!(crate::rpc::take_mock_calls().is_empty());
+            std::fs::remove_file(&p).unwrap();
+            std::fs::remove_dir(p.parent().unwrap()).unwrap();
         });
     }
 

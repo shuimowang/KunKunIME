@@ -161,6 +161,7 @@ fn is_bulk_method(method: &str) -> bool {
             | "dict.encodeWords"
             // 导入为分库：解析整份文件、出码（纯词列表）后整写一个分库文件
             | "userDicts.importAs"
+            | "userDicts.appendImport"
             | "backup.create"
             | "backup.inspect"
             | "backup.restore"
@@ -2778,7 +2779,8 @@ pub(crate) fn mock_reply(method: &str, params: &Value) -> Value {
             json!({ "ok": true, "file": format!("{}/dicts/{}.dict.yaml", s("schemaId"), s("name")) })
         }
         "userDicts.rename" | "userDicts.delete" => json!({ "ok": true }),
-        "userDicts.importAs" => json!({
+        "userDicts.revision" => json!({ "revision": "mock-file-revision" }),
+        "userDicts.importAs" | "userDicts.appendImport" => json!({
             "ok": true, "imported": 2, "skipped": 0, "format": "rime", "rejected": 0
         }),
         "userDicts.setEnabled" => json!({ "ok": true, "live": true }),
