@@ -8,7 +8,7 @@
 
 [查看 GitHub 源码](https://github.com/shuimowang/KunKunIME) · [从源码构建](https://github.com/shuimowang/KunKunIME#%E4%BB%8E%E6%BA%90%E7%A0%81%E6%9E%84%E5%BB%BA) · [组件与词库的来源和许可](https://github.com/shuimowang/KunKunIME/blob/main/ORIGINS.md)
 
-[在 Quicker 安装动作](https://getquicker.net/Sharedaction?code=97a34a52-d2fd-4505-ab9b-0961e7718c53) · [手动下载动作 JSON](https://111.229.149.25/public/share/5KrzfvBkWjZPTnTEFXtodg) · [下载 Windows x64 程序包](https://github.com/shuimowang/KunKunIME/releases/download/v0.1.13/KunKunIME-0.1.13-Windows-x64.zip)
+[在 Quicker 安装动作](https://getquicker.net/Sharedaction?code=97a34a52-d2fd-4505-ab9b-0961e7718c53) · [手动下载动作 JSON](https://111.229.149.25/public/share/5KrzfvBkWjZPTnTEFXtodg) · [下载 Windows x64 程序包](https://111.229.149.25/public/share/tpcYS4B3SvAWygbDPBSZNg)
 
 ## 用 AI 助手管理词库
 
@@ -28,24 +28,22 @@
 
 希望登录 Windows 后优先使用困困时，打开 **输入规则 → 默认状态**，点击 **设为默认输入法**。
 
-## 把小说里的地名加入词库
+## 给小说人物单建词库
 
-只加一个名字，选中目标词库后点「添加词条」。想按作品整理，可以在中栏点「新建词库…」，用书名命名。若有一整份人物或地名表，把每个词单独写一行，保存成 UTF-8 文本文件。
-
-![拼音主词库，右上角有批量导入按钮，下方列出三个示例地名](https://111.229.149.25/public/api/resources/download?hash=u7Jbo0QY01URgzdfi8cB9Q&file=%2F)
-
-可以把下面三行保存为文本文件。
+在「词库管理」选择「拼音」，点击 **「新建词库…」**，用书名命名。已有作品词库时，点中它即可。只加一个名字可以点 **「添加词条」**；一整份名单可以保存成 UTF-8 文本，每行一个名字。
 
 ```text
-云岫谷
-星渡台
-归舟阁
+沈砚
+沈彦
+沈晏
 ```
 
-在目标词库右上角点 **「批量导入」** 并选文件。纯中文名单每行写一个名字即可。导入主词库时可以点「预览编码」核对多音字；向已有分库追加时，先核对弹窗中显示的目标词库。
+选中自己的作品词库，点右上角 **「批量导入…」**。选择名单文件后，确认弹窗里的「目标词库」是这部作品，再点 **「确定」**。软件会按当前方案生成编码，已有的同码同词保留原权重。
 
-![批量导入窗口已识别示例文件中的三个词，右下角为合并导入](https://111.229.149.25/public/api/resources/download?hash=mvDlRk2dAbhMdN87cDHkrQ&file=%2F)
+![向已有的「小说人名」词库追加三个人名](images/v0.1.13-append-names.png)
 
-主词库的预览确认后点 **「合并导入」**，分库追加则在目标库名下点 **「确定」**。分库中已经存在的同码同词保留原权重，同码的不同人名可并存。以后清理同音词时，只勾选要删的行，再点 **「删除所选…」** 确认一次。
+这三个名字的拼音都是 `shen yan`，在词表中各占一行。清理时逐行勾选，再点 **「删除所选…」** 确认一次，同一码下的其他人名继续保留。
+
+![「小说人名」词表中的同码候选](images/v0.1.13-names.png)
 
 遇到切词或候选排序问题，可以附上「输入的拼音、想打的词、实际出现的候选」，方便复现。[到 GitHub 反馈问题](https://github.com/shuimowang/KunKunIME/issues)
