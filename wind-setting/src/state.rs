@@ -2803,10 +2803,6 @@ impl AppState {
     /// 冷启动（列表未就绪）与二次实例激活（已就绪）共用此入口，避免两条易走偏的路径。
     pub fn route_dict_target(&self, target: crate::cli::DictTarget) {
         self.pending_dict_target.borrow_mut().take();
-        if let Some(message) = &target.error {
-            self.feedback.set(Some((ToastKind::Error, message.clone())));
-            return;
-        }
         if target.is_empty() {
             self.show_dictionary();
             return;
@@ -2839,6 +2835,10 @@ impl AppState {
     }
 
     fn apply_dict_target(&self, target: &crate::cli::DictTarget) {
+        if let Some(message) = &target.error {
+            self.feedback.set(Some((ToastKind::Error, message.clone())));
+            return;
+        }
         if let Some(error) = self.dict_mgr.apply_deep_link(&target.schema, target.tab) {
             self.feedback.set(Some((ToastKind::Error, error)));
         } else {
@@ -6603,6 +6603,21 @@ mod tests {
             assert_eq!((mgr.domain.get(), mgr.sub_tab.get()), initial);
             assert!(st.feedback.get().unwrap().1.contains("取消跳转"));
         }
+    }
+
+    #[test]
+    fn cold_invalid_dictionary_argument_is_reported_after_the_window_is_ready() {
+        let st = AppState::empty();
+        st.route_dict_target(crate::cli::DictTarget {
+            error: Some("未知的词库类型「badtype」，已取消跳转。".into()),
+            ..Default::default()
+        });
+        assert!(st.awaiting_dict_target());
+        assert!(!st.dictionary_visible.get());
+        assert!(st.feedback.get().is_none());
+        st.consume_pending_dict_target();
+        assert!(!st.awaiting_dict_target() && !st.dictionary_visible.get());
+        assert!(st.feedback.get().unwrap().1.contains("badtype"));
     }
 
     /// 冷启动时机守护：命令行解析发生在方案列表就绪之前，深链只能先挂起，
