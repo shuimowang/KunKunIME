@@ -29,19 +29,30 @@ internal sealed interface UpdateState {
     data class Failed(val message: String, val release: AndroidRelease?) : UpdateState
 }
 
-/** User-initiated work survives rotation; leaving the page cancels its transfer. */
+/** Update work belongs to the current About visit and survives rotation. */
 internal class UpdateViewModel(application: Application) : AndroidViewModel(application) {
     private val client = UpdateClient(application)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var operation: UpdateOperation? = null
     private var work: Job? = null
     private var latest: AndroidRelease? = null
+    private var aboutVisible = false
 
-    val installedVersion: String = client.installedVersion
     var state: UpdateState by mutableStateOf(UpdateState.Idle)
         private set
     var installerRequest: File? by mutableStateOf(null)
         private set
+
+    fun setAboutVisible(visible: Boolean) {
+        if (aboutVisible == visible) return
+        aboutVisible = visible
+        if (visible) {
+            check()
+        } else {
+            latest = null
+            cancel()
+        }
+    }
 
     fun check() {
         if (operation != null) return
@@ -134,7 +145,8 @@ internal class UpdateViewModel(application: Application) : AndroidViewModel(appl
         val message = when (error) {
             is UpdateProblem -> error.message.orEmpty()
             is SocketTimeoutException -> "连接或下载超时，请检查网络后重试"
-            is IOException -> "无法完成更新下载，请检查网络和手机剩余空间后重试"
+            is IOException -> if (release == null) "无法连接更新服务，请检查网络后重试"
+                else "无法完成更新下载，请检查网络和手机剩余空间后重试"
             is org.json.JSONException -> "更新信息格式暂时无法识别，请稍后重试"
             else -> "暂时无法完成更新，请重新检查版本后再试"
         }

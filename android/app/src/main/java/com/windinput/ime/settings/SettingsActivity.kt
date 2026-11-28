@@ -75,6 +75,8 @@ import com.windinput.ime.core.ImeSession
 import com.windinput.ime.core.LayoutEntry
 import com.windinput.ime.core.SchemaEntry
 import com.windinput.ime.core.UserConfig
+import com.windinput.ime.update.UpdateSection
+import com.windinput.ime.update.UpdateViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -165,6 +167,7 @@ class SettingsActivity : ComponentActivity() {
         // miuix 推荐的默认配色，深浅色跟系统。不用莫奈取色（MonetSystem）：系统壁纸取出来的
         // 主色在不少机型上与 miuix 组件不协调（维护者要求用 miuix 默认风格）
         val theme = ThemeController(ColorSchemeMode.System)
+        val updates = ViewModelProvider(this)[UpdateViewModel::class.java]
 
         setContent {
             MiuixTheme(controller = theme) {
@@ -173,6 +176,7 @@ class SettingsActivity : ComponentActivity() {
                     manifest = manifest,
                     userConfig = userConfig,
                     versionName = versionName,
+                    updates = updates,
                     initialRoute = Route(intent.getStringExtra(EXTRA_PAGE), intent.getStringExtra(EXTRA_SUB)),
                     actions = SettingsActions(
                         enableIme = { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) },
@@ -325,6 +329,7 @@ private fun SettingsApp(
     manifest: SettingsManifestData,
     userConfig: UserConfig,
     versionName: String,
+    updates: UpdateViewModel,
     initialRoute: Route,
     actions: SettingsActions,
 ) {
@@ -336,6 +341,10 @@ private fun SettingsApp(
     var routeSub by rememberSaveable { mutableStateOf(initialRoute.sub) }
     var routeDetail by rememberSaveable { mutableStateOf<String?>(null) }
     val route = Route(routePage, routeSub, routeDetail)
+    // Use the committed route. Predictive back can compose an About preview
+    // even when the user eventually cancels the gesture.
+    val aboutVisible = route == Route("about")
+    LaunchedEffect(aboutVisible, updates) { updates.setAboutVisible(aboutVisible) }
     // 详情页标题（方案名）：进页前由入口填上，页内读到核心的方案名后再校正；转屏丢了就先显示 id
     val detailTitles = remember { androidx.compose.runtime.mutableStateMapOf<String, String>() }
     // 每一层的可保存状态（滚动位置、标题栏收起、搜索词…）按路由存住：进下一级再返回，
@@ -453,7 +462,7 @@ private fun SettingsApp(
             val page = manifest.pages.firstOrNull { it.id == r.page }
             when {
                 page == null -> HomeScreen(setup, manifest, values, schemaState, versionName, actions) { go(Route(it)) }
-                r.sub == null -> PageScreen(manifest, page, values, session, schemaState, versionName) { go(r.copy(sub = it)) }
+                r.sub == null -> PageScreen(manifest, page, values, session, schemaState, versionName, updates) { go(r.copy(sub = it)) }
                 r.detail == DETAIL_QUICK_SOURCES -> QuickSourcesSection(values)
                 r.detail != null -> SchemaDetailSection(r.detail, manifest) { detailTitles[r.detail] = it }
                 else -> SubScreen(manifest, page, r.sub, values, session, schemaState) { id, name ->
@@ -641,13 +650,14 @@ private fun PageScreen(
     session: ImeSession?,
     schemaState: SchemaState?,
     versionName: String,
+    updates: UpdateViewModel,
     onOpenSub: (String) -> Unit,
 ) {
     when (page.id) {
         "schema" -> SchemaSection(schemaState, onOpenSub)
         "stats" -> StatsSection()
         "dict" -> DictOverview(session, onOpen = onOpenSub)
-        "about" -> AboutSection(versionName, onOpenSub)
+        "about" -> AboutSection(versionName, updates, onOpenSub)
     }
     if (page.id == SettingsActivity.PAGE_KEYBOARD) VoiceSettingsEntry()
     @Suppress("UNUSED_EXPRESSION") values.version // 开关变了，依赖它的项跟着显示 / 隐藏
@@ -989,7 +999,7 @@ private const val EMOJI_SECTION = "Emoji/OpenCC"
 // ── 关于 ─────────────────────────────────────────────────────────
 
 @Composable
-private fun AboutSection(versionName: String, onOpenSub: (String) -> Unit) {
+private fun AboutSection(versionName: String, updates: UpdateViewModel, onOpenSub: (String) -> Unit) {
     var showLicenses by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1000,18 +1010,16 @@ private fun AboutSection(versionName: String, onOpenSub: (String) -> Unit) {
             summary = "版本 $versionName",
             startAction = { KunKunLogo(Modifier.padding(end = 14.dp).size(40.dp)) },
         )
+    }
+    SectionTitle("应用更新")
+    UpdateSection(updates)
+    SectionTitle("项目信息")
+    Card(modifier = Modifier.fillMaxWidth()) {
         NavRow("困困输入法 GitHub 主页", "查看项目源码、发布记录与使用说明", icon = SettingsIcons.website) {
             Diagnostics.openUrl(context, ProjectLinks.SOURCE_URL)
         }
         NavRow(SUB_PRIVACY, "语音、应用更新、本地数据与系统备份", icon = SettingsIcons.privacy) {
             onOpenSub(SUB_PRIVACY)
-        }
-        NavRow(
-            "应用更新",
-            "在应用内检查、下载并安装安卓正式版",
-            icon = SettingsIcons.website,
-        ) {
-            context.startActivity(Intent(context, com.windinput.ime.update.UpdateActivity::class.java))
         }
         NavRow("反馈问题", "在 GitHub 上提交问题或建议（浏览器打开）", icon = SettingsIcons.feedback) {
             Diagnostics.openIssues(context)

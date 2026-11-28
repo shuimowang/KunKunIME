@@ -15,6 +15,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.windinput.ime.settings.SettingsActivity
 import com.windinput.ime.settings.TestPadActivity
 import org.json.JSONArray
 import org.json.JSONObject
@@ -254,15 +255,20 @@ class RealImeSmokeTest {
         awaitText("已修改常用语456好的谢谢。")
         Log.i(TAG, "PASS: quick phrases add, edit, persist, commit without sending, and delete")
 
-        instrumentation.startActivitySync(Intent(context, com.windinput.ime.update.UpdateActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        anyText("检查更新")
+        val settings = instrumentation.startActivitySync(Intent(context, SettingsActivity::class.java)
+            .putExtra(SettingsActivity.EXTRA_PAGE, "about").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        // A slow, offline or rate-limited emulator still exercises the same
+        // auto-check. Do not press any update action before reading this state.
+        awaitNode("About automatically checks for an Android release", imeOnly = false) { node ->
+            val label = node.text?.toString().orEmpty()
+            label == "正在检查安卓正式版…" || label == "重新检查" || label.startsWith("发现新版本 ")
+        }
         capture("app-update.png")
-        tap(anyText("返回"))
+        instrumentation.runOnMainSync { settings.finish() }
         awaitEditor()
         tapEditor()
         awaitKey("a")
-        Log.i(TAG, "PASS: in-app update screen exposes manual update check")
+        Log.i(TAG, "PASS: About checks for an Android update without a second tap")
     }
 
     private fun selectScene(label: String) {

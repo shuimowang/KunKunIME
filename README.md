@@ -4,7 +4,7 @@
 
 ## 安装与使用
 
-**Android 手机版已合入主分支。** 手机端位于 [android/](android/README.md)，与 Windows 共用输入核心和词库，使用独立的界面、应用标识、版本和构建流程。Android `0.1.1` 加入可按需下载的 **SenseVoiceSmall INT8 离线语音包**，最低 Android 16、ARM64。进入「语音输入」下载并启用后，长按空格说话、松手在手机本地识别，无需手机提供系统识别服务；原有系统语音选择继续保留。另有独立保存的常用语，以及在「关于 → 应用更新」主动检查、下载并安装新版。常用语可新增、编辑、移到顶部或删除，点选只填入输入框。手机发行采用独立的 `android-v…` 标签；下列安装步骤适用于 Windows，Android 的下载、升级、语音设置与签名说明见其目录。
+**Android 手机版**支持 Android 16 及以上的 ARM64 手机，与 Windows 共用拼音、英语核心和词库。安卓版 `0.1.2` 修复了拼音组词时移动光标、编辑表情和管理个人词库的问题。进入设置的「关于」即可查看有没有新版。0.1.2 启用新的发行签名，旧版用户需先导出词库，再卸载旧版、安装新版。离线语音包可在「语音输入」里按需下载，启用后长按空格说话、松手在本机识别。[Android 正式版](https://github.com/shuimowang/KunKunIME/releases/tag/android-v0.1.2) · [手机安装与使用说明](android/README.md)
 
 1. 从 [GitHub Releases](https://github.com/shuimowang/KunKunIME/releases) 下载 Windows x64 压缩包，将**整个文件夹**解压到长期使用的位置。
 2. 双击 **KunKunIME.exe**，点击 **注册输入法** 并确认 Windows 管理员授权。

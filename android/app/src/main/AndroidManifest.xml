@@ -68,11 +68,6 @@
             android:label="语音输入" />
 
         <activity
-            android:name=".update.UpdateActivity"
-            android:exported="false"
-            android:label="应用更新" />
-
-        <activity
             android:name=".settings.QuickPhraseEditorActivity"
             android:exported="false"
             android:excludeFromRecents="true"

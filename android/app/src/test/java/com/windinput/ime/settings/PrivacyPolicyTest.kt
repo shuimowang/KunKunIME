@@ -26,7 +26,8 @@ class PrivacyPolicyTest {
     @Test
     fun policyDistinguishesLocalTypingFromRequestedDownloadsAndSystemServices() {
         val network = PRIVACY_POLICY.single { it.first == "联网" }.second
-        assertTrue(network.contains("主动检查或下载更新"))
+        assertTrue(network.contains("打开「关于」会自动检查安卓正式版"))
+        assertTrue(network.contains("手动重新检查"))
         assertTrue(network.contains("下载离线语音包"))
         assertTrue(network.contains("不需要联网识别"))
         assertTrue(network.contains("不会在后台自动检查更新"))
