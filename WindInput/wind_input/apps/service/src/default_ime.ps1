@@ -37,11 +37,11 @@ try {
                 if ($state.mode -ne 'kunkun') { throw 'Windows 未确认困困已设为默认输入法。' }
             }
         }
-        'reset-default' {
-            if ($state.mode -eq 'other') {
+        { $_ -in 'reset-default','release-own-default' } {
+            if ($state.mode -eq 'other' -and $operation -eq 'reset-default') {
                 throw '当前固定的是其他输入法。请刷新页面查看最新状态。'
             }
-            if ($state.mode -ne 'auto') {
+            if ($state.mode -eq 'kunkun') {
                 # Omitting InputTip selects the cmdlet's restore-from-language-list branch.
                 Set-WinDefaultInputMethodOverride
                 $state = Read-DefaultInput

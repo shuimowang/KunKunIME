@@ -27,11 +27,29 @@ use winreg::{
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const SIMPLIFIED_CHINESE: u16 = 0x0804;
 const APP_CONTAINER_ACL: &str = "*S-1-15-2-1:(RX)";
+mod associations;
+mod uninstall;
+pub(crate) use uninstall::ensure_uninstall_entry;
 
 pub fn run(args: &[String]) -> i32 {
     let result = match args {
         [] => Deployment::discover().and_then(|dev| dev.register()),
         [command] if command == "enable" => Deployment::discover().and_then(|dev| dev.enable()),
+        [command] if command == "unregister-user" => {
+            Deployment::discover().and_then(|dev| dev.unregister_user())
+        }
+        [command] if command == "unregister-associations" => {
+            Deployment::discover().and_then(|dev| dev.unregister_associations())
+        }
+        [command] if command == "unregister-machine" => {
+            Deployment::discover().and_then(|dev| dev.unregister_machine())
+        }
+        [command, format] if command == "uninstall-status" && format == "--json" => {
+            Deployment::discover().and_then(|dev| {
+                println!("{}", serde_json::to_string(&dev.uninstall_status()?)?);
+                Ok(())
+            })
+        }
         [command, format] if command == "status" && format == "--json" => Deployment::discover()
             .and_then(|dev| {
                 println!("{}", serde_json::to_string(&dev.status()?)?);
@@ -48,7 +66,7 @@ pub fn run(args: &[String]) -> i32 {
         }
         _ => {
             eprintln!(
-                "用法: KunKunIME.exe system register-ime [enable | status --json | default-status --json | set-default --json | reset-default --json]"
+                "用法: KunKunIME.exe system register-ime [enable | status --json | default-status --json | set-default --json | reset-default --json | uninstall-status --json | unregister-user | unregister-machine | unregister-associations]"
             );
             return 2;
         }
@@ -85,10 +103,7 @@ struct Deployment {
 
 impl Deployment {
     fn discover() -> Result<Self> {
-        ensure!(
-            cfg!(target_arch = "x86_64"),
-            "注册需要 64 位版困困输入法。"
-        );
+        ensure!(cfg!(target_arch = "x86_64"), "注册需要 64 位版困困输入法。");
         let exe = std::env::current_exe().context("找不到当前服务程序")?;
         ensure!(
             exe.file_name()
@@ -107,13 +122,7 @@ impl Deployment {
             label,
         };
         let dlls = [
-            dll(
-                &system,
-                "kunkun_tsf.dll",
-                KEY_WOW64_64KEY,
-                0x8664,
-                "64 位",
-            ),
+            dll(&system, "kunkun_tsf.dll", KEY_WOW64_64KEY, 0x8664, "64 位"),
             dll(
                 &wow64,
                 "kunkun_tsf_x86.dll",
@@ -238,11 +247,16 @@ impl Deployment {
             .context("无法记录困困输入法安装目录")?;
 
         for (dll, bytes) in self.dlls.iter().zip(&contents) {
-            write_dll(&dll.installed, bytes).with_context(|| {
-                format!(
-                    "无法部署{} TSF 组件，若文件正在使用，请重启后再试",
-                    dll.label
-                )
+            write_dll(&dll.installed, bytes).map_err(|err| {
+                let locked = err
+                    .downcast_ref::<io::Error>()
+                    .and_then(io::Error::raw_os_error)
+                    .is_some_and(|code| matches!(code, 32 | 33 | 1224));
+                if locked {
+                    err.context(format!("{} TSF 组件正在使用。请保存工作，关闭使用输入法的应用后重试；若仍被占用，可注销并重新登录后再试。", dll.label))
+                } else {
+                    err.context(format!("无法部署{} TSF 组件（{}）", dll.label, dll.installed.display()))
+                }
             })?;
             run_hidden(
                 Command::new(self.system.join("icacls.exe"))
@@ -261,11 +275,18 @@ impl Deployment {
 
     fn enable(&self) -> Result<()> {
         ensure!(self.registered()?, "请先完成困困输入法的系统注册。");
-        if self.user_enabled()? {
-            return Ok(());
+        if !self.user_enabled()? {
+            self.change_user_tip(0)?;
+            ensure!(
+                self.user_enabled()?,
+                "Windows 输入法列表尚未更新，请打开「语言选项」并添加困困输入法。"
+            );
         }
+        self.update_uninstall_entry()
+    }
 
-        // 仅从 System32 加载 input.dll。标志 0 只启用目标 TIP，沿用当前默认输入法。
+    fn change_user_tip(&self, flags: u32) -> Result<()> {
+        // InstallLayoutOrTip 的标志 0 启用，ILOT_UNINSTALL(1) 移除，均只操作此 TIP。
         let tip: Vec<_> = tip_string(true).encode_utf16().chain([0]).collect();
         let module = unsafe { LoadLibraryExW(w!("input.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) }
             .context("无法加载 Windows 输入法组件")?;
@@ -273,14 +294,13 @@ impl Deployment {
             GetProcAddress(module, s!("InstallLayoutOrTip")).map(|function| {
                 let install: unsafe extern "system" fn(PCWSTR, u32) -> BOOL =
                     std::mem::transmute(function);
-                install(PCWSTR(tip.as_ptr()), 0).as_bool()
+                install(PCWSTR(tip.as_ptr()), flags).as_bool()
             })
         };
         let _ = unsafe { FreeLibrary(module) };
-        ensure!(result == Some(true), "Windows 未能启用困困输入法。");
         ensure!(
-            self.user_enabled()?,
-            "Windows 输入法列表尚未更新，请打开「语言选项」并添加困困输入法。"
+            result == Some(true),
+            "Windows 未能更新当前用户的困困输入法状态。"
         );
         Ok(())
     }
@@ -479,6 +499,9 @@ try {{ {} }} finally {{ [Console]::Error.Write("calls=$script:writes") }}
             ("set-default", "kunkun", "kunkun", 0),
             ("reset-default", "kunkun", "auto", 1),
             ("reset-default", "auto", "auto", 0),
+            ("release-own-default", "kunkun", "auto", 1),
+            ("release-own-default", "other", "other", 0),
+            ("release-own-default", "auto", "auto", 0),
         ] {
             let (ok, json, err) = exercise_default(operation, initial, true, true, false);
             assert!(ok, "{operation}: {err}");

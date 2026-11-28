@@ -34,14 +34,28 @@ pub fn build_update_dialog(app_state: &Rc<RefCell<AppState>>) -> Element {
 
     let is = move |p: UpdatePhase| move || phase.get() == p;
 
-    let frame = Element::col()
-        .width(DIALOG_W)
-        .bg_role(Role::Surface)
-        .border_role(Role::Border, 1)
-        .corner(12.0)
-        .shadow(Shadow::new(0.0, 16.0, 40.0, Color::rgba(0, 0, 0, 130)))
-        .child(title_row())
-        .child(Element::divider())
+    if cfg!(windows) {
+        // Windows 正式版发布为 ZIP。由浏览器下载，经用户选择更新安装目录。
+        let frame = dialog_frame()
+            .child(checking_body().visible_when(is(UpdatePhase::Checking)))
+            .child(
+                has_update_body(message, size_text, notes).visible_when(is(UpdatePhase::HasUpdate)),
+            )
+            .child(
+                Element::label("下载后退出困困输入法，将完整 ZIP 解压到原安装目录，再打开程序。")
+                    .width_match()
+                    .padding_xy(18, 8)
+                    .font_size(12.0)
+                    .fg_role(Role::TextMuted)
+                    .visible_when(is(UpdatePhase::HasUpdate)),
+            )
+            .child(no_update_body(message, notes).visible_when(is(UpdatePhase::NoUpdate)))
+            .child(error_body(message).visible_when(is(UpdatePhase::Error)))
+            .child(Element::divider())
+            .child(windows_footer(app_state, phase, visible));
+        return Element::dialog(visible, frame);
+    }
+    let frame = dialog_frame()
         .child(consent_body().visible_when(is(UpdatePhase::Consent)))
         .child(checking_body().visible_when(is(UpdatePhase::Checking)))
         .child(has_update_body(message, size_text, notes).visible_when(is(UpdatePhase::HasUpdate)))
@@ -63,6 +77,73 @@ pub fn build_update_dialog(app_state: &Rc<RefCell<AppState>>) -> Element {
         .child(auto_check_persister(app_state));
 
     Element::dialog(visible, frame)
+}
+
+fn dialog_frame() -> Element {
+    Element::col()
+        .width(DIALOG_W)
+        .bg_role(Role::Surface)
+        .border_role(Role::Border, 1)
+        .corner(12.0)
+        .shadow(Shadow::new(0.0, 16.0, 40.0, Color::rgba(0, 0, 0, 130)))
+        .child(title_row())
+        .child(Element::divider())
+}
+
+fn windows_footer(
+    app: &Rc<RefCell<AppState>>,
+    phase: Signal<UpdatePhase>,
+    visible: Signal<bool>,
+) -> Element {
+    let retry = Rc::clone(app);
+    let release = Rc::clone(app);
+    let download = Rc::clone(app);
+    Element::row()
+        .width_match()
+        .padding_xy(16, 12)
+        .spacing(8)
+        .child(Element::leaf().weight(1.0))
+        .child(
+            Element::button("关闭")
+                .small()
+                .outline_soft()
+                .on_click(move |_| visible.set(false)),
+        )
+        .child(
+            Element::button("查看发布页")
+                .small()
+                .outline_soft()
+                .on_click(move |ctx| {
+                    let state = release.borrow();
+                    let result = state.update_check.borrow();
+                    if let Some(check) = result
+                        .as_ref()
+                        .filter(|_| phase.get() != UpdatePhase::Error)
+                    {
+                        ctx.open_url(&check.release_page_url());
+                    } else {
+                        ctx.open_url(update::WINDOWS_RELEASES_PAGE);
+                    }
+                })
+                .visible_when(move || phase.get() != UpdatePhase::Checking),
+        )
+        .child(
+            Element::button("重试")
+                .small()
+                .on_click(move |_| retry.borrow().begin_update_check())
+                .visible_when(move || phase.get() == UpdatePhase::Error),
+        )
+        .child(
+            Element::button("下载 Windows ZIP")
+                .small()
+                .on_click(move |ctx| {
+                    let state = download.borrow();
+                    if let Some(check) = state.update_check.borrow().as_ref() {
+                        ctx.open_url(&check.download_url);
+                    }
+                })
+                .visible_when(move || phase.get() == UpdatePhase::HasUpdate),
+        )
 }
 
 /// 把「自动检查」勾选框的变更写进 wind_setting.toml。
@@ -208,7 +289,7 @@ fn no_update_body(message: Signal<String>, notes: Signal<String>) -> Element {
                 .max_lines(2),
         )
         .child(
-            Element::label("本版更新记录")
+            Element::label("最新公开版本的更新记录")
                 .font_size(12.0)
                 .font_weight(600)
                 .fg_role(Role::Text)
@@ -429,6 +510,91 @@ mod tests {
     use super::*;
     use windui::core::Tree;
     use windui::geometry::Size;
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_update_actions_follow_the_checked_release_and_recover_from_failure() {
+        use crate::update::{CheckResult, UpdateMsg};
+        use windui::event::{MouseButton, PointerEvent, PointerKind};
+        use windui::geometry::Point;
+
+        let app = Rc::new(RefCell::new(AppState::empty()));
+        let phase = app.borrow().update_phase;
+        let visible = app.borrow().update_dialog_visible;
+        let mut tree = Tree::new();
+        let root = windows_footer(&app, phase, visible)
+            .width(620)
+            .height(70)
+            .build(&mut tree);
+        tree.root = Some(root);
+        let click = |tree: &mut Tree, index: usize| {
+            tree.layout_root(Size::new(620, 70), &mut windui::text::NullTextEngine);
+            let buttons = tree.focusable_order();
+            let bounds = tree.abs_bounds(buttons[index]);
+            let at = Point::new(bounds.x + bounds.w / 2, bounds.y + bounds.h / 2);
+            let (mut hover, mut capture) = (None, None);
+            let mut dispatch = |kind| {
+                tree.dispatch_pointer(
+                    PointerEvent::single(kind, at, MouseButton::Left),
+                    &mut hover,
+                    &mut capture,
+                )
+            };
+            dispatch(PointerKind::Down);
+            dispatch(PointerKind::Up).open_url
+        };
+        let remote_version = "1.2.3";
+        let zip = format!(
+            "{}/download/v{remote_version}/KunKunIME-{remote_version}-Windows-x64.zip",
+            update::WINDOWS_RELEASES_PAGE
+        );
+        let result = CheckResult {
+            has_update: true,
+            local_version: "1.0.0".into(),
+            remote_version: remote_version.into(),
+            release_notes: "修复候选排序".into(),
+            download_url: zip.clone(),
+            sha256: "f".repeat(64),
+            size: 1024,
+            local_unparsable: false,
+        };
+        app.borrow().on_update_msg(UpdateMsg::CheckDone {
+            result: Ok(result.clone()),
+            silent: false,
+            seq: 0,
+        });
+        assert_eq!(phase.get(), UpdatePhase::HasUpdate);
+        assert_eq!(
+            click(&mut tree, 1).as_deref(),
+            Some(result.release_page_url().as_str())
+        );
+        assert_eq!(click(&mut tree, 2).as_deref(), Some(zip.as_str()));
+
+        let current = CheckResult {
+            has_update: false,
+            local_version: remote_version.into(),
+            ..result
+        };
+        app.borrow().on_update_msg(UpdateMsg::CheckDone {
+            result: Ok(current),
+            silent: false,
+            seq: 0,
+        });
+        assert_eq!(phase.get(), UpdatePhase::NoUpdate);
+        assert_eq!(tree.focusable_order().len(), 2);
+
+        app.borrow().on_update_msg(UpdateMsg::CheckDone {
+            result: Err("网络不可用".into()),
+            silent: false,
+            seq: 0,
+        });
+        assert_eq!(phase.get(), UpdatePhase::Error);
+        assert_eq!(
+            click(&mut tree, 1).as_deref(),
+            Some(update::WINDOWS_RELEASES_PAGE)
+        );
+        assert_eq!(app.borrow().update_message.get(), "网络不可用");
+    }
 
     /// 布局 notes 区，返回 (节点占位高, 完整内容高)。
     fn layout_notes(text: &str) -> (i32, i32) {

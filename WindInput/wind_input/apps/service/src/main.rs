@@ -38,6 +38,8 @@ mod ui_cli;
 mod register_ime;
 #[cfg(windows)]
 mod system_cli;
+#[cfg(windows)]
+mod uninstall;
 
 /// 顶层 CLI 总览（`wind_input help`）。主动请求的帮助走 stdout（可管道/重定向），
 /// 与 `--version` 一致；各子命令的详细用法见 `wind_input <子命令> help`。
@@ -324,6 +326,10 @@ fn main() {
             .unwrap_or_default(),
     );
     startup_trace::stage("logger-ready");
+    #[cfg(windows)]
+    if let Err(err) = register_ime::ensure_uninstall_entry() {
+        tracing::warn!("无法更新 Windows 卸载入口：{err:#}");
+    }
 
     // 词库缓存策略（`schema.dict_cache_policy`）：锁定 / 预加载 / 关闭。须在加载任何词库之前
     // 设定；运行期改键不生效（已映射的文件不会回头处理），设置页提示需重启。
@@ -655,11 +661,15 @@ fn main() {
     #[cfg(not(target_os = "macos"))]
     match restart_rx.recv() {
         Ok(()) => {
-            info!("Restart requested, relaunching service...");
+            info!("Service exit requested");
             coord_for_exit.flush_user_data_before_exit();
             // Windows 子进程在本进程退出后接手，避免与仍在运行的旧管道交叠。
             #[cfg(not(windows))]
             drop(_singleton_guard);
+            #[cfg(windows)]
+            if uninstall::stop_requested() {
+                std::process::exit(0);
+            }
             relaunch_self();
             std::process::exit(0);
         }
@@ -693,6 +703,8 @@ impl wind_rpc::CoreRpc for RpcCore {
         params: &serde_json::Value,
     ) -> anyhow::Result<serde_json::Value> {
         match method {
+            #[cfg(windows)]
+            "system.stopForUninstall" => uninstall::stop_matching_service(params),
             "extensions.inventory" => Ok(self.extensions.inventory()),
             _ => self.coord.web_data_rpc(method, params),
         }

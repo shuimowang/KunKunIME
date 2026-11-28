@@ -9,8 +9,8 @@ SOURCE = Path(__file__).resolve().parents[1]
 ROOT_FILES = {".gitignore", ".gitattributes", "README.md", "ORIGINS.md", "LICENSE", "SECURITY.md", "CONTRIBUTING.md"}
 BUILD_SCRIPTS = {
     "build-core.ps1", "build-tsf.ps1", "build-windows.ps1", "test-tsf.ps1",
-    "test-typing.ps1", "卸载Windows输入法注册.md", "generate-english.py",
-    "collect-cargo-notices.py", "export-public.py",
+    "test-typing.ps1", "卸载Windows输入法注册.md", "uninstall-windows.ps1", "generate-english.py",
+    "collect-cargo-notices.py", "package-windows-files.py", "uninstall-windows.ps1", "export-public.py",
 }
 
 
@@ -28,7 +28,7 @@ def public_path(name):
     if parts[0] in {"assets", "licenses", "tests"}:
         return True
     if parts[0] == "docs":
-        return parts[1:] == ("使用说明.md",)
+        return parts[1:] in {("使用说明.md",), ("MCP.md",)}
     if parts[0] == "WindInput":
         if name.startswith("WindInput/scripts/lm/"):
             return True

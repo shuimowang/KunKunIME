@@ -64,7 +64,7 @@ pub fn all_tabs(app: &Rc<RefCell<AppState>>, state: &AppState) -> Vec<TabDef> {
         // 词库页由主内容区按需挂载，这里保留导航条目和稳定的深链下标。
         tab_def("词库", Element::leaf(), dict),
         tab_def("高级", advanced_page(app, state, &advanced), advanced),
-        tab_def("关于", about_page(state), about),
+        tab_def("关于", about_page(app, state), about),
         tab_def(
             "AI 助手",
             crate::search::anchor::wrap(mcp::build(), "mcp:main", state.jump).fill(),
@@ -1242,7 +1242,7 @@ pub(crate) fn custom_edition_badge(system_info: &serde_json::Value) -> Option<St
 }
 
 /// 关于页 — 复刻品牌关于卡（对齐截图 / Vue AboutPage）：
-fn about_page(state: &AppState) -> Element {
+fn about_page(app: &Rc<RefCell<AppState>>, state: &AppState) -> Element {
     let header = Element::row()
         .width_match()
         .cross(Align::Center)
@@ -1255,11 +1255,44 @@ fn about_page(state: &AppState) -> Element {
         .small()
         .outline_soft()
         .on_click(|ctx| ctx.open_url("https://github.com/huanfeng/WindInput"));
-    let panel = crate::widgets::flat_panel()
+    let mut panel = crate::widgets::flat_panel()
         .width_match()
         .padding(24)
         .spacing(16)
-        .child(header)
+        .child(header);
+    if crate::update::update_check_supported() && !state.manifest.feature_hidden("update_check") {
+        let app = Rc::clone(app);
+        let row = setting_row(
+            "软件更新",
+            Some("从 GitHub 检查困困输入法的 Windows 正式版"),
+            Element::button("检查更新")
+                .small()
+                .on_click(move |_| app.borrow().open_update_dialog()),
+        );
+        panel = panel.child(crate::search::anchor::wrap(row, "about:update", state.jump));
+    }
+    #[cfg(windows)]
+    {
+        let button = Element::button("卸载困困输入法…")
+            .small()
+            .outline_soft()
+            .on_click(|ctx| {
+                use std::os::windows::process::CommandExt;
+                use windows::Win32::System::Threading::CREATE_NO_WINDOW;
+                let result = std::env::current_exe().and_then(|exe| {
+                    std::process::Command::new(exe)
+                        .args(["system", "uninstall"])
+                        .creation_flags(CREATE_NO_WINDOW.0)
+                        .spawn()
+                });
+                if let Err(error) = result {
+                    ctx.toast_err(format!("无法打开卸载向导。{error}"));
+                }
+            });
+        let row = setting_row("卸载", Some("打开卸载向导，确认后开始移除。"), button);
+        panel = panel.child(crate::search::anchor::wrap(row, "about:uninstall", state.jump));
+    }
+    let panel = panel
         .child(Element::divider())
         .child(Element::label("基于 WindInput、wind-setting 和 WindUI 开源项目开发。").fg_role(Role::Text))
         .child(Element::label("软件采用 GPL-3.0-or-later 许可。词库和第三方组件许可随程序提供。").fg_role(Role::TextMuted))
@@ -1311,12 +1344,13 @@ mod about_tests {
         use windui::event::{MouseButton, PointerEvent, PointerKind};
         use windui::geometry::{Point, Size};
 
-        let state = AppState::empty();
+        let app = std::rc::Rc::new(std::cell::RefCell::new(AppState::empty()));
+        let state = app.borrow();
         state.tab.set(crate::cli::page_to_index("about").unwrap());
         let mut tree = Tree::new();
-        let root = super::about_page(&state).width(760).height(490).build(&mut tree);
+        let root = super::about_page(&app, &state).width(760).height(670).build(&mut tree);
         tree.root = Some(root);
-        tree.layout_root(Size::new(760, 490), &mut windui::text::NullTextEngine);
+        tree.layout_root(Size::new(760, 670), &mut windui::text::NullTextEngine);
         // The guide button follows the project link in keyboard navigation order.
         let button = *tree.focusable_order().last().expect("about actions");
         let bounds = tree.abs_bounds(button);

@@ -5,6 +5,9 @@
 
 use std::path::PathBuf;
 
+#[path = "build/uninstall_inventory.rs"]
+mod uninstall_inventory;
+
 fn main() {
     // 注入构建时间戳 + git 提交（供服务启动日志确认运行的二进制版本）。
     // 必须在 windows-only 早返回之前，使非 Windows 目标也能解析 env!。
@@ -28,6 +31,8 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
+
+    uninstall_inventory::generate(&product_root.canonicalize().expect("WindInput 源码目录缺失"));
 
     // 主线程栈 8 MiB（只是保留地址，按需提交）。默认 1 MiB 在 dev 档（工作区 opt-level=1）下
     // 不够：主题加载链上 serde 访问器每层都是数百 KiB 的帧，曾因此栈溢出、服务循环崩溃。

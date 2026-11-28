@@ -19,6 +19,12 @@ mod dialogs;
 mod dict_window;
 mod dota2_compat;
 mod file_assoc;
+#[cfg(windows)]
+pub mod windows_import_associations {
+    //! File formats and Shell commands shared with the Windows uninstaller.
+    pub use crate::file_assoc::{ALL, icon_value_for_exe, notify_shell_assoc_changed};
+    pub use crate::protocol::command_for_exe;
+}
 mod file_pick;
 mod hide_marker;
 mod hide_menu;
@@ -502,9 +508,10 @@ pub fn run() {
     });
     *app_state.borrow().log_pack_tx.borrow_mut() = Some(log_pack_tx);
 
-    // 启动静默检查更新：三重门控（已同意联网 + 未关自动检查 + 距上次超 24h）。
+    // Windows 的 ZIP 发行版只在用户点击「检查更新」时请求 GitHub。
+    // 其他平台沿用原安装器的静默检查门控。
     // 无更新或失败都不打扰用户，只有确实有新版本且未被「跳过此版本」屏蔽才弹对话框。
-    {
+    if !cfg!(windows) {
         let now = chrono::Local::now().timestamp();
         let cfg = app_state.borrow().setting_config.update.clone();
         let forced = update::force_check_requested(&args);

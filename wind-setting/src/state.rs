@@ -1466,7 +1466,8 @@ impl AppState {
         self.update_notes.set(String::new());
         self.update_progress.set(0.0);
         self.update_progress_text.set(String::new());
-        if self.setting_config.update.network_consent {
+        // Windows 关于页明确说明本次手动检查会访问 GitHub；不写入自动联网偏好。
+        if cfg!(windows) || self.setting_config.update.network_consent {
             self.begin_update_check();
         } else {
             self.update_phase.set(crate::update::UpdatePhase::Consent);
@@ -2161,8 +2162,10 @@ impl AppState {
                     self.update_notes.set(result.release_notes.clone());
                     self.update_phase.set(UpdatePhase::NoUpdate);
                 } else {
-                    self.update_message
-                        .set(format!("已是最新版本（{}）", result.remote_version));
+                    self.update_message.set(format!(
+                        "当前 {}，最新公开版本 {}。暂无更新。",
+                        result.local_version, result.remote_version
+                    ));
                     // 已是最新也展示最新版的更新记录——用户点开检查更新，多半也想知道
                     // 自己手上这个版本都带了什么。
                     self.update_notes.set(result.release_notes.clone());

@@ -23,6 +23,7 @@ const USAGE: &str = "\
   register-ime set-default --json      将已注册并启用的困困设为登录默认
   register-ime reset-default --json    恢复按语言列表自动选择
   help                             显示本帮助
+  uninstall                        打开本安装的卸载向导
 
 说明: Dota 2 按输入法名称查一张内置白名单决定要不要由游戏绘制候选，
       不在表内就取不到候选、还会多出一个左上角的系统 IME 小窗。
@@ -41,6 +42,7 @@ pub fn run(args: &[String]) -> i32 {
         }
         Some("dota2-compat") => dota2_compat(&args[1..]),
         Some("register-ime") => crate::register_ime::run(&args[1..]),
+        Some("uninstall") => crate::uninstall::run(&args[1..]),
         Some(other) => {
             eprintln!("未知的 system 动作: {other}\n");
             eprintln!("{USAGE}");

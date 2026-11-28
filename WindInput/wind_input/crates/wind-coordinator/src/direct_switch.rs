@@ -47,7 +47,7 @@ const MOD_BASE: u32 = 0xC000;
 
 /// Windows 文本服务的 CLSID、语言配置 ID 和直接切换热键 ID。
 /// 前两项对应 wind_tsf/src/Globals.cpp。
-pub(crate) fn tip_guid_strings() -> (&'static str, &'static str, &'static str) {
+pub fn tip_guid_strings() -> (&'static str, &'static str, &'static str) {
     (
         "{D6101A78-E6DB-5FF2-AA53-D4018795C838}",
         "{22A5794A-3482-57B7-999A-28D9523E6D4B}",

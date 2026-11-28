@@ -452,6 +452,10 @@ const HANDWRITTEN: &[Handwritten] = &[
     Handwritten { id: "advanced:diagnostics", anchor: "advanced:memory", page: "advanced", title: "诊断信息", section: "性能与诊断", keywords: "内存 复制 反馈 自动刷新 排查 diagnostics", feature: "memory" },
     // ── 关于 / AI 助手 ──
     Handwritten { id: "about:version", anchor: "about:main", page: "about", title: "版本信息", section: "关于", keywords: "版本号 内部版本 构建", feature: "" },
+    #[cfg(windows)]
+    Handwritten { id: "about:update", anchor: "about:update", page: "about", title: "检查更新", section: "软件更新", keywords: "升级 Windows 正式版 新版本 下载 GitHub", feature: "update_check" },
+    #[cfg(windows)]
+    Handwritten { id: "about:uninstall", anchor: "about:uninstall", page: "about", title: "卸载困困输入法", section: "关于", keywords: "删除 移除 注册 卸载向导 Windows", feature: "" },
     Handwritten { id: "mcp:main", anchor: "mcp:main", page: "mcp", title: "AI 助手接入（MCP）", section: "接入指南", keywords: "Codex Agent 智能体 客户端 配置 命令 stdio 词库管理 管理词库 更改设置", feature: "" },
 ];
 

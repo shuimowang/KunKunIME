@@ -14,8 +14,11 @@ pub mod install;
 pub mod notes;
 pub mod source;
 pub mod version;
+mod windows_release;
 
 use std::path::PathBuf;
+
+pub const WINDOWS_RELEASES_PAGE: &str = "https://github.com/shuimowang/KunKunIME/releases";
 
 /// 本机平台。元数据文件、安装包字段、能否自动安装都按它分。
 ///
@@ -71,7 +74,6 @@ impl Channel {
     pub fn metadata_urls(self) -> &'static [&'static str] {
         &[]
     }
-
 }
 
 /// 元数据里安装包地址的字段名。
@@ -157,6 +159,35 @@ pub struct CheckResult {
 }
 
 impl CheckResult {
+    fn from_asset(
+        local_raw: &str,
+        remote: &semver::Version,
+        download_url: String,
+        sha256: String,
+        size: u64,
+    ) -> Self {
+        let verdict = version::verdict(local_raw, remote);
+        Self {
+            has_update: matches!(verdict, version::Verdict::Upgrade { .. }),
+            local_version: local_raw.to_owned(),
+            remote_version: remote.to_string(),
+            release_notes: String::new(),
+            download_url,
+            sha256,
+            size,
+            local_unparsable: verdict == version::Verdict::LocalUnparsable,
+        }
+    }
+
+    pub fn release_page_url(&self) -> String {
+        match semver::Version::parse(&self.remote_version) {
+            Ok(version) if version.pre.is_empty() && version.build.is_empty() => {
+                format!("{WINDOWS_RELEASES_PAGE}/tag/v{version}")
+            }
+            _ => WINDOWS_RELEASES_PAGE.to_owned(),
+        }
+    }
+
     /// 体积的人类可读形式，用于下载前告知用户流量开销。
     pub fn size_display(&self) -> String {
         format_size(self.size)
@@ -271,26 +302,14 @@ impl UpdateError {
     }
 }
 
-/// 本平台是否具备自动升级通路。
-///
-/// Windows（`Setup.exe` + `ShellExecuteW` 提权）、macOS（`.pkg` + `open` 交给
-/// Installer.app）与 Linux（`.deb` + `pkexec apt-get install`，无 pkexec 时退到
-/// `xdg-open` 交给桌面的软件安装器）各有一条。
-///
-/// 这道门不能省：版本号是各平台共用的，没有门就会在没有升级通路的平台上照常判定
-/// 「有新版」，弹窗、下载、然后在安装那步报错 —— 整条链路唯一的产出是一个装不上的文件。
-///
-/// 用 `cfg!` 而非 `#[cfg]`：两边都参与编译，改坏了任一平台都会当场编译失败，
-/// 不会出现"条件写错位置、悄悄失效"那种只在另一个平台才暴露的问题。
+/// 困困的 Windows 正式版以 ZIP 分发，由用户在浏览器中下载。
 pub fn self_update_supported() -> bool {
     false
 }
 
-/// 本平台是否检查更新。三个平台都有元数据文件（Linux 是 `latest-linux.json`），
-/// 检查本身不会落空；与 [`self_update_supported`] 分开，是为了日后某平台能查不能装时
-/// 仍可只提示。
+/// 桌面设置目前提供 Windows 正式版的版本检查。
 pub fn update_check_supported() -> bool {
-    false
+    cfg!(windows) && Channel::current() == Channel::Stable
 }
 
 /// 启动时是否应发起自动检查。
@@ -373,6 +392,9 @@ fn scheme_ok_for(url: &str, http_allowed: bool) -> bool {
 ///
 /// **不得在 UI 线程调用** —— 含两次网络请求。结果经 [`UpdateMsg::CheckDone`] 回传。
 pub fn check_update(notes_when_up_to_date: bool) -> Result<CheckResult, UpdateError> {
+    if update_check_supported() {
+        return windows_release::check(version::local_raw(), notes_when_up_to_date);
+    }
     let channel = Channel::current();
     let info = source::fetch_release_info(channel)?;
     let local = test_override_local();
@@ -389,24 +411,13 @@ fn decide(info: &ReleaseInfo, local_raw: &str) -> Result<CheckResult, UpdateErro
     let remote = version::parse(&info.version)
         .ok_or_else(|| UpdateError::InvalidMetadata(format!("版本号无法解析：{}", info.version)))?;
 
-    let verdict = version::verdict(local_raw, &remote);
-    let (has_update, local_unparsable) = match verdict {
-        version::Verdict::Upgrade { .. } => (true, false),
-        version::Verdict::UpToDate => (false, false),
-        // 无 tag 的开发构建：跳过升级提示，而不是把它当成 0.0.0 每次都提示
-        version::Verdict::LocalUnparsable => (false, true),
-    };
-
-    Ok(CheckResult {
-        has_update,
-        local_version: local_raw.to_string(),
-        remote_version: info.version.clone(),
-        release_notes: String::new(),
-        download_url: info.download_url.clone(),
-        sha256: info.sha256.clone(),
-        size: info.size,
-        local_unparsable,
-    })
+    Ok(CheckResult::from_asset(
+        local_raw,
+        &remote,
+        info.download_url.clone(),
+        info.sha256.clone(),
+        info.size,
+    ))
 }
 
 #[cfg(test)]
@@ -558,8 +569,8 @@ mod tests {
     }
 
     #[test]
-    fn local_release_has_no_upstream_update_channel() {
-        assert!(!update_check_supported());
+    fn windows_checks_project_releases_without_using_upstream_installers() {
+        assert_eq!(update_check_supported(), cfg!(windows));
         assert!(!self_update_supported());
         for channel in [Channel::Stable, Channel::Dev] {
             assert!(channel.metadata_urls().is_empty());
