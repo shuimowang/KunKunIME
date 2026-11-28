@@ -17,7 +17,7 @@ import com.windinput.ime.keyboard.KeyAction
 sealed interface EditOp {
     data class Commit(val text: String) : EditOp
 
-    /** @param caret 插入符在 [text] 内的字符位置 */
+    /** @param caret 插入符在 [text] 内的 UTF-16 偏移（与 Kotlin String 索引一致）。 */
     data class SetComposition(val text: String, val caret: Int) : EditOp
 
     data class DeleteBackward(val count: Int) : EditOp

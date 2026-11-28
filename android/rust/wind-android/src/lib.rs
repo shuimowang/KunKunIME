@@ -69,7 +69,7 @@ pub struct EditOp {
     pub kind: u8,
     /// Commit/SetComposition/ReplaceBackward 的文本
     pub text: String,
-    /// SetComposition 的插入符（字符数）；DeleteBackward/ReplaceBackward 的字符数
+    /// SetComposition 的 UTF-16 插入位置；DeleteBackward/ReplaceBackward 的 Unicode 码点数
     pub count: u32,
     /// MoveCursor 的位移（正右负左）
     pub delta: i32,
@@ -984,9 +984,12 @@ impl WindCore {
         query: String,
         offset: u32,
         limit: u32,
-    ) -> UserWordPageInfo {
-        let page = self.core.user_words(&schema_id, &query, offset, limit);
-        UserWordPageInfo {
+    ) -> Result<UserWordPageInfo, ConfigError> {
+        let page = self
+            .core
+            .user_words(&schema_id, &query, offset, limit)
+            .map_err(|reason| ConfigError::Rejected { reason })?;
+        Ok(UserWordPageInfo {
             items: page
                 .items
                 .into_iter()
@@ -997,7 +1000,7 @@ impl WindCore {
                 })
                 .collect(),
             total: page.total,
-        }
+        })
     }
 
     /// 手动加词。拼音码可带空格声明音节切分（`ni hao`）。

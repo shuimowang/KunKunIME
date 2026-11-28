@@ -1000,6 +1000,9 @@ private fun AboutSection(versionName: String, onOpenSub: (String) -> Unit) {
             summary = "版本 $versionName",
             startAction = { KunKunLogo(Modifier.padding(end = 14.dp).size(40.dp)) },
         )
+        NavRow("困困输入法 GitHub 主页", "查看项目源码、发布记录与使用说明", icon = SettingsIcons.website) {
+            Diagnostics.openUrl(context, ProjectLinks.SOURCE_URL)
+        }
         NavRow(SUB_PRIVACY, "语音、应用更新、本地数据与系统备份", icon = SettingsIcons.privacy) {
             onOpenSub(SUB_PRIVACY)
         }

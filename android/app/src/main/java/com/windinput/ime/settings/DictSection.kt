@@ -14,12 +14,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import com.windinput.ime.core.ImeSession
 import com.windinput.ime.core.SchemaEntry
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -39,6 +42,7 @@ import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import uniffi.wind_android.ConfigException
 import uniffi.wind_android.UserWordInfo
+import uniffi.wind_android.UserWordPageInfo
 
 /** 每次多取的条数 */
 private const val PAGE_SIZE = 50u
@@ -76,8 +80,7 @@ internal fun DictAdd(session: ImeSession?) = DictSection(session, DictMode.ADD) 
 @Composable
 private fun DictSection(session: ImeSession?, mode: DictMode, onOpen: (String) -> Unit) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    // 当前方案走 JNI，不放在重组路径上（搜索框每敲一字就重组一次）
+    // 方案读取走 JNI，只在会话就绪后查询。
     val schema by produceState<SchemaEntry?>(null, session) {
         value = withContext(Dispatchers.IO) { session?.schemas()?.firstOrNull { it.active } }
     }
@@ -86,75 +89,86 @@ private fun DictSection(session: ImeSession?, mode: DictMode, onOpen: (String) -
         SectionTitle("正在启动输入法核心…")
         return
     }
-    DictContent(current, context, scope, mode, onOpen)
+    key(current.id) { DictContent(current, context, mode, onOpen) }
 }
 
 @Composable
 private fun DictContent(
     schema: SchemaEntry,
     context: Context,
-    scope: CoroutineScope,
     mode: DictMode,
     onOpen: (String) -> Unit,
 ) {
-
-    var query by remember { mutableStateOf("") }
-    var words by remember { mutableStateOf<List<UserWordInfo>>(emptyList()) }
-    var total by remember { mutableStateOf(0uL) }
+    val scope = rememberCoroutineScope()
+    var query by rememberSaveable { mutableStateOf("") }
+    val filter = query.trim()
     var limit by remember { mutableStateOf(PAGE_SIZE) }
     var reload by remember { mutableIntStateOf(0) }
-    var selected by remember { mutableStateOf<UserWordInfo?>(null) }
-    var confirmClear by remember { mutableStateOf(false) }
-    var confirmAt by remember { mutableLongStateOf(0L) }
-    var newCode by remember { mutableStateOf("") }
-    var newText by remember { mutableStateOf("") }
+    // 新查询立即丢弃上一组结果。在同一个查询中加载下一页则保留已有行。
+    var page by remember(filter, reload) { mutableStateOf<UserWordPageInfo?>(null) }
+    var loadError by remember(filter, limit, reload) { mutableStateOf<String?>(null) }
+    var loading by remember(filter, limit, reload) { mutableStateOf(true) }
+    var writing by remember { mutableStateOf(false) }
+    var selected by remember(filter, reload) { mutableStateOf<UserWordInfo?>(null) }
+    var confirmAt by remember(filter, reload) { mutableLongStateOf(0L) }
+    var newCode by rememberSaveable { mutableStateOf("") }
+    var newText by rememberSaveable { mutableStateOf("") }
 
-    LaunchedEffect(schema.id, query, limit, reload) {
-        // 防抖：每次查询都扫满整张个人词表，连敲几个字就叠出几次全表扫描（JNI 调用取消不了）。
-        // 输入变了这个协程会被取消，delay 处直接短路
-        if (mode == DictMode.ADD) return@LaunchedEffect // 加词页用不到列表，不扫整张表
-        if (query.isNotEmpty()) delay(SEARCH_DEBOUNCE_MS)
-        val page = withContext(Dispatchers.IO) {
-            runCatching { CoreAccess.obtainCore(context)?.userWords(schema.id, query.trim(), 0u, limit) }.getOrNull()
+    LaunchedEffect(filter, limit, reload) {
+        if (mode == DictMode.ADD) return@LaunchedEffect
+        if (filter.isNotEmpty()) delay(SEARCH_DEBOUNCE_MS)
+        try {
+            page = withContext(Dispatchers.IO) {
+                val core = CoreAccess.obtainCore(context) ?: error("输入法核心未就绪")
+                core.userWords(schema.id, filter, 0u, limit)
+            }
+            loading = false
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            loadError = (e as? ConfigException.Rejected)?.reason ?: e.message ?: "无法读取个人词库"
+            loading = false
         }
-        words = page?.items.orEmpty()
-        total = page?.total ?: 0uL
     }
 
-    /**
-     * 写操作放后台，结果用 Toast 报（删列表顶部的词时，页面里的提示行早滚出屏幕了）；
-     * 失败显示核心给的原因（只读模式等），成功后重读列表并回调 [onSuccess]。
-     */
     fun write(done: String, onSuccess: () -> Unit = {}, op: (uniffi.wind_android.WindCore) -> Unit) {
+        if (writing) return
+        writing = true
         scope.launch {
-            val error = withContext(Dispatchers.IO) {
-                val core = CoreAccess.obtainCore(context) ?: return@withContext "输入法核心未就绪"
-                try {
+            try {
+                withContext(Dispatchers.IO) {
+                    val core = CoreAccess.obtainCore(context) ?: error("输入法核心未就绪")
                     op(core)
-                    null
-                } catch (e: ConfigException) {
-                    (e as? ConfigException.Rejected)?.reason ?: e.toString()
-                } catch (e: Exception) {
-                    // 核心 panic 时 UniFFI 抛的是 InternalException，不兜住设置页就整个崩了
-                    "操作失败：${e.message ?: e}"
                 }
+                onSuccess()
+                selected = null
+                reload++
+                Toast.makeText(context, done, Toast.LENGTH_SHORT).show()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val reason = (e as? ConfigException.Rejected)?.reason ?: e.message ?: "操作失败"
+                Toast.makeText(context, reason, Toast.LENGTH_LONG).show()
+            } finally {
+                writing = false
             }
-            Toast.makeText(context, error ?: done, Toast.LENGTH_SHORT).show()
-            if (error == null) onSuccess()
-            selected = null
-            reload++
         }
     }
 
     val schemaName = schema.name.ifEmpty { schema.id }
+    val currentPage = page
     if (mode == DictMode.OVERVIEW) {
+        val count = when {
+            loadError != null -> "读取失败，点此查看"
+            currentPage == null -> "正在读取…"
+            else -> "共 ${currentPage.total} 条 · 搜索、删除、清空"
+        }
         SectionTitle("当前方案：$schemaName")
         Card(modifier = Modifier.fillMaxWidth()) {
-            NavRow("我的词条", "共 $total 条 · 搜索、删除、清空", icon = SettingsIcons.words) { onOpen(DICT_WORDS) }
+            NavRow("我的词条", count, icon = SettingsIcons.words) { onOpen(DICT_WORDS) }
             NavRow("添加词条", "手动加一个词和它的编码", icon = SettingsIcons.addWord) { onOpen(DICT_ADD) }
             NavRow(DICT_STATS, "系统词库的条目、码长、重码与字集覆盖", icon = SettingsIcons.dictStats) { onOpen(DICT_STATS) }
         }
-        // 短语不分方案（全局一份），单独一张卡，不放在「当前方案」名下
         Card(modifier = Modifier.fillMaxWidth()) {
             NavRow(DICT_PHRASES, "打编码出固定文字：地址、常用回复、日期时间…", icon = SettingsIcons.phrases) { onOpen(DICT_PHRASES) }
         }
@@ -162,14 +176,58 @@ private fun DictContent(
         return
     }
 
-    if (mode == DictMode.WORDS) {
-    SectionTitle("$schemaName · 共 $total 条")
+    if (mode == DictMode.ADD) {
+        SectionTitle("加到「$schemaName」")
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextField(
+                    value = newText,
+                    onValueChange = { newText = it },
+                    enabled = !writing,
+                    label = "词",
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                TextField(
+                    value = newCode,
+                    onValueChange = { newCode = it },
+                    enabled = !writing,
+                    label = "编码（拼音可用空格分音节，如 ni hao）",
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                TextButton(
+                    text = if (writing) "正在添加…" else "添加",
+                    enabled = !writing && newText.isNotBlank() && newCode.isNotBlank(),
+                    onClick = {
+                        val code = newCode.trim()
+                        val text = newText.trim()
+                        write("已添加「$text」", onSuccess = {
+                            newCode = ""
+                            newText = ""
+                        }) { it.userWordAdd(schema.id, code, text) }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+        return
+    }
+
+    val heading = when {
+        currentPage == null -> schemaName
+        filter.isEmpty() -> "$schemaName · 共 ${currentPage.total} 条"
+        else -> "$schemaName · 找到 ${currentPage.total} 条"
+    }
+    SectionTitle(heading)
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
             TextField(
                 value = query,
                 onValueChange = {
                     query = it
+                    selected = null
+                    confirmAt = 0L
                     limit = PAGE_SIZE
                 },
                 label = "按编码或词搜索",
@@ -178,84 +236,56 @@ private fun DictContent(
             )
         }
         Column {
-            if (words.isEmpty()) {
-                NavRow(if (query.isBlank()) "还没有个人词" else "没有找到", null, null)
-            }
-            for (w in words) {
-                WordRow(w, selected == w, onClick = { selected = if (selected == w) null else w }) {
-                    write("已删除「${w.text}」") { it.userWordRemove(schema.id, w.code, w.text) }
+            val error = loadError
+            when {
+                error != null -> NavRow("读取失败，点击重试", error) { reload++ }
+                currentPage == null -> NavRow(if (filter.isEmpty()) "正在读取…" else "正在搜索…", null)
+                currentPage.items.isEmpty() -> NavRow(if (filter.isEmpty()) "还没有个人词" else "没有找到匹配的词条", null)
+                else -> {
+                    for (word in currentPage.items) {
+                        WordRow(word, selected == word, onClick = {
+                            selected = if (selected == word) null else word
+                            confirmAt = 0L
+                        }) {
+                            if (query.trim() == filter) {
+                                write("已删除「${word.text}」") { it.userWordRemove(schema.id, word.code, word.text) }
+                            }
+                        }
+                    }
+                    if (currentPage.items.size.toULong() < currentPage.total) {
+                        NavRow(
+                            if (loading) "正在加载…" else "显示更多",
+                            "已显示 ${currentPage.items.size} / ${currentPage.total} 条",
+                            onClick = if (loading) null else ({ limit += PAGE_SIZE }),
+                        )
+                    }
                 }
             }
-            if (words.size.toULong() < total) {
-                NavRow("显示更多", "已显示 ${words.size} / $total 条") { limit += PAGE_SIZE }
-            }
         }
     }
 
-    }
-
-    if (mode == DictMode.ADD) {
-    SectionTitle("加到「$schemaName」")
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextField(
-                value = newText,
-                onValueChange = { newText = it },
-                label = "词",
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-            )
-            TextField(
-                value = newCode,
-                onValueChange = { newCode = it },
-                label = "编码（拼音可用空格分音节，如 ni hao）",
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-            )
-            TextButton(
-                text = "添加",
-                onClick = {
-                    val code = newCode.trim()
-                    val text = newText.trim()
-                    if (code.isEmpty() || text.isEmpty()) {
-                        Toast.makeText(context, "词和编码都要填", Toast.LENGTH_SHORT).show()
-                    } else {
-                        // 成功才清空：被核心拒了（编码不合法、只读模式）不用重填
-                        write("已添加「$text」", onSuccess = {
-                            newCode = ""
-                            newText = ""
-                        }) { it.userWordAdd(schema.id, code, text) }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-    }
-
-    }
-
-    if (mode != DictMode.WORDS) return
-    // 二次确认：第二下要隔开一点（误触双击不算），过一阵没点就复位（几分钟后再点不能直接清）
-    if (confirmClear) {
+    if (filter.isNotEmpty() || loading || loadError != null || currentPage == null || currentPage.total == 0uL) return
+    if (confirmAt != 0L) {
         LaunchedEffect(confirmAt) {
             delay(CONFIRM_RESET_MS)
-            confirmClear = false
+            confirmAt = 0L
         }
     }
     SectionTitle("数据")
     Card(modifier = Modifier.fillMaxWidth()) {
         NavRow(
-            if (confirmClear) "再点一次确认清空" else "清空个人词",
-            if (confirmClear) "「${schema.name}」的个人词全部删除，不能恢复" else "删除当前方案的全部个人词",
+            if (confirmAt != 0L) "再点一次确认清空" else "清空个人词",
+            if (confirmAt != 0L) "将删除「$schemaName」全部 ${currentPage.total} 条个人词，不能恢复"
+            else "删除「$schemaName」的全部 ${currentPage.total} 条个人词",
             icon = SettingsIcons.clear,
-            highlight = confirmClear,
+            highlight = confirmAt != 0L,
         ) {
+            if (writing || query.isNotBlank()) return@NavRow
             val now = SystemClock.uptimeMillis()
-            if (!confirmClear) {
-                confirmClear = true
+            if (confirmAt == 0L || now - confirmAt >= CONFIRM_RESET_MS) {
                 confirmAt = now
             } else if (now - confirmAt >= CONFIRM_MIN_GAP_MS) {
-                confirmClear = false
+                confirmAt = 0L
                 write("已清空") { it.userWordsClear(schema.id) }
             }
         }

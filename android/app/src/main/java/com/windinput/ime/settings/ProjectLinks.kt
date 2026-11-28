@@ -1,6 +1,6 @@
 package com.windinput.ime.settings
 
-/** 用户主动点击后交给浏览器的项目链接；输入法本身不请求更新元数据或下载 APK。 */
+/** 用户从设置中打开的项目链接。应用内检查和下载更新使用独立的安卓发行渠道。 */
 internal object ProjectLinks {
     const val SOURCE_URL = "https://github.com/shuimowang/KunKunIME"
     const val RELEASES_URL = "$SOURCE_URL/releases"

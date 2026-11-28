@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
@@ -48,6 +49,7 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Send
@@ -67,20 +69,19 @@ import top.yukonga.miuix.kmp.theme.ThemeController
  * 于是「操作后再打字」类用例读到的是空框，看起来像功能坏了——实际字母进了另一个框。
  *
  * 现在是**单框 + 顶部场景分段**：框只有一个，焦点无处可跑；场景（`inputType` / `imeOptions`）
- * 由分段切换。输入框仍是原生 [EditText]：场景要精确控制 `inputType` 的 variation
- * （可见密码、句首大写），脚本也按它的 `content-desc` 定位、读文本。
+ * 由分段切换。输入框使用原生 [EditText]，以便在密码、数字、句首大写等场景提供真实的 EditorInfo。
  */
 class TestPadActivity : ComponentActivity() {
 
     private data class Scene(val tab: String, val hint: String, val inputType: Int, val imeOptions: Int)
+    private data class Draft(val text: String, val selectionStart: Int, val selectionEnd: Int)
 
-    /** 顺序即分段顺序。脚本按分段文字点（scripts/emu-test.sh 的 tap_text） */
+    /** 顺序即试打台的场景页签顺序。 */
     private val scenes = listOf(
         Scene("普通", "多行文本，回车换行", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE, EditorInfo.IME_ACTION_UNSPECIFIED),
         Scene("搜索", "回车键应显示「搜索」", InputType.TYPE_CLASS_TEXT, EditorInfo.IME_ACTION_SEARCH),
         Scene("数字", "应直接调起九宫格数字键盘", InputType.TYPE_CLASS_NUMBER, EditorInfo.IME_ACTION_UNSPECIFIED),
-        // 用「可见密码」：同样走直输分支，但字不变成圆点，脚本读得出来
-        Scene("密码", "可见密码：应强制英文直输、不学习", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD, EditorInfo.IME_ACTION_DONE),
+        Scene("密码", "密码试打使用英文直输，点完成或切换场景会清空内容", passwordType, EditorInfo.IME_ACTION_DONE),
         // 聊天类应用的输入框大多带 CAP_SENTENCES：英文句首自动大写只在这种框里生效
         Scene("句子", "英文句首应自动大写", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_MULTI_LINE, EditorInfo.IME_ACTION_UNSPECIFIED),
     )
@@ -150,7 +151,7 @@ class TestPadActivity : ComponentActivity() {
                         item {
                             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                                 Text(
-                                    text = "在下面试打，点发送就像发一条消息",
+                                    text = if (scene.inputType == passwordType) "可以在下方试打模拟密码" else "在下面试打，点发送就像发一条消息",
                                     fontSize = 13.sp,
                                     color = colors.onSurfaceVariantSummary,
                                 )
@@ -187,9 +188,10 @@ class TestPadActivity : ComponentActivity() {
         val textColor = colors.onSurface.toArgb()
         val hintColor = colors.onSurfaceVariantSummary.toArgb()
         var field by remember { mutableStateOf<EditText?>(null) }
+        val drafts = remember { mutableMapOf<Int, Draft>() }
         fun send() {
             val f = field ?: return
-            onSend(f.text.toString())
+            if (f.inputType != passwordType) onSend(f.text.toString())
             f.text.clear()
         }
         Row(
@@ -200,17 +202,10 @@ class TestPadActivity : ComponentActivity() {
                 modifier = Modifier.weight(1f),
                 factory = { ctx ->
                     EditText(ctx).apply {
-                        // 脚本按 content-desc 定位（代码设的 id 在 uiautomator dump 里不可见）
+                        // 仪器测试直接定位此输入框；输入内容无需写入日志。
                         contentDescription = TEST_PAD_DESC
                         hint = "测试输入框"
-                        // 内容一变就写一行日志：测试脚本读日志拿输入框内容（几十毫秒），不必每次
-                        // 抓整个界面（uiautomator dump，一次 0.2–3 秒，全量一百多次）
-                        logText("")
-                        addTextChangedListener(object : android.text.TextWatcher {
-                            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-                            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-                            override fun afterTextChanged(s: android.text.Editable?) = logText(s?.toString().orEmpty())
-                        })
+                        importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
                         gravity = Gravity.CENTER_VERTICAL or Gravity.START
                         setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
                         minHeight = (44 * resources.displayMetrics.density).toInt()
@@ -238,29 +233,37 @@ class TestPadActivity : ComponentActivity() {
                     f.setHintTextColor(hintColor)
                     // 换场景要重启输入连接，否则输入法拿到的还是旧的 EditorInfo
                     if (f.inputType != scene.inputType || f.imeOptions != scene.imeOptions) {
+                        val enteringPassword = scene.inputType == passwordType
+                        if (f.inputType != passwordType && f.length() > 0) {
+                            drafts[f.inputType] = Draft(f.text.toString(), f.selectionStart, f.selectionEnd)
+                        }
+                        f.text.clear()
+                        f.isSaveEnabled = !enteringPassword
                         f.inputType = scene.inputType
                         f.imeOptions = scene.imeOptions
+                        drafts.remove(scene.inputType)?.let { draft ->
+                            f.setText(draft.text)
+                            val length = f.length()
+                            f.setSelection(draft.selectionStart.coerceIn(0, length), draft.selectionEnd.coerceIn(0, length))
+                        }
                         f.requestFocus()
                         getSystemService(InputMethodManager::class.java)?.restartInput(f)
                     }
                 },
             )
-            IconButton(onClick = { send() }, modifier = Modifier.padding(start = 4.dp)) {
-                Icon(MiuixIcons.Send, contentDescription = "发送", tint = colors.primary)
+            if (scene.inputType == passwordType) {
+                TextButton(text = "完成", onClick = { send() })
+            } else {
+                IconButton(onClick = { send() }, modifier = Modifier.padding(start = 4.dp)) {
+                    Icon(MiuixIcons.Send, contentDescription = "发送", tint = colors.primary)
+                }
             }
         }
         LaunchedEffect(Unit) { field?.requestFocus() }
     }
 
     companion object {
-        /** 与 scripts/emu-test.sh 约定的定位锚点 */
+        private val passwordType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         const val TEST_PAD_DESC = "windinput-testpad"
-
-        /** 与 scripts/emu-test.sh 的 get_pad_text 约定：`text=` 后接内容，反斜杠与换行转义 */
-        private const val LOG_TAG = "WindTestPad"
-
-        private fun logText(text: String) {
-            android.util.Log.i(LOG_TAG, "text=" + text.replace("\\", "\\\\").replace("\n", "\\n"))
-        }
     }
 }

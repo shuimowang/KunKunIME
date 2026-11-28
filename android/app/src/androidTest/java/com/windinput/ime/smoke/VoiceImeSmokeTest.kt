@@ -116,7 +116,7 @@ class VoiceImeSmokeTest {
             tap(password)
             tap(awaitEditor())
             listOf("a", "b", "c").forEach { tap(awaitKey(it)) }
-            eventually("the new password editor receives only typed keys") { editorText() == "abc" }
+            eventually("the new password editor receives only typed keys") { passwordFixtureEquals("abc") }
             // Deliver the cancelled callback only after the real editor changed.
             shell("am broadcast -n $testId/com.windinput.ime.smoke.ControlledRecognitionReleaseReceiver --ei request_id $cancelledRequest")
             eventually("the provider attempts this request's late cancelled callback") {
@@ -124,7 +124,7 @@ class VoiceImeSmokeTest {
             }
             val until = SystemClock.uptimeMillis() + 800
             while (SystemClock.uptimeMillis() < until) {
-                assertEquals("Cancelled speech must not reach the new password editor", "abc", editorText())
+                assertTrue("Cancelled speech must not reach the new password editor", passwordFixtureEquals("abc"))
                 SystemClock.sleep(100)
             }
             capture("voice-ipc-cancelled.png")

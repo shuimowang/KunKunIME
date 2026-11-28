@@ -85,24 +85,24 @@ class RealImeSmokeTest {
             // Debug only: hold delivery of the real core. Release has no such API.
             assertTrue("Real Rust startup reached its handoff", startupHold.awaitBlocked(90_000))
             awaitKey("n")
+            setEditorText("原文")
             typeKeys("ni")
-            assertEquals("Early Pinyin must stay buffered, not commit Latin letters", "", editorText())
+            assertEquals("Early Pinyin stays buffered beside the existing draft", "原文", editorText())
 
             selectScene("密码")
-            assertEquals("Changing input type must not commit the abandoned Pinyin", "", editorText())
+            eventually("Password scene starts empty and masked") { passwordFixtureEquals("") }
             typeKeys("abc")
-            awaitText("abc")
+            eventually("Password scene receives direct keys") { passwordFixtureEquals("abc") }
             selectScene("普通")
-            // Keep the text so manually clearing it cannot hide stale queued input.
-            assertEquals("Password text survives the scene change", "abc", editorText())
+            assertEquals("Leaving the password scene restores the ordinary draft", "原文", editorText())
             typeKeys("nihaox", trailingKey = "删除")
-            assertEquals("Queued Pinyin must not edit the existing text", "abc", editorText())
+            assertEquals("Queued Pinyin must not edit the existing text", "原文", editorText())
             awaitImeNode("seven startup keys buffered after abandoning the old input") {
                 it.text?.toString()?.contains("已暂存 7 次输入") == true
             }
             capture("cold-start-queued.png")
             startupHold.close()
-            "abc你好"
+            "原文你好"
         } else {
             // Actual release bytecode: wait for normal startup, then drive the
             // real keyboard. This does not claim deterministic queue coverage.
@@ -160,13 +160,21 @@ class RealImeSmokeTest {
         exerciseQuickPhrasesAndUpdateScreen()
 
         selectScene("密码")
-        clearEditor()
+        eventually("New password field has no regular draft") { passwordFixtureEquals("") }
         typeKeys("abc")
-        awaitText("abc")
+        eventually("Password field receives typed ASCII while masked") { passwordFixtureEquals("abc") }
         assertTrue("Password input must not produce Hanzi candidates", findImeNode { node ->
             node.contentDescription?.toString()?.startsWith("你好") == true
         } == null)
-        Log.i(TAG, "PASS: visible password receives direct ASCII")
+        val doneButton = awaitNode("password test finish", imeOnly = false) { it.text?.toString() == "完成" }
+        tap(doneButton)
+        eventually("Finishing clears the password field") { passwordFixtureEquals("") }
+        assertTrue("Completing a simulated password must not add a chat bubble", findAppNode {
+            !it.isEditable && it.text?.toString() == "abc"
+        } == null)
+        assertTrue("The test pad must not log typed content", deviceShell("logcat -d -s WindTestPad:I")
+            .lineSequence().none { "WindTestPad" in it && "text=" in it })
+        Log.i(TAG, "PASS: password is masked, receives direct ASCII and clears on completion")
 
         selectScene("数字")
         clearEditor()
@@ -266,15 +274,17 @@ class RealImeSmokeTest {
         awaitKey(if (label == "数字") "1" else "a")
     }
 
-    private fun clearEditor() {
+    private fun clearEditor() = setEditorText("")
+
+    private fun setEditorText(value: String) {
         val args = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "")
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
         }
         val editor = awaitEditor()
-        assertTrue("Test pad supports clearing its text", editor.performAction(
+        assertTrue("Test pad accepts fixture text", editor.performAction(
             AccessibilityNodeInfo.ACTION_SET_TEXT, args,
         ))
-        awaitText("")
+        awaitText(value)
         instrumentation.waitForIdleSync()
     }
 

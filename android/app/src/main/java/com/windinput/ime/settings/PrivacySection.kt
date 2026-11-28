@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.yukonga.miuix.kmp.basic.Card
@@ -75,8 +74,7 @@ internal val PRIVACY_POLICY: List<Pair<String, String>> = listOf(
     "日志" to
         "程序日志写进系统日志（logcat），出厂只记警告与错误，不含输入的文字。" +
         "「高级 → 调试」里把级别调到「调试」「跟踪」时会记下输入内容，只供排查问题，用完请改回。" +
-        "例外：设置首页「试一试」的测试输入框会把框里的文字记进系统日志（供自动化测试读取），" +
-        "请不要在那里输入隐私内容；「分享诊断信息」与诊断压缩包不包含这部分日志。",
+        "「试一试」输入框本身不记录试打原文。密码场景使用遮罩，完成或退出该场景时会清空模拟密码。",
     "删除数据" to
         "· 剪贴板历史：剪贴板面板里逐条删除或清空\n" +
         "· 常用语：在常用语页长按一条，选择删除\n" +
@@ -88,7 +86,6 @@ internal val PRIVACY_POLICY: List<Pair<String, String>> = listOf(
 
 @Composable
 internal fun PrivacySection() {
-    val context = LocalContext.current
     for ((title, body) in PRIVACY_POLICY) {
         SectionTitle(title)
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -99,12 +96,6 @@ internal fun PrivacySection() {
                 lineHeight = 22.sp,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )
-        }
-    }
-    SectionTitle("更多")
-    Card(modifier = Modifier.fillMaxWidth()) {
-        NavRow("项目源码", ProjectLinks.SOURCE_URL, icon = SettingsIcons.website) {
-            Diagnostics.openUrl(context, ProjectLinks.SOURCE_URL)
         }
     }
 }

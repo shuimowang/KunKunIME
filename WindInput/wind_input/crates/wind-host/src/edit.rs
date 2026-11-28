@@ -20,7 +20,7 @@ pub enum EditOp {
     /// 上屏文本（追加到光标处）
     Commit(String),
 
-    /// 设置组合区内容与光标（字节偏移，恒在字符边界）。
+    /// 设置组合区内容与光标（组合串内的 UTF-16 单元偏移，与宿主编辑器一致）。
     /// 空文本 = 清除组合区。
     SetComposition { text: String, caret: usize },
 

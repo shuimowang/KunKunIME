@@ -1017,8 +1017,7 @@ class WindInputImeService :
                         } else if (inlinePreedit) {
                             // 编码默认只显示在自绘编码栏：五笔码嵌在正文里是噪声，且与
                             // 编码栏重复。想要宿主内联的用户开 ui.android.inline_preedit。
-                            ic.setComposingText(op.text, op.caret.coerceAtLeast(1))
-                            hasInlineComposition = true
+                            hasInlineComposition = ic.setInlineComposition(op.text, op.caret)
                         }
                     }
                     // 按**码点**删除：核心按字符计数，deleteSurroundingText 的单位是
@@ -1050,14 +1049,17 @@ class WindInputImeService :
     private fun moveCursor(ic: android.view.inputmethod.InputConnection, delta: Int) {
         if (delta == 0) return
         val extracted = ic.getExtractedText(ExtractedTextRequest(), 0)
-        if (extracted == null) {
+        val text = extracted?.text
+        val target = if (text != null && extracted.startOffset >= 0) {
+            codePointTarget(text, extracted.selectionEnd, delta)?.let { extracted.startOffset + it }
+        } else null
+        if (target == null) {
             // 拿不到选区时退回方向键（部分宿主不支持 ExtractedText）
             val code = if (delta > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT
             repeat(kotlin.math.abs(delta)) { sendDownUpKeyEvents(code) }
             return
         }
-        val pos = (extracted.startOffset + extracted.selectionEnd + delta).coerceAtLeast(0)
-        ic.setSelection(pos, pos)
+        ic.setSelection(target, target)
     }
 
     /**
@@ -1639,9 +1641,10 @@ class WindInputImeService :
         if (composing || hasBufferedInput) return
         val ic = currentInputConnection ?: return
         val extracted = ic.getExtractedText(ExtractedTextRequest(), 0) ?: return
-        val end = extracted.startOffset + extracted.selectionEnd
-        val start = (end - count).coerceAtLeast(0)
-        ic.setSelection(start, end)
+        val text = extracted.text ?: return
+        if (extracted.startOffset < 0) return
+        val start = backspaceSelectionStart(text, extracted.selectionEnd, count) ?: return
+        ic.setSelection(extracted.startOffset + start, extracted.startOffset + extracted.selectionEnd)
     }
 
     /** 退格滑动抬手：有编码 → 清空编码；否则删除选区 */
@@ -1652,6 +1655,10 @@ class WindInputImeService :
             return
         }
         val ic = currentInputConnection ?: return
+        if (!canRememberDeletes) {
+            ic.commitText("", 1)
+            return
+        }
         val selected = ic.getSelectedText(0)
         if (!selected.isNullOrEmpty()) {
             ic.commitText("", 1)
@@ -1670,6 +1677,10 @@ class WindInputImeService :
             return
         }
         val ic = currentInputConnection ?: return
+        if (!canRememberDeletes) {
+            ic.deleteWithoutUndo(CLEAR_ALL_MAX, 0)
+            return
+        }
         ic.beginBatchEdit()
         val selected = ic.getSelectedText(0)?.toString().orEmpty()
         if (selected.isNotEmpty()) ic.commitText("", 1)
@@ -1714,6 +1725,10 @@ class WindInputImeService :
             return
         }
         val ic = currentInputConnection ?: return
+        if (!canRememberDeletes) {
+            ic.deleteWithoutUndo(CLEAR_ALL_MAX, CLEAR_ALL_MAX)
+            return
+        }
         ic.beginBatchEdit()
         val selected = ic.getSelectedText(0)?.toString().orEmpty()
         if (selected.isNotEmpty()) ic.commitText("", 1)
@@ -1732,7 +1747,7 @@ class WindInputImeService :
      */
     private fun recordBackwardDelete(delete: () -> Unit) {
         val ic = currentInputConnection
-        val old = if (composing || hasBufferedInput || directInput || ic == null) null else selectionOf(ic)
+        val old = if (composing || hasBufferedInput || !canRememberDeletes || ic == null) null else selectionOf(ic)
         if (ic == null || old == null) {
             delete()
             return
@@ -1749,7 +1764,7 @@ class WindInputImeService :
 
     /** 扩选删 / 删光标前 / 清空之后：记一条，恢复点 = 删完后的光标 */
     private fun recordDeleted(ic: android.view.inputmethod.InputConnection, before: String, after: String) {
-        if (directInput) return
+        if (!canRememberDeletes) return
         val now = selectionOf(ic) ?: return
         if (now[0] == now[1]) deleteUndo.record(before, after, now[0])
     }
@@ -1770,7 +1785,7 @@ class WindInputImeService :
      */
     override fun onBackspaceRestore() {
         cancelVoiceInput()
-        if (composing) return
+        if (!canRestoreDeleted()) return
         val ic = currentInputConnection ?: return
         val sel = selectionOf(ic) ?: return
         val e = deleteUndo.take(sel[0], sel[1]) ?: return
@@ -1781,7 +1796,9 @@ class WindInputImeService :
         ic.endBatchEdit()
     }
 
-    override fun canRestoreDeleted() = !composing && deleteUndo.canRestore
+    private val canRememberDeletes get() = !directInput && !deleteUndo.suspended
+
+    override fun canRestoreDeleted() = !composing && canRememberDeletes && deleteUndo.canRestore
 
     /**
      * 撤销 / 重做：发 Ctrl+Z / Ctrl+Shift+Z。这是 Android 文本框的标准快捷键
@@ -1924,6 +1941,7 @@ class WindInputImeService :
 
     private fun applyLearningSuspended() {
         val suspended = manualIncognito || fieldSuspendsLearning
+        deleteUndo.suspended = suspended
         session.setLearningSuspended(suspended)
         recentEmojiStore.paused = suspended
         recentSymbolStore.paused = suspended
@@ -2204,7 +2222,9 @@ class WindInputImeService :
     ) {
         val ext = ic.getExtractedText(ExtractedTextRequest(), 0)
         val text = ext?.text
-        if (ext == null || text == null) {
+        if (ext == null || text == null || ext.startOffset < 0 ||
+            ext.selectionStart !in 0..text.length || ext.selectionEnd !in 0..text.length
+        ) {
             // 退回方向键：能移动，选不了
             val code = when (action) {
                 TextEditingWindow.EditAction.UP -> KeyEvent.KEYCODE_DPAD_UP
@@ -2221,46 +2241,12 @@ class WindInputImeService :
         val selStart = base + ext.selectionStart
         val selEnd = base + ext.selectionEnd
         // 焦点端：选择模式下是锚点的对侧；非选择模式选区已合并，取 end
-        val anchor = if (selecting && selAnchor >= 0) selAnchor else selEnd
-        val focus = if (selecting) (if (selStart == anchor) selEnd else selStart) else selEnd
-        val len = text.length
-
-        fun lineStart(pos: Int) = text.lastIndexOf('\n', pos - 1) + 1
-        fun lineEnd(pos: Int) = text.indexOf('\n', pos).let { if (it < 0) len else it }
-
-        val newFocus = when (action) {
-            TextEditingWindow.EditAction.LEFT -> {
-                var p = (focus - 1).coerceAtLeast(0)
-                if (p > 0 && Character.isLowSurrogate(text[p])) p--
-                p
-            }
-            TextEditingWindow.EditAction.RIGHT -> {
-                var p = (focus + 1).coerceAtMost(len)
-                if (p < len && Character.isLowSurrogate(text[p])) p++
-                p
-            }
-            TextEditingWindow.EditAction.HOME -> lineStart(focus)
-            TextEditingWindow.EditAction.END -> lineEnd(focus)
-            TextEditingWindow.EditAction.UP -> {
-                val ls = lineStart(focus)
-                if (ls == 0) 0 else {
-                    val prevEnd = ls - 1
-                    val prevStart = lineStart(prevEnd)
-                    (prevStart + (focus - ls)).coerceAtMost(prevEnd)
-                }
-            }
-            TextEditingWindow.EditAction.DOWN -> {
-                val le = lineEnd(focus)
-                if (le >= len) len else {
-                    val nextStart = le + 1
-                    (nextStart + (focus - lineStart(focus))).coerceAtMost(lineEnd(nextStart))
-                }
-            }
-            else -> focus
-        }
+        val anchor = if (selecting && (selAnchor == selStart || selAnchor == selEnd)) selAnchor else selEnd
+        val focus = if (selecting && selStart != anchor) selStart else selEnd
+        val newFocus = editorCaretTarget(text, base, focus, action) ?: return
         if (selecting) {
-            if (selAnchor < 0) selAnchor = anchor
-            ic.setSelection(minOf(selAnchor, newFocus), maxOf(selAnchor, newFocus))
+            selAnchor = anchor
+            ic.setSelection(minOf(anchor, newFocus), maxOf(anchor, newFocus))
         } else {
             ic.setSelection(newFocus, newFocus)
         }
