@@ -320,6 +320,7 @@ fn build_import_dialog(mgr: &DictManagerState) -> Element {
     let sample_format = mgr.io_format_note;
     let sample_ready = mgr.import_ready;
     let options = mgr.import_options_open;
+    let (auto_note, scope_note, preview) = (mgr.io_auto_note, mgr.io_scope_note, mgr.import_preview_msg);
     let file_row = Element::row()
         .width_match()
         .cross(Align::Center)
@@ -374,9 +375,7 @@ fn build_import_dialog(mgr: &DictManagerState) -> Element {
         })
         .child(io_type_row(mgr).visible_when(move || options.get() || sample_format.get() == "WindDict 词库"))
         .child(io_boundary_row(mgr))
-        // 提示与预览同处一个固定视口：三条的行数各自随目标/文件变动，分开放会让对话框
-        // 高度跟着跳。放不下时内部滚动，外框尺寸恒定（见 IO_NOTE_VIEWPORT_H）。
-        // 预览不再 max_lines 截断——溢出量交给滚动，长文案不会看不全。
+        // 有提示或预览内容时再分配固定高度，选择文件前不留空白。
         .child(
             Element::scroll()
                 .width_match()
@@ -385,15 +384,16 @@ fn build_import_dialog(mgr: &DictManagerState) -> Element {
                     Element::col()
                         .width_match()
                         .spacing(8)
-                        .child(io_note(mgr.io_auto_note, Role::Accent))
-                        .child(io_note(mgr.io_scope_note, Role::TextMuted))
+                        .child(io_note(auto_note, Role::Accent))
+                        .child(io_note(scope_note, Role::TextMuted))
                         .child(
-                            Element::label_signal(mgr.import_preview_msg)
+                            Element::label_signal(preview)
                                 .font_size(13.0)
                                 .fg_role(Role::Text)
                                 .width_match(),
                         ),
-                ),
+                )
+                .visible_when(move || !auto_note.get().is_empty() || !scope_note.get().is_empty() || !preview.get().is_empty()),
         );
     let footer = dialog_footer()
         .child(Element::leaf().weight(1.0))

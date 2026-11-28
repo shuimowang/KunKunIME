@@ -107,7 +107,7 @@ pub fn nav_entries(
         match (tab, libs) {
             (LogicalTab::UserDict, Some(libs)) => {
                 grouped = true;
-                out.push(NavEntry::plain(NavNode::LibGroup(i), tab.title(), 0));
+                out.push(NavEntry::plain(NavNode::LibGroup(i), "个人", 0));
                 let mut main = NavEntry::plain(NavNode::Main(i), MAIN_LABEL, 1);
                 main.count = main_count;
                 out.push(main);
@@ -527,7 +527,7 @@ mod tests {
         assert_eq!(
             titles(&v),
             [
-                ("用户词库".into(), 0),
+                ("个人".into(), 0),
                 ("主词库".into(), 1),
                 ("成语".into(), 1),
                 ("行业词".into(), 1),
@@ -559,7 +559,7 @@ mod tests {
         assert_eq!(
             titles(&nav_entries(&tabs, Some(&[]), None, &[])),
             [
-                ("用户词库".into(), 0),
+                ("个人".into(), 0),
                 ("主词库".into(), 1),
                 ("学习与候选".into(), 0),
                 ("临时词库".into(), 0)
@@ -606,7 +606,7 @@ mod tests {
         assert_eq!(
             titles(&v),
             [
-                ("用户词库".into(), 0),
+                ("个人".into(), 0),
                 ("主词库".into(), 1),
                 ("成语".into(), 1),
                 ("系统词库".into(), 0),
