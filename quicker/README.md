@@ -8,7 +8,7 @@
 
 [查看 GitHub 源码](https://github.com/shuimowang/KunKunIME) · [从源码构建](https://github.com/shuimowang/KunKunIME#%E4%BB%8E%E6%BA%90%E7%A0%81%E6%9E%84%E5%BB%BA) · [组件与词库的来源和许可](https://github.com/shuimowang/KunKunIME/blob/main/ORIGINS.md)
 
-[在 Quicker 安装动作](https://getquicker.net/Sharedaction?code=97a34a52-d2fd-4505-ab9b-0961e7718c53) · [手动下载动作 JSON](https://111.229.149.25/public/share/5KrzfvBkWjZPTnTEFXtodg) · [下载 Windows x64 程序包](https://111.229.149.25/public/share/MlVs1Jzzt79ladNCR6QZKA)
+[在 Quicker 安装动作](https://getquicker.net/Sharedaction?code=97a34a52-d2fd-4505-ab9b-0961e7718c53) · [手动下载动作 JSON](https://111.229.149.25/public/share/5KrzfvBkWjZPTnTEFXtodg) · [下载 Windows x64 程序包](https://github.com/shuimowang/KunKunIME/releases/download/v0.1.13/KunKunIME-0.1.13-Windows-x64.zip)
 
 ## 用 AI 助手管理词库
 
@@ -18,7 +18,7 @@
 
 在 Windows x64 上使用 Quicker 2.3.19 或更新版本。点击上方「在 Quicker 安装动作」。如果手动下载了动作 JSON，在 Quicker 面板右键目标场景标签，选「导入动作到此场景」，再选中该文件。
 
-点面板里的「困困输入法」。首次使用可点 **「下载并打开」** 获取 Windows v0.1.12，也可以点 **「选择已有程序」**，选中解压目录里的 `KunKunIME.exe`。Quicker 文本窗口置顶后仍可继续输入拼音、查看候选并选词。
+点面板里的「困困输入法」。首次使用可点 **「下载并打开」** 获取 Windows v0.1.13，也可以点 **「选择已有程序」**，选中解压目录里的 `KunKunIME.exe`。Quicker 文本窗口置顶后仍可继续输入拼音、查看候选并选词。
 
 已经注册困困输入法时，动作会直接打开本机主词库。升级较早的公开版本，请从上方下载 Windows 程序包，退出困困输入法，用完整压缩包更新原安装目录后再打开。请保留随包的 `uninstall-manifest.json`。
 
