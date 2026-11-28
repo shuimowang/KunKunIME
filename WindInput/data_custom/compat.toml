@@ -3,3 +3,8 @@
 process = "ChatGPT.exe"
 comment = "Codex 聊天输入框：选词后立即提交，后续联想保留在候选窗"
 assoc_placeholder = "none"
+
+[[apps]]
+process = "Quicker.exe"
+comment = "Quicker 置顶文本窗口：由宿主显示拼音候选，保持在编辑框上方"
+host_render = true
