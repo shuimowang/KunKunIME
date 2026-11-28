@@ -251,7 +251,7 @@ impl DictManagerState {
         }
     }
 
-    /// 「用户词库」组标题与「新建词库…」按钮共用的菜单。
+    /// 「用户词库」组标题的右键菜单。
     pub fn lib_add_menu_items(&self) -> Vec<MenuItem> {
         let (m_new, m_imp, m_dir) = (self.clone(), self.clone(), self.clone());
         vec![
@@ -415,10 +415,8 @@ fn heading_row(mgr: &DictManagerState, e: &NavEntry) -> Element {
             Element::button("新建词库…")
                 .small()
                 .outline_soft()
-                .tooltip("新建或导入用户分库")
-                .on_click(move |ctx| {
-                    ctx.show_dropdown_menu(ctx.bounds(), add_mgr.lib_add_menu_items());
-                }),
+                .tooltip("给新的个人词库命名")
+                .on_click(move |_| add_mgr.open_lib_create()),
         )
 }
 

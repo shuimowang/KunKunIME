@@ -654,7 +654,7 @@ impl DictManagerState {
     // ── 名字对话框（新建 / 重命名 / 导入）───────────────────────
 
     pub fn open_lib_create(&self) {
-        self.open_prompt(Prompt::Create, "新建分库", String::new());
+        self.open_prompt(Prompt::Create, "新建词库", String::new());
     }
 
     pub fn open_lib_rename(&self, name: &str) {

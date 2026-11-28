@@ -389,6 +389,10 @@ fn library_actions(mgr: &DictManagerState) -> Vec<MenuItem> {
         }
     }
     let mut tools = Vec::new();
+    if matches!(mgr.current_category(), WordCategory::UserDict | WordCategory::UserLib) && mgr.has_lib_group() {
+        let m = mgr.clone();
+        tools.push(MenuItem::run("从文件新建词库…", move |ctx| m.pick_lib_import_file(ctx), false));
+    }
     if mgr.io_entry_visible() && mgr.io_entry_enabled() {
         if scheme_import_in_menu(mgr.current_category()) {
             let m = mgr.clone();
