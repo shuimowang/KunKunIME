@@ -3173,7 +3173,7 @@ version = "0.1.0"
 
 [[package]]
 name = "wind_setting"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "base64",
  "chrono",
